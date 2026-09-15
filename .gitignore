@@ -5,3 +5,4 @@ artifacts/
 publish/
 *.user
 *.suo
+EchoType.log

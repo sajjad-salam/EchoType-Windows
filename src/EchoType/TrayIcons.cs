@@ -16,7 +16,7 @@ internal static class TrayIcons {
             : !loggedIn ? "loggedout"
             : phase switch {
                 AppPhase.Listening => "listening",
-                AppPhase.Transcribing => "transcribing",
+                AppPhase.Transcribing or AppPhase.ChoosingAction or AppPhase.Generating => "transcribing",
                 AppPhase.Waking or AppPhase.Engaging => "waking",
                 _ => "idle",
             };

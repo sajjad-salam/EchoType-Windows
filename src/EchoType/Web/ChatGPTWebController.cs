@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Drawing;
 using System.Net.NetworkInformation;
 using Microsoft.Web.WebView2.Core;
@@ -19,19 +20,20 @@ internal sealed class WebView2RuntimeMissingException : Exception {
 }
 
 /// <summary>
-/// Owns the hidden WebView2 hosting chatgpt.com; the same window is shown for login
-/// (ChatGPTWebController.swift analog).
+/// Owns the hidden WebView2 hosting chatgpt.com or gemini.google.com; the same window
+/// is shown for login (ChatGPTWebController.swift analog).
 ///
-/// Hidden mode parks the borderless form fully offscreen with WS_EX_NOACTIVATE —
+/// Hidden mode parks the form offscreen with WS_EX_NOACTIVATE after the compositor
+/// has been created on a real monitor (creating it at -32000 yields a black surface).
 /// Chromium keeps rendering because native window occlusion calculation is disabled
-/// in the browser arguments (the macOS port needed a 2 pt on-screen sliver because
-/// WebKit freezes its pipeline on any invisibility; Chromium's equivalent knob is
-/// the occlusion tracker). The form is never Hidden()/Visible=false — that suspends
+/// in the browser arguments. The form is never Hidden()/Visible=false — that suspends
 /// rendering, the WebView2 analog of WebKit's frozen rAF.
+///
+/// The embedded engine is WebView2 (Chromium). We use a Chrome user-agent so ChatGPT,
+/// Gemini, and Google SSO don't treat it as "Edg/" embedded-browser and blank the page.
 /// </summary>
 internal sealed class ChatGPTWebController : IDisposable {
 
-    public const string ChatUrl = "https://chatgpt.com/";
     private const int WebViewWidth = 1100;
     private const int WebViewHeight = 760;
     private const string RuntimeDownloadUrl = "https://developer.microsoft.com/microsoft-edge/webview2/";
@@ -121,6 +123,7 @@ internal sealed class ChatGPTWebController : IDisposable {
         })();
         """;
 
+    private ChatSite _site;
     private readonly WebViewHostForm _form = new();
     private CoreWebView2Environment? _env;
     private CoreWebView2Controller? _controller;
@@ -133,14 +136,36 @@ internal sealed class ChatGPTWebController : IDisposable {
     private bool _inited;
     private bool _disposed;
     private Task<ReadyOutcome>? _ensureTask;
+    private Task? _initTask;
+    private readonly List<Form> _popups = [];
 
-    public ChatGPTWebController() {
+    public ChatGPTWebController(ChatSite? site = null) {
+        _site = site ?? ChatSite.ChatGpt;
+        _form.Text = _site.LoginTitle;
         _isOnline = NetworkInterface.GetIsNetworkAvailable();
         NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+        _form.FormClosing += OnHostFormClosing;
+        _form.Resize += OnHostFormResize;
+        _form.LocationChanged += OnHostFormLocationChanged;
+        _form.Activated += OnFormActivated;
     }
 
     public DictationDriver? Driver => _driver;
+
+    public ChatSite Site => _site;
+
+    /// <summary>Swap chatgpt.com / gemini.google.com. Cookies stay in each profile folder.</summary>
+    public void SwitchSite(ChatSite site) {
+        if (site.Id == _site.Id) {
+            return;
+        }
+        Log.Write("webview: switching site " + _site.Id + " -> " + site.Id);
+        HideLoginWindow();
+        Unload();
+        _site = site;
+        _form.Text = _site.LoginTitle;
+    }
 
     /// <summary>True once a webview exists to start dictation on (decides Waking vs Engaging).</summary>
     public bool HasWebView => _webview != null;
@@ -182,14 +207,15 @@ internal sealed class ChatGPTWebController : IDisposable {
         }
 
         try {
-            if (!_inited) {
-                await InitAsync();
-            }
+            await EnsureInitAsync();
             if (_webview == null || _driver == null) {
                 return ReadyOutcome.NotReady;
             }
-            if (_loading || _showingOfflinePage) {
+            if (_showingOfflinePage || NeedsChatNavigation()) {
                 NavigateToChat();
+                return await WaitUntilInteractiveAsync(TimeSpan.FromSeconds(25));
+            }
+            if (_loading) {
                 return await WaitUntilInteractiveAsync(TimeSpan.FromSeconds(25));
             }
         } catch (WebView2RuntimeMissingException) {
@@ -211,7 +237,7 @@ internal sealed class ChatGPTWebController : IDisposable {
         }
     }
 
-    /// <summary>Self-heal path for when chatgpt.com's dictation state machine wedges.</summary>
+    /// <summary>Self-heal path for when the chat site's dictation state machine wedges.</summary>
     public async Task ReloadInBackgroundAsync() {
         Unload();
         try {
@@ -219,6 +245,35 @@ internal sealed class ChatGPTWebController : IDisposable {
             Log.Write("webview: self-heal reload -> " + outcome);
         } catch (Exception ex) {
             Log.Write("webview: self-heal reload failed: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Reloads the chat site and waits until the composer is usable. Used when a
+    /// custom command times out so the prompt can be resent instead of dropped.
+    /// Gemini may restore the last thread after this reload; StartNewChatAsync
+    /// then clicks New chat before the retry is sent.
+    /// </summary>
+    public async Task<ReadyOutcome> RefreshChatAsync() {
+        if (_disposed) {
+            return ReadyOutcome.NotReady;
+        }
+        try {
+            if (_webview != null && _driver != null) {
+                Log.Write("webview: refreshing " + _site.ChatUrl + " for command retry");
+                NavigateToChat();
+                var outcome = await WaitUntilInteractiveAsync(TimeSpan.FromSeconds(25));
+                if (outcome == ReadyOutcome.Ready) {
+                    Log.Write("webview: chat refresh -> Ready");
+                    return outcome;
+                }
+                Log.Write("webview: in-place refresh -> " + outcome + ", unloading");
+            }
+            Unload();
+            return await EnsureReadyAsync();
+        } catch (Exception ex) {
+            Log.Write("webview: chat refresh failed: " + ex.Message);
+            return ReadyOutcome.NotReady;
         }
     }
 
@@ -270,6 +325,19 @@ internal sealed class ChatGPTWebController : IDisposable {
     // Init / teardown
     // ------------------------------------------------------------------
 
+    private async Task EnsureInitAsync() {
+        if (_inited) {
+            return;
+        }
+        _initTask ??= InitAsync();
+        try {
+            await _initTask;
+        } catch {
+            _initTask = null;
+            throw;
+        }
+    }
+
     private async Task InitAsync() {
         string version;
         try {
@@ -279,19 +347,11 @@ internal sealed class ChatGPTWebController : IDisposable {
             throw new WebView2RuntimeMissingException();
         }
 
-        // Real Edge UA — the default WebView2 UA carries tokens that Google SSO and
-        // other embedded-browser login blocks reject. Composed from the installed
-        // runtime so it never drifts stale.
-        string major = version.Split('.')[0];
-        string ua =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-            + $"Chrome/{major}.0.0.0 Safari/537.36 Edg/{major}.0.0.0";
-
         var options = new CoreWebView2EnvironmentOptions {
             // Chromium deprioritizes offscreen/occluded windows (frozen rAF + throttled
             // timers — the failure mode the macOS port fought with a 2 pt window sliver).
             AdditionalBrowserArguments =
-                "--disable-features=CalculateNativeWinOcclusion "
+                "--disable-features=CalculateNativeWinOcclusion,msSmartScreenProtection,UserAgentClientHint "
                 + "--disable-background-timer-throttling "
                 + "--disable-renderer-backgrounding "
                 + "--disable-ipc-flooding-protection",
@@ -299,26 +359,24 @@ internal sealed class ChatGPTWebController : IDisposable {
         };
         string userDataFolder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "EchoType", "WebView2");
+            "EchoType", _site.ProfileFolder);
         _env = await CoreWebView2Environment.CreateAsync(null, userDataFolder, options);
 
-        // One form, two modes: parked offscreen (hidden) or centered (login).
-        // Never Hidden()/Visible=false — that suspends rendering.
+        // Create the compositor on a real monitor first. Parking at -32000 before
+        // CreateCoreWebView2ControllerAsync leaves a black GPU surface forever.
+        PlaceOnPrimaryMonitor();
         _form.Show();
-        ApplyHiddenMode();
 
         _controller = await _env.CreateCoreWebView2ControllerAsync(_form.Handle);
-        _controller.Bounds = new Rectangle(0, 0, WebViewWidth, WebViewHeight);
-        _controller.IsVisible = true; // forever; IsVisible=false suspends the renderer
         _controller.DefaultBackgroundColor = Color.White;
+        _controller.IsVisible = true;
+        SyncWebViewBounds();
         _webview = _controller.CoreWebView2;
 
-        _webview.Settings.UserAgent = ua;
-        _webview.Settings.IsStatusBarEnabled = false;
-        _webview.Settings.IsZoomControlEnabled = false;
-
+        ApplyChromeIdentity(_webview);
+        _driver = new DictationDriver(_webview, _site.SelectorSet, _site.ChatUrl);
         _ = _webview.AddScriptToExecuteOnDocumentCreatedAsync(VisibilitySpoofScript);
-        _ = _webview.AddScriptToExecuteOnDocumentCreatedAsync(DictationDriver.UserScriptSource);
+        _ = _webview.AddScriptToExecuteOnDocumentCreatedAsync(_driver.UserScript);
 
         _webview.PermissionRequested += OnPermissionRequested;
         _webview.NavigationStarting += OnNavigationStarting;
@@ -326,11 +384,34 @@ internal sealed class ChatGPTWebController : IDisposable {
         _webview.WebMessageReceived += OnWebMessageReceived;
         _webview.ProcessFailed += OnProcessFailed;
         _webview.NewWindowRequested += OnNewWindowRequested;
-        _form.Activated += OnFormActivated;
 
-        _driver = new DictationDriver(_webview);
         _inited = true;
-        Log.Write("webview: initialized (runtime " + version + ")");
+        Log.Write("webview: initialized " + _site.Id + " (runtime " + version + ")");
+
+        NavigateToChat();
+        if (!_loginVisible) {
+            ApplyHiddenMode();
+        } else {
+            ApplyLoginMode();
+        }
+    }
+
+    /// <summary>Chrome UA without the Edg/ token that makes Google/ChatGPT refuse embedded browsers.</summary>
+    private static void ApplyChromeIdentity(CoreWebView2 webview) {
+        string major = "131";
+        try {
+            string version = CoreWebView2Environment.GetAvailableBrowserVersionString();
+            major = version.Split('.')[0];
+        } catch {
+            // keep fallback
+        }
+        webview.Settings.UserAgent =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+            + $"Chrome/{major}.0.0.0 Safari/537.36";
+        webview.Settings.IsStatusBarEnabled = true;
+        webview.Settings.IsZoomControlEnabled = true;
+        webview.Settings.AreDefaultContextMenusEnabled = true;
+        webview.Settings.AreBrowserAcceleratorKeysEnabled = true;
     }
 
     /// <summary>Frees the browser process; cookies stay on disk (mac unload parity).</summary>
@@ -349,10 +430,14 @@ internal sealed class ChatGPTWebController : IDisposable {
             _webview.NewWindowRequested -= OnNewWindowRequested;
             _webview = null;
         }
-        _form.Activated -= OnFormActivated;
+        foreach (var popup in _popups.ToArray()) {
+            try { popup.Close(); } catch { /* best effort */ }
+        }
+        _popups.Clear();
         _controller?.Close();
         _controller = null;
         _env = null;
+        _initTask = null;
     }
 
     // ------------------------------------------------------------------
@@ -365,12 +450,11 @@ internal sealed class ChatGPTWebController : IDisposable {
         if (_inited && _webview != null) {
             if (!_isOnline) {
                 PresentOfflinePage();
+            } else if (_showingOfflinePage || NeedsChatNavigation()) {
+                NavigateToChat();
+                _ = WaitAndLogInteractiveAsync();
             } else {
-                if (_showingOfflinePage) {
-                    RetryLoad();
-                } else {
-                    _ = EnsureReadyAsync();
-                }
+                _ = EnsureReadyAsync();
             }
             ApplyLoginMode();
             return;
@@ -380,12 +464,10 @@ internal sealed class ChatGPTWebController : IDisposable {
 
     private async Task ShowLoginWindowCoreAsync() {
         try {
-            if (!_inited) {
-                await InitAsync();
-            }
+            await EnsureInitAsync();
             if (!_isOnline) {
                 PresentOfflinePage();
-            } else {
+            } else if (NeedsChatNavigation()) {
                 NavigateToChat();
                 _ = WaitAndLogInteractiveAsync();
             }
@@ -410,25 +492,98 @@ internal sealed class ChatGPTWebController : IDisposable {
         // Park fully offscreen; occlusion calculation is disabled so Chromium keeps
         // rendering. WS_EX_NOACTIVATE + WS_EX_TOOLWINDOW keep it out of Alt+Tab and
         // unable to steal focus.
+        _form.SuppressActivation = true;
         _form.Location = new Point(-32000, -32000);
         long ex = Native.NativeMethods.GetWindowLongPtrW(_form.Handle, Native.NativeMethods.GWL_EXSTYLE);
         Native.NativeMethods.SetWindowLongPtrW(_form.Handle, Native.NativeMethods.GWL_EXSTYLE,
             ex | Native.NativeMethods.WS_EX_NOACTIVATE | Native.NativeMethods.WS_EX_TOOLWINDOW);
         if (_controller != null) {
             _controller.IsVisible = true;
+            SyncWebViewBounds();
         }
     }
 
     private void ApplyLoginMode() {
+        if (_form.IsDisposed) {
+            return;
+        }
+        _form.SuppressActivation = false;
         long ex = Native.NativeMethods.GetWindowLongPtrW(_form.Handle, Native.NativeMethods.GWL_EXSTYLE);
         Native.NativeMethods.SetWindowLongPtrW(_form.Handle, Native.NativeMethods.GWL_EXSTYLE,
             ex & ~Native.NativeMethods.WS_EX_NOACTIVATE & ~Native.NativeMethods.WS_EX_TOOLWINDOW);
+        PlaceOnPrimaryMonitor();
+        if (_controller != null) {
+            _controller.IsVisible = true;
+            SyncWebViewBounds();
+        }
+        _form.Show();
+        _form.BringToFront();
+        _form.Activate();
+        _controller?.MoveFocus(CoreWebView2MoveFocusReason.Programmatic);
+        Log.Write("webview: login window shown");
+    }
+
+    private void PlaceOnPrimaryMonitor() {
         var area = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1200, 800);
         _form.Location = new Point(
             area.Left + Math.Max(0, (area.Width - _form.Width) / 2),
             area.Top + Math.Max(0, (area.Height - _form.Height) / 2));
-        _form.Activate();
-        _controller?.MoveFocus(CoreWebView2MoveFocusReason.Programmatic);
+    }
+
+    private void SyncWebViewBounds() {
+        if (_controller == null || _form.IsDisposed) {
+            return;
+        }
+        var size = _form.ClientSize;
+        _controller.Bounds = new Rectangle(0, 0, Math.Max(1, size.Width), Math.Max(1, size.Height));
+        try {
+            _controller.NotifyParentWindowPositionChanged();
+        } catch (Exception ex) {
+            Log.Write("webview: position notify failed: " + ex.Message);
+        }
+    }
+
+    private void OnHostFormResize(object? sender, EventArgs e) {
+        if (_loginVisible) {
+            SyncWebViewBounds();
+        }
+    }
+
+    private void OnHostFormLocationChanged(object? sender, EventArgs e) {
+        if (_loginVisible) {
+            SyncWebViewBounds();
+        }
+    }
+
+    private void OnHostFormClosing(object? sender, FormClosingEventArgs e) {
+        if (_disposed) {
+            return;
+        }
+        e.Cancel = true;
+        HideLoginWindow();
+    }
+
+    /// <summary>True when the embedded browser is still on about:blank or some other non-chat host.</summary>
+    private bool NeedsChatNavigation() {
+        if (_webview == null) {
+            return true;
+        }
+        try {
+            string source = _webview.Source ?? "";
+            if (!Uri.TryCreate(source, UriKind.Absolute, out Uri? src) || string.IsNullOrEmpty(src.Host)) {
+                return true;
+            }
+            string host = src.Host;
+            foreach (string allowed in _site.StayOnHosts) {
+                if (host.Equals(allowed, StringComparison.OrdinalIgnoreCase)
+                    || host.EndsWith("." + allowed, StringComparison.OrdinalIgnoreCase)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch {
+            return true;
+        }
     }
 
     private void OnFormActivated(object? sender, EventArgs e) {
@@ -479,9 +634,15 @@ internal sealed class ChatGPTWebController : IDisposable {
     private void OnPermissionRequested(object? sender, CoreWebView2PermissionRequestedEventArgs e) {
         try {
             string host = new Uri(e.Uri).Host;
-            bool isChatGPT = host.EndsWith("chatgpt.com", StringComparison.OrdinalIgnoreCase)
-                          || host.EndsWith("openai.com", StringComparison.OrdinalIgnoreCase);
-            if (isChatGPT && e.PermissionKind == CoreWebView2PermissionKind.Microphone) {
+            bool allowed = false;
+            foreach (string micHost in _site.MicHosts) {
+                if (host.Equals(micHost, StringComparison.OrdinalIgnoreCase)
+                    || host.EndsWith("." + micHost, StringComparison.OrdinalIgnoreCase)) {
+                    allowed = true;
+                    break;
+                }
+            }
+            if (allowed && e.PermissionKind == CoreWebView2PermissionKind.Microphone) {
                 e.State = CoreWebView2PermissionState.Allow;
                 e.Handled = true;
                 Log.Write("webview: mic permission granted for " + host);
@@ -535,7 +696,7 @@ internal sealed class ChatGPTWebController : IDisposable {
         _showingOfflinePage = true;
         _loading = false;
         Log.Write("webview: presenting offline page");
-        _webview.NavigateToString(OfflinePage.Html);
+        _webview.NavigateToString(OfflinePage.HtmlFor(_site.DisplayName));
     }
 
     private void OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e) {
@@ -551,8 +712,66 @@ internal sealed class ChatGPTWebController : IDisposable {
     }
 
     private void OnNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e) {
-        // Default popup shares this profile's cookies — required for Google SSO.
         Log.Write("webview: new window " + e.Uri);
+        CoreWebView2Deferral deferral = e.GetDeferral();
+        _ = OpenPopupAsync(e, deferral);
+    }
+
+    /// <summary>
+    /// Google / Apple / Microsoft SSO open a popup. CoreWebView2Controller has no
+    /// default popup UI, so an unhandled request is a black empty window. Create a
+    /// fresh unused WebView in the same profile (required by NewWindow).
+    /// </summary>
+    private async Task OpenPopupAsync(CoreWebView2NewWindowRequestedEventArgs e, CoreWebView2Deferral deferral) {
+        try {
+            if (_env == null) {
+                throw new InvalidOperationException("no WebView2 environment");
+            }
+            var popup = new Form {
+                Text = "EchoType — Sign in",
+                Size = new Size(720, 840),
+                StartPosition = FormStartPosition.CenterScreen,
+                ShowInTaskbar = true,
+                BackColor = Color.White,
+                MinimumSize = new Size(420, 520),
+            };
+            popup.Show();
+            var controller = await _env.CreateCoreWebView2ControllerAsync(popup.Handle);
+            controller.DefaultBackgroundColor = Color.White;
+            controller.IsVisible = true;
+            void SyncPopup() {
+                controller.Bounds = new Rectangle(0, 0,
+                    Math.Max(1, popup.ClientSize.Width), Math.Max(1, popup.ClientSize.Height));
+                try { controller.NotifyParentWindowPositionChanged(); } catch { /* ignore */ }
+            }
+            SyncPopup();
+            popup.Resize += (_, _) => SyncPopup();
+            popup.LocationChanged += (_, _) => SyncPopup();
+            ApplyChromeIdentity(controller.CoreWebView2);
+            controller.CoreWebView2.WindowCloseRequested += (_, _) => {
+                try { popup.Close(); } catch { /* ignore */ }
+            };
+            e.NewWindow = controller.CoreWebView2;
+            e.Handled = true;
+            popup.FormClosed += (_, _) => {
+                try { controller.Close(); } catch { /* ignore */ }
+                _popups.Remove(popup);
+            };
+            _popups.Add(popup);
+            Log.Write("webview: SSO popup opened");
+        } catch (Exception ex) {
+            Log.Write("webview: popup failed (" + ex.Message + "), navigating in place");
+            e.Handled = true;
+            try {
+                if (!string.IsNullOrEmpty(e.Uri)) {
+                    _webview?.Navigate(e.Uri);
+                }
+            } catch (Exception navEx) {
+                Log.Write("webview: in-place popup nav failed: " + navEx.Message);
+            }
+        } finally {
+            deferral.Complete();
+        }
     }
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e) {
@@ -565,8 +784,8 @@ internal sealed class ChatGPTWebController : IDisposable {
     private void NavigateToChat() {
         _loading = true;
         _showingOfflinePage = false;
-        Log.Write("webview: loading " + ChatUrl);
-        _webview?.Navigate(ChatUrl);
+        Log.Write("webview: loading " + _site.ChatUrl);
+        _webview?.Navigate(_site.ChatUrl);
     }
 
     public static void ShowRuntimeMissingDialog() {
@@ -596,27 +815,27 @@ internal sealed class ChatGPTWebController : IDisposable {
         _form.Dispose();
     }
 
-    /// <summary>Borderless host: never activates when parked offscreen; no chrome, no taskbar.
-    /// FormBorderStyle is fixed at None — changing it would recreate the HWND and
-    /// detach the WebView2 controller.</summary>
+    /// <summary>Login host: title bar + close box. FormBorderStyle is fixed for the
+    /// lifetime of the HWND — changing it would recreate the handle and detach WebView2.
+    /// Hidden mode only moves the window offscreen; it does not hide the form.</summary>
     private sealed class WebViewHostForm : Form {
+        [Browsable(false)]
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public bool SuppressActivation { get; set; } = true;
+
         public WebViewHostForm() {
-            Text = "EchoType — ChatGPT Login";
-            FormBorderStyle = FormBorderStyle.None;
+            Text = "EchoType — Sign in";
+            FormBorderStyle = FormBorderStyle.Sizable;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
-            ControlBox = false;
+            ControlBox = true;
+            MinimizeBox = true;
+            MaximizeBox = true;
+            BackColor = Color.White;
             Size = new Size(WebViewWidth, WebViewHeight);
+            MinimumSize = new Size(720, 560);
         }
 
-        protected override bool ShowWithoutActivation => true;
-
-        protected override CreateParams CreateParams {
-            get {
-                var cp = base.CreateParams;
-                cp.ExStyle |= unchecked((int)Native.NativeMethods.WS_EX_TOOLWINDOW); // hidden-mode default; login clears it
-                return cp;
-            }
-        }
+        protected override bool ShowWithoutActivation => SuppressActivation;
     }
 }

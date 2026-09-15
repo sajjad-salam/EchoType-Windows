@@ -3,10 +3,11 @@ namespace EchoType.Web;
 /// <summary>
 /// Placeholder shown in the login window while offline (port of the offlineHTML in
 /// ChatGPTWebController.swift). The Retry button posts a WebView2 web message that
-/// ChatGPTWebController turns into a reload.
+/// the web controller turns into a reload.
 /// </summary>
 internal static class OfflinePage {
-    public const string Html = """
+
+    public static string HtmlFor(string productName) => $$"""
         <!doctype html><html><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
@@ -24,7 +25,7 @@ internal static class OfflinePage {
           <div class="card">
             <div class="icon">&#128225;</div>
             <h1>No internet connection</h1>
-            <p>EchoType can't reach ChatGPT. Check your network, then try again.</p>
+            <p>EchoType can't reach {{productName}}. Check your network, then try again.</p>
             <button onclick="window.chrome.webview.postMessage('retry')">Retry</button>
           </div>
         </body></html>
