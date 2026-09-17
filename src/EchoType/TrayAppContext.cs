@@ -13,10 +13,25 @@ namespace EchoType;
 /// (AppDelegate.swift analog). Recording is hold-to-talk by default, or
 /// press-to-start / press-to-stop when that mode is selected in the tray.
 /// </summary>
-internal sealed class TrayAppContext : ApplicationContext {
+internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
     /// <summary>Releases shorter than this are a tap → cancel (mac tapThreshold).</summary>
     private const double TapThresholdSeconds = 0.35;
+    /// <summary>
+    /// ChatGPT custom-command / ask-model replies stay on one web thread for this
+    /// many successful sends, then rotate. Gemini always opens a fresh chat.
+    /// </summary>
+    private const int ChatGptThreadReuseLimit = 25;
+    /// <summary>
+    /// Short ChatGPT recordings wait this long for the first reply token before
+    /// opening a new chat. Longer clips scale up from here.
+    /// </summary>
+    private const double MinChatGptFirstReplySeconds = 30;
+    /// <summary>
+    /// Cap for long recordings (two minutes or more) so a hung ChatGPT thread is
+    /// retried within a minute instead of sitting idle.
+    /// </summary>
+    private const double MaxChatGptFirstReplySeconds = 60;
 
     private readonly NotifyIcon _tray;
     private readonly ToolStripMenuItem _loginItem;
@@ -38,6 +53,10 @@ internal sealed class TrayAppContext : ApplicationContext {
     private readonly ChatGPTWebController _web;
     private readonly HotkeyMonitor _hotkey;
     private readonly BackgroundAudioMuter _audioMuter = new();
+    private readonly MicLevelMeter _micMeter = new();
+    private AppWindow? _window;
+
+    public event Action? UiChanged;
 
     private AppPhase _phase = AppPhase.Idle;
     /// <summary>Bumped when a session starts or is abandoned so leftover awaits do not paste.</summary>
@@ -52,11 +71,15 @@ internal sealed class TrayAppContext : ApplicationContext {
     private CustomCommand? _activeCommand;
     private CommandButtonPickerForm? _actionPicker;
     private bool _askModel;
-    private uint _sessionVk;
+    private HotkeyChord _sessionChord;
     private PasteTarget? _pasteTarget;
     private string? _selectedText;
     private Task<string?> _selectionTask = Task.FromResult<string?>(null);
     private bool _commandsUiOpen;
+    private CancellationTokenSource? _listenWatchCts;
+    private int _listenFinishGate;
+    private int _chatgptThreadSends;
+    private bool _chatgptForceNewThread;
 
     public TrayAppContext() {
         _settings = Settings.Load();
@@ -104,6 +127,7 @@ internal sealed class TrayAppContext : ApplicationContext {
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusItem);
+        menu.Items.Add("Open EchoType", null, (_, _) => ShowAppWindow());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(modelRoot);
         menu.Items.Add(_loginItem);
@@ -135,7 +159,7 @@ internal sealed class TrayAppContext : ApplicationContext {
             ContextMenuStrip = menu,
             Visible = true,
         };
-        _tray.DoubleClick += (_, _) => _web.ShowLoginWindow();
+        _tray.DoubleClick += (_, _) => ShowAppWindow();
 
         _web.LoginStateChanged += OnLoginStateChanged;
         _web.ReachabilityChanged += OnReachabilityChanged;
@@ -155,6 +179,7 @@ internal sealed class TrayAppContext : ApplicationContext {
         _hotkey.CancelRequested += OnCancelRequested;
 
         Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey VK=0x{_settings.HotkeyVk:X2}, askModelVk=0x{_settings.AskModelVk:X2}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating})");
+        // Stay in the tray on launch. Double-click the icon (or Open EchoType) to show the window.
         _ = WarmupAsync(); // alwaysReady: load the selected model at launch (mac applyPolicyAtLaunch)
     }
 
@@ -162,14 +187,15 @@ internal sealed class TrayAppContext : ApplicationContext {
     // Hotkey → state machine
     // ------------------------------------------------------------------
 
-    private void OnHoldStart(uint vk) {
+    private void OnHoldStart(HotkeyChord chord) {
         if (_commandsUiOpen) {
             return;
         }
-        if (vk == (uint)_settings.HotkeyVk && ConsumeCancelDoubleTap()) {
+        bool isDictation = IsDictationChord(chord);
+        if (isDictation && ConsumeCancelDoubleTap()) {
             // In toggle mode the second press of the same recording key stops
             // listening; don't treat that as the cancel double-tap.
-            if (!(_settings.ToggleRecording && _phase == AppPhase.Listening && vk == _sessionVk)) {
+            if (!(_settings.ToggleRecording && _phase == AppPhase.Listening && chord.Equals(_sessionChord))) {
                 if (_phase != AppPhase.Idle) {
                     _ = CancelAndResetAsync("double-tap, cancelled");
                 }
@@ -179,21 +205,22 @@ internal sealed class TrayAppContext : ApplicationContext {
         switch (_phase) {
             case AppPhase.Idle: {
                 _hotkeyHeld = true;
-                _sessionVk = vk;
+                _sessionChord = chord;
                 _holdStartedAt = DateTime.UtcNow;
                 _releasedAt = default;
                 _pasteTarget = PasteTarget.Capture();
-                _activeCommand = FindCommand(vk);
+                _activeCommand = FindCommand(chord);
                 _askModel = _activeCommand == null
-                    && vk != (uint)_settings.HotkeyVk
+                    && !isDictation
                     && _settings.AskModelVk != 0
-                    && vk == (uint)_settings.AskModelVk;
+                    && chord.Count == 1
+                    && chord.K1 == (uint)_settings.AskModelVk;
                 _selectedText = null;
                 _selectionTask = _pasteTarget != null
                     ? SelectionCapture.CaptureAsync()
                     : Task.FromResult<string?>(null);
                 Log.Write(_activeCommand != null
-                    ? $"command: key down ({_activeCommand.DisplayName}, VK=0x{vk:X2})"
+                    ? $"command: key down ({_activeCommand.DisplayName}, {HotkeyNames.For(chord)})"
                     : _askModel
                         ? "ask-model: key down"
                         : "dictation: key down");
@@ -205,7 +232,7 @@ internal sealed class TrayAppContext : ApplicationContext {
             }
             case AppPhase.Waking:
             case AppPhase.Engaging:
-                if (_settings.ToggleRecording && vk == _sessionVk) {
+                if (_settings.ToggleRecording && chord.Equals(_sessionChord)) {
                     _ = CancelAndResetAsync("toggle press while opening, cancelled");
                     break;
                 }
@@ -213,7 +240,7 @@ internal sealed class TrayAppContext : ApplicationContext {
                 Log.Write("dictation: second press while opening");
                 break;
             case AppPhase.Listening:
-                if (_settings.ToggleRecording && vk == _sessionVk) {
+                if (_settings.ToggleRecording && chord.Equals(_sessionChord)) {
                     StopToggleListening();
                     break;
                 }
@@ -225,7 +252,7 @@ internal sealed class TrayAppContext : ApplicationContext {
         }
     }
 
-    private void OnHoldEnd(uint vk) {
+    private void OnHoldEnd(HotkeyChord chord) {
         if (_settings.ToggleRecording) {
             // Release does not stop recording; the next press of the same key does.
             return;
@@ -379,11 +406,13 @@ internal sealed class TrayAppContext : ApplicationContext {
         _engagementFailures = 0;
         Sounds.Start();
         SetPhase(AppPhase.Listening);
+        _listenFinishGate = 0;
         _hotkey.EscSwallowActive = true;
         NativeMethods.SetThreadExecutionState(NativeMethods.ES_CONTINUOUS | NativeMethods.ES_SYSTEM_REQUIRED);
 
         if (_hotkeyHeld) {
-            return; // normal hold — wait for release
+            StartListenWatch(session);
+            return; // normal hold — wait for release, or a model-side cutoff
         }
 
         // Key already released while we were starting (mac openMicrophone parity):
@@ -399,6 +428,10 @@ internal sealed class TrayAppContext : ApplicationContext {
         if (!IsLive(session)) {
             return;
         }
+        if (Interlocked.CompareExchange(ref _listenFinishGate, 1, 0) != 0) {
+            return;
+        }
+        StopListenWatch();
         RestoreOtherApps();
         SetPhase(AppPhase.Transcribing);
         _hotkey.EscSwallowActive = false;
@@ -456,12 +489,13 @@ internal sealed class TrayAppContext : ApplicationContext {
             Sounds.Error();
             ShowBalloon(_settings.ToggleRecording
                 ? "Nothing transcribed — try speaking longer before pressing the key again."
-                : "Nothing transcribed — try holding the key longer.");
+                : "Nothing transcribed — try holding the key longer.", OverlayKind.Error);
             ResetToIdle();
             return;
         }
 
         if (_activeCommand != null) {
+            CopyTranscript(transcript);
             var buttons = _activeCommand.ResolvedButtons;
             CommandButton? chosen = buttons.Count == 1 ? buttons[0] : null;
             if (buttons.Count > 1) {
@@ -471,6 +505,8 @@ internal sealed class TrayAppContext : ApplicationContext {
                 }
                 if (chosen == null) {
                     Log.Write("command: action picker cancelled");
+                    CopyTranscript(transcript);
+                    ShowBalloon("Cancelled. Transcript copied to clipboard.", OverlayKind.Info);
                     ResetToIdle();
                     return;
                 }
@@ -478,7 +514,7 @@ internal sealed class TrayAppContext : ApplicationContext {
             if (chosen == null) {
                 Log.Write("command: no action buttons");
                 Sounds.Error();
-                ShowBalloon("This command has no buttons. Edit it from Custom Commands.");
+                ShowBalloon("This command has no buttons. Edit it from Custom Commands.", OverlayKind.Error);
                 ResetToIdle();
                 return;
             }
@@ -488,23 +524,27 @@ internal sealed class TrayAppContext : ApplicationContext {
             await DeliverGeneratedReplyAsync(
                 _activeCommand.BuildMessage(transcript, _selectedText, chosen),
                 label,
-                session);
+                session,
+                transcript);
             return;
         }
 
         if (_askModel) {
+            CopyTranscript(transcript);
             string message = string.IsNullOrEmpty(_selectedText)
                 ? transcript
                 : SelectionCapture.BuildAskModelMessage(_selectedText, transcript);
-            await DeliverGeneratedReplyAsync(message, "ask-model", session);
+            await DeliverGeneratedReplyAsync(message, "ask-model", session, transcript);
             return;
         }
 
         if (!string.IsNullOrEmpty(_selectedText)) {
+            CopyTranscript(transcript);
             await DeliverGeneratedReplyAsync(
                 SelectionCapture.BuildModelMessage(_selectedText, transcript),
                 "selection-edit",
-                session);
+                session,
+                transcript);
             return;
         }
 
@@ -551,11 +591,12 @@ internal sealed class TrayAppContext : ApplicationContext {
         picker?.Dismiss();
     }
 
-    private async Task DeliverGeneratedReplyAsync(string message, string logLabel, int session) {
+    private async Task DeliverGeneratedReplyAsync(string message, string logLabel, int session, string transcript) {
         if (!IsLive(session)) {
             return;
         }
         SetPhase(AppPhase.Generating);
+        CopyTranscript(transcript);
         Log.Write(logLabel + ": sending " + message.Length + " chars");
 
         try {
@@ -582,16 +623,23 @@ internal sealed class TrayAppContext : ApplicationContext {
                 Log.Write(logLabel + ": falling back to text after image download failed");
             }
 
-            if (reply.Text.Length == 0) {
-                Log.Write(logLabel + ": empty reply after retries");
+            if (reply.Text.Length == 0 || ReplyIsPromptEcho(reply.Text, message, transcript)) {
+                if (reply.Text.Length > 0) {
+                    Log.Write(logLabel + ": reply matched the prompt/transcript, ignoring it");
+                } else {
+                    Log.Write(logLabel + ": empty reply after retries");
+                }
                 Sounds.Error();
-                ShowBalloon(_web.Site.DisplayName + " returned an empty reply.");
+                CopyTranscript(transcript);
+                ShowBalloon(
+                    _web.Site.DisplayName + " returned an empty reply. Transcript copied to clipboard.",
+                    OverlayKind.Error);
                 ResetToIdle();
                 return;
             }
 
             Log.Write(logLabel + ": delivering " + reply.Text.Length + " chars");
-            DeliverPaste(reply.Text, logLabel);
+            DeliverGeneratedPaste(reply.Text, logLabel, transcript);
         } catch (DriverException ex) {
             if (!IsLive(session)) {
                 return;
@@ -602,7 +650,7 @@ internal sealed class TrayAppContext : ApplicationContext {
                 }
             } catch { /* best effort */ }
             if (IsLive(session)) {
-                HandleFailure(ex);
+                HandleFailure(ex, transcript);
             }
         }
     }
@@ -616,10 +664,48 @@ internal sealed class TrayAppContext : ApplicationContext {
             case Paster.Outcome.CopiedToClipboard:
                 Log.Write(logLabel + ": no editable field focused, left on clipboard");
                 Sounds.Pasted();
-                ShowBalloon("Copied to clipboard — press Ctrl+V to paste.");
+                ShowBalloon("Copied to clipboard — press Ctrl+V to paste.", OverlayKind.Success);
                 ResetToIdle();
                 break;
         }
+    }
+
+    /// <summary>
+    /// Pastes the model reply only. The spoken transcript was already copied when
+    /// it landed; after a successful paste it is put back on the clipboard once
+    /// the target app has had time to read the reply (Qt/Electron paste late).
+    /// If there was nowhere to paste, the reply stays on the clipboard.
+    /// </summary>
+    private void DeliverGeneratedPaste(string reply, string logLabel, string transcript) {
+        switch (Paster.Deliver(reply, keepTranscriptOnClipboard: true, _settings.PressEnterAfterPaste, _pasteTarget)) {
+            case Paster.Outcome.Pasted:
+                Sounds.Pasted();
+                Paster.CopyLater(transcript);
+                ShowBalloon("Pasted the reply. Transcript copied to clipboard.", OverlayKind.Success);
+                ResetToIdle();
+                break;
+            case Paster.Outcome.CopiedToClipboard:
+                Log.Write(logLabel + ": no editable field focused, left reply on clipboard");
+                Sounds.Pasted();
+                ShowBalloon("Copied the reply — press Ctrl+V to paste.", OverlayKind.Success);
+                ResetToIdle();
+                break;
+        }
+    }
+
+    /// <summary>
+    /// True when the scraped "reply" is actually the prompt or spoken transcript
+    /// (a user bubble mistaken for the assistant).
+    /// </summary>
+    private static bool ReplyIsPromptEcho(string reply, string message, string transcript) {
+        string text = reply.Trim();
+        if (text.Length == 0) {
+            return true;
+        }
+        if (string.Equals(text, transcript.Trim(), StringComparison.Ordinal)) {
+            return true;
+        }
+        return string.Equals(text, message.Trim(), StringComparison.Ordinal);
     }
 
     private bool TryDeliverImage(byte[] imageBytes, string logLabel) {
@@ -637,12 +723,13 @@ internal sealed class TrayAppContext : ApplicationContext {
             switch (Paster.DeliverImage(image, _settings.PressEnterAfterPaste, _pasteTarget)) {
                 case Paster.Outcome.Pasted:
                     Sounds.Pasted();
+                    ShowBalloon("Pasted image. Transcript copied to clipboard.", OverlayKind.Success);
                     ResetToIdle();
                     return true;
                 case Paster.Outcome.CopiedToClipboard:
                     Log.Write(logLabel + ": no editable field focused, left image on clipboard");
                     Sounds.Pasted();
-                    ShowBalloon("Copied image to clipboard — press Ctrl+V to paste.");
+                    ShowBalloon("Copied image. Transcript copied to clipboard.", OverlayKind.Success);
                     ResetToIdle();
                     return true;
                 default:
@@ -652,53 +739,65 @@ internal sealed class TrayAppContext : ApplicationContext {
     }
 
     /// <summary>
-    /// Sends the custom-command prompt and waits for a reply. A late or hung
-    /// thread is recovered by opening a new chat and, if that also times out,
-    /// refreshing the site and sending once more (ChatGPT and Gemini).
+    /// Sends the custom-command prompt and waits for a reply. ChatGPT reuses the
+    /// current web thread for up to 25 successful sends; a timeout, empty reply,
+    /// or that cap opens a new chat. Gemini still starts a fresh chat every time.
+    /// If ChatGPT never starts a reply, the same prompt + transcript are resent
+    /// in a new chat, then the page is refreshed as a last fallback.
     /// </summary>
     private async Task<ModelReply> RequestCommandReplyAsync(string message, int session) {
+        TimeSpan firstByteTimeout = CommandFirstByteTimeout();
+        Log.Write("command: waiting up to " + ((int)firstByteTimeout.TotalSeconds)
+            + "s for a reply (recording " + HeldSeconds().ToString("0.0") + "s)");
+        bool firstNeedsNewChat = ShouldStartNewChat();
         try {
-            ModelReply reply = await SendCommandOnceAsync(message);
+            ModelReply reply = await SendCommandOnceAsync(message, firstNeedsNewChat, firstByteTimeout);
             if (!IsLive(session)) {
                 return ModelReply.Empty;
             }
             if (!reply.IsEmpty) {
+                NoteChatGptThreadSuccess(openedNewChat: firstNeedsNewChat);
                 return reply;
             }
             Log.Write("command: empty reply");
+            MarkChatGptThreadFailed();
         } catch (DriverException ex) when (IsCommandRetryable(ex)) {
             if (!IsLive(session)) {
                 return ModelReply.Empty;
             }
             Log.Write("command: first send failed (" + ex.Kind + ": " + ex.Message + ")");
+            MarkChatGptThreadFailed();
         }
 
         if (!IsLive(session)) {
             return ModelReply.Empty;
         }
         Log.Write("command: retrying in a new chat");
-        ShowBalloon(_web.Site.DisplayName + " is slow — retrying in a new chat…");
+        ShowBalloon(_web.Site.DisplayName + " is slow — retrying in a new chat…", OverlayKind.Warning);
         try {
-            ModelReply reply = await SendCommandOnceAsync(message);
+            ModelReply reply = await SendCommandOnceAsync(message, startNewChat: true, firstByteTimeout);
             if (!IsLive(session)) {
                 return ModelReply.Empty;
             }
             if (!reply.IsEmpty) {
+                NoteChatGptThreadSuccess(openedNewChat: true);
                 return reply;
             }
             Log.Write("command: empty reply after new-chat retry");
+            MarkChatGptThreadFailed();
         } catch (DriverException ex) when (IsCommandRetryable(ex)) {
             if (!IsLive(session)) {
                 return ModelReply.Empty;
             }
             Log.Write("command: new-chat retry failed (" + ex.Kind + ": " + ex.Message + ")");
+            MarkChatGptThreadFailed();
         }
 
         if (!IsLive(session)) {
             return ModelReply.Empty;
         }
         Log.Write("command: refreshing " + _web.Site.DisplayName + " and retrying");
-        ShowBalloon("Still waiting — refreshing " + _web.Site.DisplayName + " and retrying…");
+        ShowBalloon("Still waiting — refreshing " + _web.Site.DisplayName + " and retrying…", OverlayKind.Warning);
         var outcome = await _web.RefreshChatAsync();
         if (!IsLive(session)) {
             return ModelReply.Empty;
@@ -706,23 +805,94 @@ internal sealed class TrayAppContext : ApplicationContext {
         if (outcome != ReadyOutcome.Ready) {
             throw ToDriverException(outcome);
         }
-        return await SendCommandOnceAsync(message);
+        ModelReply refreshed = await SendCommandOnceAsync(message, startNewChat: true, firstByteTimeout);
+        if (!refreshed.IsEmpty) {
+            NoteChatGptThreadSuccess(openedNewChat: true);
+        } else {
+            MarkChatGptThreadFailed();
+        }
+        return refreshed;
     }
 
-    private async Task<ModelReply> SendCommandOnceAsync(string message) {
+    private async Task<ModelReply> SendCommandOnceAsync(
+        string message,
+        bool startNewChat,
+        TimeSpan firstByteTimeout) {
         var driver = _web.Driver
             ?? throw new DriverException(DriverFailure.NotReady, "no driver");
-        if (!await driver.StartNewChatAsync()) {
-            throw new DriverException(DriverFailure.ButtonNotFound, "couldn't open a new chat");
+        driver.InvalidateWaits();
+        if (startNewChat) {
+            if (!await driver.StartNewChatAsync()) {
+                throw new DriverException(DriverFailure.ButtonNotFound, "couldn't open a new chat");
+            }
+        } else {
+            await driver.StopGenerationAsync();
         }
-        ModelReply previous = await driver.LastAssistantReplyAsync();
+        CommandTurnSnapshot previous = await driver.SnapshotCommandTurnAsync();
         await driver.SetComposerAsync(message);
-        await Task.Delay(400);
         await driver.SendPromptAsync();
-        ModelReply reply = await driver.AwaitAssistantReplyAsync(previous);
+        ModelReply reply;
+        try {
+            reply = await driver.AwaitAssistantReplyAsync(previous, firstByteTimeout);
+        } catch (DriverException ex) when (ex.Kind == DriverFailure.Timeout) {
+            reply = await driver.TryRecoverAssistantReplyAsync(previous);
+            if (reply.IsEmpty) {
+                throw;
+            }
+            Log.Write("command: recovered the model's reply after a wait timeout");
+        }
+        if (reply.IsEmpty) {
+            reply = await driver.TryRecoverAssistantReplyAsync(previous);
+        }
         await driver.ClearComposerAsync();
         return reply;
     }
+
+    /// <summary>
+    /// How long to wait for the first reply token before treating ChatGPT as hung.
+    /// Matches recording length, clamped to 30–60 seconds so a 30s clip retries
+    /// after 30s and a two-minute clip waits a full minute.
+    /// </summary>
+    private TimeSpan CommandFirstByteTimeout() {
+        if (!IsChatGptSite) {
+            return TimeSpan.FromSeconds(45);
+        }
+        double seconds = Math.Clamp(HeldSeconds(), MinChatGptFirstReplySeconds, MaxChatGptFirstReplySeconds);
+        return TimeSpan.FromSeconds(seconds);
+    }
+
+    private bool ShouldStartNewChat() {
+        if (!IsChatGptSite) {
+            return true;
+        }
+        if (_chatgptForceNewThread) {
+            Log.Write("command: ChatGPT thread needs a new chat after an error");
+            return true;
+        }
+        if (_chatgptThreadSends >= ChatGptThreadReuseLimit) {
+            Log.Write("command: ChatGPT thread reached " + ChatGptThreadReuseLimit + " sends, opening a new chat");
+            return true;
+        }
+        Log.Write("command: reusing ChatGPT thread (" + (_chatgptThreadSends + 1) + "/" + ChatGptThreadReuseLimit + ")");
+        return false;
+    }
+
+    private void NoteChatGptThreadSuccess(bool openedNewChat) {
+        if (!IsChatGptSite) {
+            return;
+        }
+        _chatgptForceNewThread = false;
+        _chatgptThreadSends = openedNewChat ? 1 : _chatgptThreadSends + 1;
+    }
+
+    private void MarkChatGptThreadFailed() {
+        if (!IsChatGptSite) {
+            return;
+        }
+        _chatgptForceNewThread = true;
+    }
+
+    private bool IsChatGptSite => _web.Site.Id == ChatSite.ChatGpt.Id;
 
     private static bool IsCommandRetryable(DriverException ex) =>
         ex.Kind is DriverFailure.Timeout or DriverFailure.ButtonNotFound
@@ -740,10 +910,12 @@ internal sealed class TrayAppContext : ApplicationContext {
             return;
         }
         Log.Write("dictation: " + reason);
+        StopListenWatch();
         _session++;
         _hotkey.EscSwallowActive = false;
         DismissActionPicker();
         try {
+            _web.Driver?.InvalidateWaits();
             if (_web.Driver != null) {
                 await _web.Driver.StopGenerationAsync();
                 await _web.Driver.CancelDictationAsync();
@@ -757,7 +929,7 @@ internal sealed class TrayAppContext : ApplicationContext {
     // Failure handling (mac handleFailure parity)
     // ------------------------------------------------------------------
 
-    private void HandleFailure(DriverException ex) {
+    private void HandleFailure(DriverException ex, string? transcriptToCopy = null) {
         string message;
         switch (ex.Kind) {
             case DriverFailure.LoggedOut:
@@ -802,24 +974,97 @@ internal sealed class TrayAppContext : ApplicationContext {
 
         Log.Write("dictation: failed — " + message);
         Sounds.Error();
-        ShowBalloon(message);
+        if (!string.IsNullOrEmpty(transcriptToCopy) && CopyTranscript(transcriptToCopy)) {
+            message += " Transcript copied to clipboard.";
+        }
+        ShowBalloon(message, OverlayKind.Error);
         ResetToIdle();
     }
 
+    /// <summary>
+    /// Saves the spoken transcript so a model timeout or empty reply does not
+    /// throw away the dictation. Returns false if the clipboard write failed.
+    /// </summary>
+    private static bool CopyTranscript(string transcript) {
+        if (string.IsNullOrWhiteSpace(transcript)) {
+            return false;
+        }
+        try {
+            Paster.Copy(transcript);
+            Log.Write("clipboard: copied transcript (" + transcript.Length + " chars)");
+            return true;
+        } catch (Exception ex) {
+            Log.Write("clipboard: transcript copy failed: " + ex.Message);
+            return false;
+        }
+    }
+
     private void ResetToIdle() {
+        StopListenWatch();
         DismissActionPicker();
         RestoreOtherApps();
         _hotkeyHeld = false;
         _activeCommand = null;
         _askModel = false;
-        _sessionVk = 0;
+        _sessionChord = default;
         _pasteTarget = null;
         _selectedText = null;
         _selectionTask = Task.FromResult<string?>(null);
         _hotkey.EscSwallowActive = false;
         NativeMethods.SetThreadExecutionState(NativeMethods.ES_CONTINUOUS);
         SetPhase(AppPhase.Idle);
+        _listenFinishGate = 0;
         _session++;
+    }
+
+    private void StartListenWatch(int session) {
+        StopListenWatch();
+        var cts = new CancellationTokenSource();
+        _listenWatchCts = cts;
+        _ = WatchListeningCutoffAsync(session, cts.Token);
+    }
+
+    private void StopListenWatch() {
+        CancellationTokenSource? cts = _listenWatchCts;
+        _listenWatchCts = null;
+        if (cts == null) {
+            return;
+        }
+        try {
+            cts.Cancel();
+        } catch (ObjectDisposedException) {
+            return;
+        }
+        cts.Dispose();
+    }
+
+    private async Task WatchListeningCutoffAsync(int session, CancellationToken cancel) {
+        var driver = _web.Driver;
+        if (driver == null) {
+            return;
+        }
+        string? reason;
+        try {
+            reason = await driver.AwaitUnexpectedStopAsync(cancel);
+        } catch (OperationCanceledException) {
+            return;
+        } catch (Exception ex) {
+            Log.Write("dictation: listen watch failed: " + ex.Message);
+            return;
+        }
+        if (reason == null || cancel.IsCancellationRequested || !IsLive(session) || _phase != AppPhase.Listening) {
+            return;
+        }
+
+        Log.Write("dictation: recording cut off (" + reason + ")");
+        Sounds.RecordingStopped();
+        ShowBalloon(
+            _web.Site.DisplayName + " ended the audio. Only what you already said will be transcribed.",
+            OverlayKind.Warning,
+            "Recording stopped");
+        _hotkeyHeld = false;
+        _releasedAt = DateTime.UtcNow;
+        await FinishListeningAsync(session);
     }
 
     private void MuteOtherAppsIfEnabled() {
@@ -842,15 +1087,7 @@ internal sealed class TrayAppContext : ApplicationContext {
     }
 
     private void OnMuteOthersChanged(object? sender, EventArgs e) {
-        if (_settings.MuteOtherAppsWhileDictating == _muteOthersItem.Checked) {
-            return;
-        }
-        _settings.MuteOtherAppsWhileDictating = _muteOthersItem.Checked;
-        _settings.Save();
-        Log.Write("settings: muteOtherAppsWhileDictating=" + _settings.MuteOtherAppsWhileDictating);
-        if (!_settings.MuteOtherAppsWhileDictating) {
-            RestoreOtherApps();
-        }
+        SetMuteOthers(_muteOthersItem.Checked);
     }
 
     private void SetToggleRecording(bool toggle) {
@@ -859,7 +1096,7 @@ internal sealed class TrayAppContext : ApplicationContext {
             return;
         }
         if (_phase != AppPhase.Idle) {
-            ShowBalloon("Wait until dictation finishes before switching recording mode.");
+            ShowBalloon("Wait until dictation finishes before switching recording mode.", OverlayKind.Warning);
             SyncRecordingModeMenu();
             return;
         }
@@ -884,12 +1121,29 @@ internal sealed class TrayAppContext : ApplicationContext {
     // ------------------------------------------------------------------
 
     private void SetPhase(AppPhase phase) {
+        var previous = _phase;
         _phase = phase;
         UpdateStatusIcon();
+        if (phase == AppPhase.Listening) {
+            try {
+                _micMeter.Start();
+                StatusOverlay.ShowListening(_web.Site.DisplayName, () => _micMeter.Level);
+            } catch (Exception ex) {
+                Log.Write("hud: listening overlay failed: " + ex.Message);
+            }
+        } else if (previous == AppPhase.Listening) {
+            try {
+                _micMeter.Stop();
+            } catch (Exception ex) {
+                Log.Write("audio: mic meter stop failed: " + ex.Message);
+            }
+            StatusOverlay.HideListening();
+        }
     }
 
     private void UpdateStatusIcon() {
         _tray.Icon = TrayIcons.For(_phase, _loggedIn, _online);
+        NotifyUi();
     }
 
     private void OnLoginStateChanged(bool loggedIn) {
@@ -919,6 +1173,7 @@ internal sealed class TrayAppContext : ApplicationContext {
     private void UpdateStatusText() {
         _statusItem.Text = StatusLine();
         _tray.Text = "EchoType — " + StatusLine();
+        NotifyUi();
     }
 
     private void SyncModelMenu() {
@@ -937,7 +1192,7 @@ internal sealed class TrayAppContext : ApplicationContext {
             return;
         }
         if (_phase != AppPhase.Idle) {
-            ShowBalloon("Wait until dictation finishes before switching models.");
+            ShowBalloon("Wait until dictation finishes before switching models.", OverlayKind.Warning);
             SyncModelMenu();
             return;
         }
@@ -953,7 +1208,7 @@ internal sealed class TrayAppContext : ApplicationContext {
         RebuildCommandsMenu();
         _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
         Log.Write("settings: transcriptionProvider=" + _settings.TranscriptionProviderName);
-        ShowBalloon("Now using " + _web.Site.DisplayName + ". Sign in from the tray if needed.");
+        ShowBalloon("Now using " + _web.Site.DisplayName + ". Sign in if needed.");
         _ = WarmupAsync();
     }
 
@@ -976,6 +1231,7 @@ internal sealed class TrayAppContext : ApplicationContext {
         if (announce) {
             ShowBalloon(enabled ? "Auto Enter on" : "Auto Enter off");
         }
+        NotifyUi();
     }
 
     private void UpdatePressEnterShortcutMenu() {
@@ -1018,10 +1274,12 @@ internal sealed class TrayAppContext : ApplicationContext {
         if (_web.IsLoginWindowVisible) {
             _web.HideLoginWindow();
             Log.Write("model-window: shortcut hid window");
+            NotifyUi();
             return;
         }
         Log.Write("model-window: shortcut opened window");
         _web.ShowLoginWindow();
+        NotifyUi();
     }
 
     private void UpdateModelWindowShortcutMenu() {
@@ -1124,10 +1382,8 @@ internal sealed class TrayAppContext : ApplicationContext {
         }
     }
 
-    private void ShowBalloon(string text) {
-        _tray.BalloonTipTitle = "EchoType";
-        _tray.BalloonTipText = text;
-        _tray.ShowBalloonTip(4000);
+    private static void ShowBalloon(string text, OverlayKind kind = OverlayKind.Info, string? title = null) {
+        StatusOverlay.ShowNotice(text, kind, title);
     }
 
     private async Task WarmupAsync() {
@@ -1140,7 +1396,7 @@ internal sealed class TrayAppContext : ApplicationContext {
                 _loggedIn = false;
                 UpdateStatusIcon();
                 UpdateLoginMenuItem();
-                ShowBalloon("Log in to " + _web.Site.DisplayName + " from the tray icon before dictating.");
+                ShowBalloon("Log in to " + _web.Site.DisplayName + " before dictating.", OverlayKind.Warning);
             }
         } catch (Exception ex) {
             Log.Write("launch: warmup failed: " + ex.Message);
@@ -1153,7 +1409,7 @@ internal sealed class TrayAppContext : ApplicationContext {
         if (_phase != AppPhase.Idle) {
             return;
         }
-        OnHoldStart((uint)_settings.HotkeyVk);
+        OnHoldStart(HotkeyChord.Single(_settings.HotkeyVk));
         await Task.Delay(5000);
         if (_phase == AppPhase.Listening) {
             _hotkeyHeld = false;
@@ -1163,24 +1419,28 @@ internal sealed class TrayAppContext : ApplicationContext {
     }
 #endif
 
-    private CustomCommand? FindCommand(uint vk) {
-        if (vk == (uint)_settings.HotkeyVk) {
+    private bool IsDictationChord(HotkeyChord chord) =>
+        chord.Count == 1 && chord.K1 == (uint)_settings.HotkeyVk;
+
+    private CustomCommand? FindCommand(HotkeyChord chord) {
+        if (IsDictationChord(chord)) {
             return null;
         }
-        return _settings.ActiveCommands.FirstOrDefault(c => (uint)c.HotkeyVk == vk);
+        return _settings.ActiveCommands.FirstOrDefault(c => c.Chord.Equals(chord));
     }
 
-    private uint[] CollectHotkeys() {
-        var vks = new List<uint> { (uint)_settings.HotkeyVk };
+    private HotkeyChord[] CollectHotkeys() {
+        var chords = new List<HotkeyChord> { HotkeyChord.Single(_settings.HotkeyVk) };
         if (_settings.AskModelVk != 0) {
-            vks.Add((uint)_settings.AskModelVk);
+            chords.Add(HotkeyChord.Single(_settings.AskModelVk));
         }
         foreach (var cmd in _settings.ActiveCommands) {
-            if (cmd.HotkeyVk != 0) {
-                vks.Add((uint)cmd.HotkeyVk);
+            var chord = cmd.Chord;
+            if (!chord.IsEmpty) {
+                chords.Add(chord);
             }
         }
-        return vks.ToArray();
+        return chords.ToArray();
     }
 
     private uint[] CollectTapHotkeys() =>
@@ -1193,13 +1453,14 @@ internal sealed class TrayAppContext : ApplicationContext {
             string extra = cmd.ResolvedButtons.Count > 1
                 ? " (" + cmd.ResolvedButtons.Count + " buttons)"
                 : "";
-            string label = $"{_settings.RecordingVerb} {HotkeyNames.For(cmd.HotkeyVk)} — {cmd.DisplayName}{extra}";
+            string label = $"{_settings.RecordingVerb} {HotkeyNames.For(cmd.Chord)} — {cmd.DisplayName}{extra}";
             _commandsRoot.DropDownItems.Add(new ToolStripMenuItem(label) { Enabled = false });
         }
         if (_settings.ActiveCommands.Count > 0) {
             _commandsRoot.DropDownItems.Add(new ToolStripSeparator());
         }
         _commandsRoot.DropDownItems.Add("Add or edit…", null, (_, _) => OpenCommandsUi());
+        NotifyUi();
     }
 
     private void OpenCommandsUi() {
@@ -1212,7 +1473,8 @@ internal sealed class TrayAppContext : ApplicationContext {
                 _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
                 RebuildCommandsMenu();
             });
-            form.ShowDialog();
+            IWin32Window? owner = _window is { Visible: true, IsDisposed: false } ? _window : null;
+            form.ShowDialog(owner);
             _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
             RebuildCommandsMenu();
         } catch (Exception ex) {
@@ -1245,11 +1507,146 @@ internal sealed class TrayAppContext : ApplicationContext {
 
     private static string Truncate(string s, int n) => s.Length <= n ? s : s[..n];
 
+    private void NotifyUi() {
+        try {
+            UiChanged?.Invoke();
+        } catch (Exception ex) {
+            Log.Write("ui: window refresh failed: " + ex.Message);
+        }
+    }
+
+    public void ShowAppWindow() {
+        if (_window is not { IsDisposed: false }) {
+            _window = new AppWindow(this);
+        }
+        _window.Reveal();
+    }
+
+    Settings IAppWindowHost.Settings => _settings;
+    HotkeyMonitor IAppWindowHost.Hotkey => _hotkey;
+    AppPhase IAppWindowHost.Phase => _phase;
+    bool IAppWindowHost.LoggedIn => _loggedIn;
+    bool IAppWindowHost.Online => _online;
+    string IAppWindowHost.ModelName => _web.Site.DisplayName;
+    bool IAppWindowHost.LoginWindowVisible => _web.IsLoginWindowVisible;
+    float IAppWindowHost.MicLevel => _micMeter.Level;
+    string IAppWindowHost.StatusText => StatusLine();
+
+    void IAppWindowHost.SelectModel(TranscriptionProvider provider) => SelectModel(provider);
+    void IAppWindowHost.SetToggleRecording(bool toggle) => SetToggleRecording(toggle);
+    void IAppWindowHost.ToggleLoginWindow() => OpenModelWindow();
+    void IAppWindowHost.OpenCommands() => OpenCommandsUi();
+    void IAppWindowHost.OpenLog() => OpenLog();
+    void IAppWindowHost.Quit() => ExitThread();
+
+    void IAppWindowHost.SetMuteOthers(bool value) => SetMuteOthers(value);
+
+    void IAppWindowHost.SetPressEnterAfterPaste(bool value) =>
+        ApplyPressEnterAfterPaste(value, announce: false);
+
+    void IAppWindowHost.SetKeepTranscriptOnClipboard(bool value) {
+        if (_settings.KeepTranscriptOnClipboard == value) {
+            return;
+        }
+        _settings.KeepTranscriptOnClipboard = value;
+        _settings.Save();
+        Log.Write("settings: keepTranscriptOnClipboard=" + value);
+        NotifyUi();
+    }
+
+    bool IAppWindowHost.TrySetShortcut(AppShortcut shortcut, int vk) {
+        if (shortcut == AppShortcut.Dictation && vk <= 0) {
+            ShowBalloon("Pick a dictation key — EchoType needs one to record.", OverlayKind.Warning);
+            return false;
+        }
+        if (shortcut == AppShortcut.ChatGpt && vk != 0 && vk == _settings.GeminiSwitchVk) {
+            ShowBalloon("ChatGPT and Gemini cannot share the same shortcut.", OverlayKind.Warning);
+            return false;
+        }
+        if (shortcut == AppShortcut.Gemini && vk != 0 && vk == _settings.ChatGptSwitchVk) {
+            ShowBalloon("ChatGPT and Gemini cannot share the same shortcut.", OverlayKind.Warning);
+            return false;
+        }
+
+        int ignore = shortcut switch {
+            AppShortcut.Dictation => _settings.HotkeyVk,
+            AppShortcut.AskModel => _settings.AskModelVk,
+            AppShortcut.PressEnter => _settings.PressEnterToggleVk,
+            AppShortcut.ModelWindow => _settings.OpenModelWindowVk,
+            AppShortcut.ChatGpt => _settings.ChatGptSwitchVk,
+            AppShortcut.Gemini => _settings.GeminiSwitchVk,
+            _ => 0,
+        };
+        string? conflict = HotkeyConflicts.Message(vk, _settings, ignore);
+        if (conflict != null) {
+            ShowBalloon(conflict, OverlayKind.Warning);
+            return false;
+        }
+
+        switch (shortcut) {
+            case AppShortcut.Dictation:
+                _settings.HotkeyVk = vk;
+                break;
+            case AppShortcut.AskModel:
+                _settings.AskModelVk = vk;
+                break;
+            case AppShortcut.PressEnter:
+                _settings.PressEnterToggleVk = vk;
+                break;
+            case AppShortcut.ModelWindow:
+                _settings.OpenModelWindowVk = vk;
+                break;
+            case AppShortcut.ChatGpt:
+                _settings.ChatGptSwitchVk = vk;
+                break;
+            case AppShortcut.Gemini:
+                _settings.GeminiSwitchVk = vk;
+                break;
+        }
+        _settings.Save();
+        _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
+        UpdatePressEnterShortcutMenu();
+        UpdateAskModelShortcutMenu();
+        UpdateModelWindowShortcutMenu();
+        UpdateModelShortcutsMenu();
+        SyncModelMenu();
+        UpdateStatusText();
+        RebuildCommandsMenu();
+        Log.Write("settings: " + shortcut + "=0x" + vk.ToString("X2"));
+        return true;
+    }
+
+    private void SetMuteOthers(bool value) {
+        if (_settings.MuteOtherAppsWhileDictating == value) {
+            return;
+        }
+        _settings.MuteOtherAppsWhileDictating = value;
+        _settings.Save();
+        if (_muteOthersItem.Checked != value) {
+            _muteOthersItem.CheckedChanged -= OnMuteOthersChanged;
+            _muteOthersItem.Checked = value;
+            _muteOthersItem.CheckedChanged += OnMuteOthersChanged;
+        }
+        Log.Write("settings: muteOtherAppsWhileDictating=" + value);
+        if (!value) {
+            RestoreOtherApps();
+        }
+        NotifyUi();
+    }
+
     protected override void ExitThreadCore() {
         Log.Write("shutdown");
+        StopListenWatch();
         RestoreOtherApps();
+        _micMeter.Dispose();
+        StatusOverlay.Shutdown();
         _hotkey.Dispose();
         _web.Dispose();
+        if (_window is { IsDisposed: false } window) {
+            window.Hide();
+            window.Dispose();
+        }
+        _window = null;
         _tray.Visible = false; // else a ghost icon lingers until hover
         _tray.Dispose();
         _marshal.Dispose();

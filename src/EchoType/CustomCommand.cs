@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using EchoType.Hotkey;
 using EchoType.Input;
 
 namespace EchoType;
@@ -48,6 +49,21 @@ internal sealed class CustomCommand {
     [JsonPropertyName("hotkeyVk")]
     public int HotkeyVk { get; set; }
 
+    /// <summary>
+    /// Up to three keys for this command’s shortcut. Empty falls back to
+    /// <see cref="HotkeyVk"/> so older config files keep working.
+    /// </summary>
+    [JsonPropertyName("hotkeyVks")]
+    public List<int> HotkeyVks { get; set; } = [];
+
+    [JsonIgnore]
+    public HotkeyChord Chord => HotkeyChord.FromVks(HotkeyVks, HotkeyVk);
+
+    public void SetChord(HotkeyChord chord) {
+        HotkeyVks = chord.ToIntArray().ToList();
+        HotkeyVk = chord.LegacyVk;
+    }
+
     /// <summary>Legacy single-prompt field. Kept in sync with the first button.</summary>
     [JsonPropertyName("prompt")]
     public string Prompt { get; set; } = "";
@@ -73,6 +89,7 @@ internal sealed class CustomCommand {
             Id = Id,
             Name = Name,
             HotkeyVk = HotkeyVk,
+            HotkeyVks = [.. HotkeyVks],
             Prompt = Prompt,
             Buttons = Buttons.Select(b => b.Clone()).ToList(),
         };
@@ -82,6 +99,7 @@ internal sealed class CustomCommand {
         other.Normalize();
         Name = other.Name;
         HotkeyVk = other.HotkeyVk;
+        HotkeyVks = [.. other.HotkeyVks];
         Prompt = other.Prompt;
         Buttons = other.Buttons.Select(b => b.Clone()).ToList();
     }
@@ -92,6 +110,16 @@ internal sealed class CustomCommand {
     /// </summary>
     public void Normalize() {
         Buttons ??= [];
+        HotkeyVks ??= [];
+        HotkeyVks = HotkeyVks.Where(vk => vk > 0).Take(HotkeyChord.MaxKeys).ToList();
+        if (HotkeyVks.Count == 0 && HotkeyVk > 0) {
+            HotkeyVks.Add(HotkeyVk);
+        }
+        if (HotkeyVks.Count > 0) {
+            var chord = HotkeyChord.FromVks(HotkeyVks, HotkeyVk);
+            HotkeyVks = chord.ToIntArray().ToList();
+            HotkeyVk = chord.LegacyVk;
+        }
         if (Buttons.Count == 0 && !string.IsNullOrWhiteSpace(Prompt)) {
             Buttons.Add(new CommandButton { Prompt = Prompt });
         }

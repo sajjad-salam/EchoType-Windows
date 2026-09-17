@@ -5,8 +5,8 @@ namespace EchoType;
 
 /// <summary>
 /// Settings persisted to %APPDATA%\EchoType\config.json (Settings.swift analog, minus
-/// the keys that only back UI that doesn't exist in the MVP). The dictation hotkey is
-/// still file-only; recording mode, custom commands and model-switch shortcuts have a tray UI and are saved immediately.
+/// the keys that only back UI that doesn't exist in the MVP). Recording mode, shortcuts,
+/// custom commands and the dictation key are edited from the main window (or tray) and saved immediately.
 /// </summary>
 internal sealed class Settings {
 

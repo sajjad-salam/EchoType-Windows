@@ -29,15 +29,37 @@ internal sealed record ModelReply(string Text, IReadOnlyList<AssistantImage> Ima
     public bool HasLoadedImage => Images.Any(i => i.Loaded || (i.Width >= 96 && i.Height >= 96));
 }
 
+/// <summary>
+/// Conversation position captured before a prompt is sent, so a reused ChatGPT
+/// thread can still detect the next turn when the new reply text matches the last one.
+/// </summary>
+internal readonly record struct CommandTurnSnapshot(
+    ModelReply Reply,
+    int UserTurns,
+    int AssistantTurns,
+    string AssistantKey) {
+    public static CommandTurnSnapshot Empty { get; } = new(ModelReply.Empty, 0, 0, "");
+}
+
 /// <summary>Snapshot of the page state from window.__echotype.state().</summary>
 internal sealed record PageState(
     bool LoggedIn,
     bool Dictating,
     bool ComposerPresent,
     string ComposerText,
-    string Gum,           // getUserMedia outcome: none | requested | ok | err:<name>:<msg>
+    string Gum,           // getUserMedia outcome: none | requested | ok | ended | err:<name>:<msg>
     string UserActivation, // none | active | had | unsupported
     string LastClick);
+
+/// <summary>Whether the model's page is still actually capturing audio.</summary>
+internal sealed record CaptureState(
+    bool IntendedListen,
+    bool MicLive,
+    bool UiDictating,
+    bool Waveform,
+    string Gum,
+    string Composer,
+    string LastUser);
 
 /// <summary>
 /// JS bridge to a chat site's dictation UI (DictationDriver.swift analog). DOM specifics
@@ -60,12 +82,25 @@ internal sealed class DictationDriver {
     private bool _axUnavailable;
     private string _userTextBeforeDictation = "";
     private readonly HashSet<string> _axChromeBeforeDictation = new(StringComparer.Ordinal);
+    private int _waitEpoch;
+
+    /// <summary>
+    /// Aborts in-flight transcript/reply waits so a cancelled session cannot stop
+    /// the next prompt's generation or scrape the wrong bubble.
+    /// </summary>
+    public void InvalidateWaits() => Interlocked.Increment(ref _waitEpoch);
+
+    /// <summary>
+    /// ChatGPT/Gemini composers paint large inserts asynchronously. Sending before
+    /// the input has settled can miss the Send button and look like a New Chat click.
+    /// </summary>
+    private const int LargeComposerChars = 2000;
 
     public DictationDriver(CoreWebView2 webview, SelectorSet selectors, string chatUrl = "") {
         _webview = webview;
         _selectors = selectors;
         _chatUrl = chatUrl;
-        _script = UserScriptTemplate.Replace("{SELECTORS}", selectors.Js());
+        _script = MicCapture.HookScript + "\n" + UserScriptTemplate.Replace("{SELECTORS}", selectors.Js());
     }
 
     public string UserScript => _script;
@@ -261,11 +296,11 @@ internal sealed class DictationDriver {
               const hasTurns = extra.querySelector && extra.querySelector('[data-message-author-role], [data-turn], article, user-query, model-response');
               if (!hasTurns) roots.push(extra);
             }
-            let best = '';
-            for (const root of roots) {
-              const t = E.harvestVisibleText(root);
-              if (t.length > best.length && t.length < 20000) best = t;
-            }
+              let best = '';
+              for (const root of roots) {
+                const t = E.harvestVisibleText(root);
+                if (t.length > best.length && t.length < 500000) best = t;
+              }
             return best;
           };
           E.inSideChrome = (el) => {
@@ -618,8 +653,10 @@ internal sealed class DictationDriver {
           E.isImagePlaceholder = (t) => {
             t = E.cleanText(t);
             if (!t) return false;
-            const sample = t.length > 220 ? t.slice(0, 220) : t;
-            return /generating.{0,40}image|creating.{0,40}image|working on.{0,24}image|image.{0,24}(generat|creat)|جار[يٍ]?\s*إنشاء.{0,20}صور|جار[يٍ].{0,24}صور|توليد.{0,20}صور|إنشاء صور|generando.{0,24}imagen|g[eé]n[eé]ration.{0,24}image|正在生成.{0,12}图/i.test(sample);
+            // Status lines are short. Long replies that mention images
+            // (translations, app docs) must not look like image generation.
+            if (t.length > 160) return false;
+            return /^(generating.{0,40}image|creating.{0,40}image|working on.{0,24}image|image.{0,24}(generat|creat)|جار[يٍ]?\s*إنشاء.{0,20}صور|توليد.{0,20}صور|إنشاء صور|generando.{0,24}imagen|g[eé]n[eé]ration.{0,24}image|正在生成.{0,12}图)/i.test(t);
           };
           E.nodeLooksBusy = (node) => {
             if (!node) return false;
@@ -637,6 +674,17 @@ internal sealed class DictationDriver {
               if (E.nodeLooksBusy(nodes[i])) return nodes[i];
             }
             return null;
+          };
+          E.assistantTurnKey = () => {
+            const nodes = E.messageNodes(S.assistant);
+            const n = E.lastAssistantNode();
+            if (!n) return '';
+            let idx = -1;
+            for (let i = 0; i < nodes.length; i++) {
+              if (nodes[i] === n) { idx = i; break; }
+            }
+            const id = (n.getAttribute('data-message-id') || n.id || '').slice(0, 80);
+            return idx + ':' + id;
           };
           E.imagePending = () => {
             const node = E.lastAssistantNode();
@@ -738,6 +786,9 @@ internal sealed class DictationDriver {
             composer: E.composerText(),
             last: E.lastAssistantText(),
             user: E.lastUserText(),
+            userTurns: E.messageNodes(S.user).length,
+            assistantTurns: E.messageNodes(S.assistant).length,
+            assistantKey: E.assistantTurnKey(),
             images: E.lastAssistantImages()
           });
           E.micListening = () => {
@@ -748,13 +799,79 @@ internal sealed class DictationDriver {
             const lab = label(b);
             return pressed || /stop (listening|recording|voice)|listening|إيقاف/i.test(lab);
           };
-          E.isDictating = () => !!(
+          // Real dictation UI, ignoring the __etListen flag we set ourselves.
+          E.uiDictating = () => !!(
             E.findCss(S.dictatingCss)
             || E.findButton(S.submit)
             || E.findButton(S.cancel)
             || E.micListening()
+          );
+          E.waveformPresent = () => {
+            if (E.findCss(S.dictatingCss)) return true;
+            const look = (sel) => {
+              try { return deepQueryAll(sel); } catch (e) { return []; }
+            };
+            const hits = [
+              ...look('speech-dictation-mic-button[listening]'),
+              ...look('speech-dictation-mic-button[recording]'),
+              ...look('[class*="waveform"]'),
+              ...look('[class*="voice-visual"]'),
+              ...look('[class*="speech-visual"]'),
+              ...look('canvas'),
+              ...look('svg')
+            ];
+            const mic = E.findCss(S.startCss) || E.findButton(S.start, true);
+            const mr = mic ? mic.getBoundingClientRect() : null;
+            for (const el of hits) {
+              if (!isVisible(el)) continue;
+              const r = el.getBoundingClientRect();
+              const tag = (el.tagName || '').toLowerCase();
+              const cls = String(el.getAttribute('class') || '') + ' ' + (el.getAttribute('aria-label') || '');
+              if (/wave|voice|speech|dictat|visual|audio|mic/i.test(cls)) return true;
+              if (tag === 'canvas' || tag === 'svg') {
+                if (r.width < 32 || r.height < 8) continue;
+                if (mr) {
+                  const near = Math.abs((r.x + r.width / 2) - (mr.x + mr.width / 2)) < 320
+                    && Math.abs((r.y + r.height / 2) - (mr.y + mr.height / 2)) < 180;
+                  if (near && r.width >= 40) return true;
+                }
+                continue;
+              }
+              return true;
+            }
+            return false;
+          };
+          E.micTracksLive = () => {
+            try {
+              if (typeof window.__etRefreshMic === 'function') window.__etRefreshMic();
+            } catch (e) {}
+            if (window.__etMicLive) return true;
+            try {
+              const frames = document.querySelectorAll('iframe');
+              for (const f of frames) {
+                try {
+                  const w = f.contentWindow;
+                  if (!w) continue;
+                  if (typeof w.__etRefreshMic === 'function') w.__etRefreshMic();
+                  if (w.__etMicLive) return true;
+                } catch (e) {}
+              }
+            } catch (e) {}
+            return false;
+          };
+          E.isDictating = () => !!(
+            E.uiDictating()
             || (S.treatGumAsEngaged && window.__etListen)
           );
+          E.captureState = () => JSON.stringify({
+            listen: !!window.__etListen,
+            micLive: E.micTracksLive(),
+            ui: E.uiDictating(),
+            wave: E.waveformPresent(),
+            gum: window.__etGUM || 'none',
+            composer: E.composerText(),
+            user: E.lastUserText()
+          });
           E.start = () => {
             if (!E.loggedIn()) return 'logged-out';
             if (E.isDictating()) return 'ok';
@@ -882,6 +999,117 @@ internal sealed class DictationDriver {
         }
     }
 
+    public async Task<CaptureState> CaptureStateAsync() {
+        string json = await EvalAsync("__echotype.captureState()");
+        if (json is "undefined" or "null") {
+            throw new DriverException(DriverFailure.NotReady, $"capture state unavailable ({json})");
+        }
+        try {
+            using var doc = JsonDocument.Parse(json);
+            var r = doc.RootElement;
+            return new CaptureState(
+                IntendedListen: r.TryGetProperty("listen", out var listen) && listen.ValueKind == JsonValueKind.True,
+                MicLive: r.TryGetProperty("micLive", out var mic) && mic.ValueKind == JsonValueKind.True,
+                UiDictating: r.TryGetProperty("ui", out var ui) && ui.ValueKind == JsonValueKind.True,
+                Waveform: r.TryGetProperty("wave", out var wave) && wave.ValueKind == JsonValueKind.True,
+                Gum: r.TryGetProperty("gum", out var gum) ? gum.GetString() ?? "none" : "none",
+                Composer: r.TryGetProperty("composer", out var composer) ? composer.GetString() ?? "" : "",
+                LastUser: r.TryGetProperty("user", out var user) ? user.GetString() ?? "" : "");
+        } catch (DriverException) {
+            throw;
+        } catch (Exception ex) {
+            throw new DriverException(DriverFailure.JavaScript, "bad capture JSON: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Watches the model's mic/waveform while EchoType still thinks it is listening.
+    /// Returns a short reason once capture ends on its own, or null if cancelled.
+    /// </summary>
+    public async Task<string?> AwaitUnexpectedStopAsync(CancellationToken cancel) {
+        bool armed = false;
+        bool sawUi = false;
+        bool sawMic = false;
+        int deadStreak = 0;
+        DateTime started = DateTime.UtcNow;
+        string userBefore = _userTextBeforeDictation;
+
+        while (!cancel.IsCancellationRequested) {
+            CaptureState cap;
+            try {
+                cap = await CaptureStateAsync();
+            } catch (DriverException ex) {
+                Log.Write("driver: capture probe failed (" + ex.Message + ")");
+                try {
+                    await Task.Delay(200, cancel);
+                } catch (OperationCanceledException) {
+                    return null;
+                }
+                continue;
+            }
+
+            bool uiActive = cap.UiDictating || cap.Waveform;
+            bool micActive = cap.MicLive;
+            if (uiActive) {
+                sawUi = true;
+            }
+            if (micActive) {
+                sawMic = true;
+            }
+            if (!armed && (uiActive || micActive || cap.Gum is "ok" or "requested")) {
+                armed = true;
+                deadStreak = 0;
+                Log.Write("driver: recording armed (mic=" + cap.MicLive
+                    + " ui=" + cap.UiDictating
+                    + " wave=" + cap.Waveform
+                    + " gum=" + cap.Gum + ")");
+            }
+
+            string? reason = null;
+            bool userChanged = cap.LastUser.Length > 0 && cap.LastUser != userBefore;
+            if (armed && (sawUi || sawMic)) {
+                bool uiGone = sawUi && !uiActive;
+                bool micGone = sawMic && !micActive && !uiActive;
+                bool gumEnded = cap.Gum == "ended" && !uiActive;
+                bool autoSent = userChanged && !uiActive;
+                if (uiGone || micGone || gumEnded || autoSent) {
+                    deadStreak++;
+                    if (deadStreak >= 3) {
+                        reason = autoSent ? "auto-sent"
+                            : uiGone ? "waveform-ended"
+                            : gumEnded ? "mic-ended"
+                            : "recording-stopped";
+                    }
+                } else {
+                    deadStreak = 0;
+                }
+            } else if (armed && cap.Gum == "ended" && !uiActive && !micActive) {
+                deadStreak++;
+                if (deadStreak >= 3) {
+                    reason = "mic-ended";
+                }
+            } else {
+                deadStreak = 0;
+            }
+
+            if (reason != null && DateTime.UtcNow - started >= TimeSpan.FromMilliseconds(700)) {
+                Log.Write("driver: unexpected recording stop (" + reason
+                    + " mic=" + cap.MicLive
+                    + " ui=" + cap.UiDictating
+                    + " wave=" + cap.Waveform
+                    + " gum=" + cap.Gum + ")");
+                return reason;
+            }
+
+            try {
+                await Task.Delay(150, cancel);
+            } catch (OperationCanceledException) {
+                return null;
+            }
+        }
+        return null;
+    }
+
     private static string Text(JsonElement obj, string name) {
         if (!obj.TryGetProperty(name, out var v)) return "?";
         return v.ValueKind == JsonValueKind.String ? v.GetString() ?? "?" : v.GetRawText();
@@ -997,6 +1225,7 @@ internal sealed class DictationDriver {
     // ------------------------------------------------------------------
 
     public async Task StartDictationAsync() {
+        InvalidateWaits();
         var st = await StateAsync();
         if (!st.LoggedIn) {
             throw new DriverException(DriverFailure.LoggedOut, "logged out");
@@ -1017,7 +1246,7 @@ internal sealed class DictationDriver {
             _axChromeBeforeDictation.Clear();
         }
         try {
-            _ = await EvalAsync("(window.__etGUM = 'none', window.__etListen = false, 'ok')");
+            _ = await EvalAsync("(window.__etGUM = 'none', window.__etListen = false, window.__etMicLive = false, window.__etStreams = [], 'ok')");
         } catch (DriverException) {
             // best effort — a stale gum flag would only make engagement succeed early
         }
@@ -1360,16 +1589,47 @@ internal sealed class DictationDriver {
         } catch (Exception ex) {
             Log.Write("driver: CDP insertText failed: " + ex.Message);
         }
-        if ((await StateAsync()).ComposerText.Length > 0) {
-            await PokeComposerAsync();
+        if ((await StateAsync()).ComposerText.Length == 0) {
+            Log.Write("driver: CDP insert didn't fill composer, falling back to JS");
+            string encoded = JsonSerializer.Serialize(text);
+            string result = await EvalAsync("__echotype.setComposer(" + encoded + ")");
+            if ((await StateAsync()).ComposerText.Length == 0) {
+                throw new DriverException(DriverFailure.JavaScript, "could not fill composer (" + result + ")");
+            }
+        }
+        await PokeComposerAsync();
+        await WaitUntilComposerPopulatedAsync(text);
+    }
+
+    /// <summary>
+    /// Waits until the composer text is stable, then pauses so the page can enable
+    /// Send. Large prompts get a 3 s pause — a 400 ms wait is enough for short ones.
+    /// </summary>
+    private async Task WaitUntilComposerPopulatedAsync(string expected) {
+        if (expected.Length < LargeComposerChars) {
+            await Task.Delay(400);
             return;
         }
-        Log.Write("driver: CDP insert didn't fill composer, falling back to JS");
-        string encoded = JsonSerializer.Serialize(text);
-        string result = await EvalAsync("__echotype.setComposer(" + encoded + ")");
-        if ((await StateAsync()).ComposerText.Length == 0) {
-            throw new DriverException(DriverFailure.JavaScript, "could not fill composer (" + result + ")");
+
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(6);
+        string last = "";
+        int stable = 0;
+        while (DateTime.UtcNow < deadline) {
+            string current = (await StateAsync()).ComposerText;
+            if (current.Length > 0 && current == last) {
+                stable++;
+                if (stable >= 3) {
+                    break;
+                }
+            } else {
+                stable = 0;
+                last = current;
+            }
+            await Task.Delay(150);
         }
+
+        Log.Write($"driver: composer populated ({last.Length} chars, expected {expected.Length}), waiting 3000ms before send");
+        await Task.Delay(3000);
         await PokeComposerAsync();
     }
 
@@ -1387,6 +1647,9 @@ internal sealed class DictationDriver {
             int len = Math.Min(chunk, text.Length - i);
             string payload = JsonSerializer.Serialize(new { text = text.Substring(i, len) });
             CheckCdp(await _webview.CallDevToolsProtocolMethodAsync("Input.insertText", payload));
+            if (text.Length >= LargeComposerChars && i + len < text.Length) {
+                await Task.Delay(120);
+            }
         }
         Log.Write($"driver: CDP insertText {text.Length} chars");
     }
@@ -1399,7 +1662,16 @@ internal sealed class DictationDriver {
             userBefore = "";
         }
 
-        DateTime readyUntil = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        int composerLen = 0;
+        try {
+            composerLen = (await StateAsync()).ComposerText.Length;
+        } catch (DriverException) {
+            composerLen = 0;
+        }
+        TimeSpan readyWindow = composerLen >= LargeComposerChars
+            ? TimeSpan.FromSeconds(8)
+            : TimeSpan.FromSeconds(5);
+        DateTime readyUntil = DateTime.UtcNow + readyWindow;
         while (DateTime.UtcNow < readyUntil) {
             string ready = await EvalAsync("__echotype.sendReady()");
             if (ready == "ok") {
@@ -1476,35 +1748,98 @@ internal sealed class DictationDriver {
         return st?.Reply ?? ModelReply.Empty;
     }
 
-    public async Task<ModelReply> AwaitAssistantReplyAsync(ModelReply previous) {
+    public async Task<CommandTurnSnapshot> SnapshotCommandTurnAsync() {
+        var st = await ReadReplyStateAsync();
+        return st == null
+            ? CommandTurnSnapshot.Empty
+            : new CommandTurnSnapshot(st.Reply, st.UserTurns, st.AssistantTurns, st.AssistantKey);
+    }
+
+    /// <summary>
+    /// Reads the last assistant bubble after a wait timed out. Used so a reply
+    /// that already landed is not reported as missing.
+    /// </summary>
+    public async Task<ModelReply> TryRecoverAssistantReplyAsync(CommandTurnSnapshot previous) {
+        try {
+            var st = await ReadReplyStateAsync();
+            if (st == null || st.Reply.IsEmpty) {
+                return ModelReply.Empty;
+            }
+            if (ReplyMatchesUserBubble(st.Reply, st.User)) {
+                return ModelReply.Empty;
+            }
+            bool newTurn = st.AssistantTurns > previous.AssistantTurns
+                || (st.AssistantKey.Length > 0 && st.AssistantKey != previous.AssistantKey);
+            if (!newTurn && Fingerprint(st.Reply) == Fingerprint(previous.Reply)) {
+                return ModelReply.Empty;
+            }
+            Log.Write("driver: recovered assistant reply (" + st.Reply.Text.Length + " chars)");
+            return st.Reply;
+        } catch (DriverException ex) {
+            Log.Write("driver: reply recovery failed: " + ex.Message);
+            return ModelReply.Empty;
+        }
+    }
+
+    public async Task<ModelReply> AwaitAssistantReplyAsync(
+        CommandTurnSnapshot previous,
+        TimeSpan firstByteTimeout) {
+        if (firstByteTimeout < TimeSpan.FromSeconds(5)) {
+            firstByteTimeout = TimeSpan.FromSeconds(5);
+        }
+        int epoch = _waitEpoch;
         TimeSpan inactivity = TimeSpan.FromSeconds(90);
         TimeSpan imageLoadGrace = TimeSpan.FromSeconds(25);
-        DateTime firstByteDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(45);
+        DateTime firstByteDeadline = DateTime.UtcNow + firstByteTimeout;
         DateTime deadline = DateTime.UtcNow + inactivity;
-        DateTime imageHardDeadline = DateTime.UtcNow + TimeSpan.FromMinutes(4);
+        DateTime? imageHardDeadline = null;
         DateTime? imageLoadDeadline = null;
-        string prevKey = Fingerprint(previous);
+        string prevKey = Fingerprint(previous.Reply);
         string lastKey = prevKey;
-        ModelReply lastReply = previous;
+        ModelReply lastReply = previous.Reply;
         int stableCount = 0;
         bool sawGenerating = false;
         bool sawNewContent = false;
         bool sawImagePending = false;
         bool loggedImageReady = false;
         bool promptLeftComposer = false;
+        bool loggedThinking = false;
+        bool extendedForThink = false;
 
         while (true) {
+            if (epoch != _waitEpoch) {
+                Log.Write("driver: reply wait aborted (superseded)");
+                return ModelReply.Empty;
+            }
             var st = await ReadReplyStateAsync()
                 ?? throw new DriverException(DriverFailure.JavaScript, "reply state unavailable");
-
-            if (st.Composer.Length == 0) {
-                promptLeftComposer = true;
+            if (epoch != _waitEpoch) {
+                Log.Write("driver: reply wait aborted (superseded)");
+                return ModelReply.Empty;
             }
 
+            if (st.Composer.Length == 0 || st.UserTurns > previous.UserTurns) {
+                promptLeftComposer = true;
+                if (!extendedForThink) {
+                    extendedForThink = true;
+                    deadline = DateTime.UtcNow + inactivity;
+                }
+            }
+
+            bool newAssistantTurn = st.AssistantTurns > previous.AssistantTurns
+                || (st.AssistantKey.Length > 0 && st.AssistantKey != previous.AssistantKey);
+            bool replyIsEcho = ReplyMatchesUserBubble(st.Reply, st.User);
+
             string key = Fingerprint(st.Reply);
-            bool placeholderPending = !st.Reply.HasLoadedImage
+            // Only the new turn can be an image job. The previous bubble often
+            // still matches the placeholder regex (translations mention images).
+            bool placeholderPending = newAssistantTurn
+                && !st.Reply.HasLoadedImage
+                && !replyIsEcho
                 && (st.ImagePending || LooksLikeImagePlaceholder(st.Reply.Text));
-            bool imageLoading = st.Reply.Images.Count > 0 && !st.Reply.HasLoadedImage;
+            bool imageLoading = newAssistantTurn
+                && st.Reply.Images.Count > 0
+                && !st.Reply.HasLoadedImage;
 
             if (sawImagePending && st.Reply.HasLoadedImage && !loggedImageReady) {
                 loggedImageReady = true;
@@ -1515,6 +1850,7 @@ internal sealed class DictationDriver {
             if (placeholderPending) {
                 if (!sawImagePending) {
                     sawImagePending = true;
+                    imageHardDeadline = DateTime.UtcNow + TimeSpan.FromMinutes(4);
                     Log.Write("driver: waiting for generated image (placeholder; send stays active)");
                 }
                 sawGenerating = true;
@@ -1522,9 +1858,9 @@ internal sealed class DictationDriver {
                 stableCount = 0;
                 lastKey = key;
                 lastReply = st.Reply;
-                if (DateTime.UtcNow > imageHardDeadline) {
+                if (imageHardDeadline is DateTime imageDeadline && DateTime.UtcNow > imageDeadline) {
                     Log.Write("driver: image generation timed out, using whatever landed");
-                    return lastReply;
+                    return NewTurnReplyOrEmpty(lastReply, prevKey);
                 }
                 await Task.Delay(400);
                 continue;
@@ -1550,7 +1886,7 @@ internal sealed class DictationDriver {
                 sawGenerating = true;
                 stableCount = 0;
                 deadline = DateTime.UtcNow + inactivity;
-            } else if (!st.Reply.IsEmpty && key != prevKey) {
+            } else if (!st.Reply.IsEmpty && !replyIsEcho && (key != prevKey || newAssistantTurn)) {
                 sawNewContent = true;
                 if (key == lastKey) {
                     stableCount++;
@@ -1564,27 +1900,48 @@ internal sealed class DictationDriver {
             }
 
             lastKey = key;
-            lastReply = st.Reply;
+            if (!replyIsEcho) {
+                lastReply = st.Reply;
+            }
 
-            // Composer empty means the prompt was sent even if we never saw a
-            // spinner — keep waiting for the reply instead of bailing at 25s.
+            // No spinner: if the prompt never left the composer, the send failed
+            // and a new chat is worth trying. If it did leave, the model is often
+            // thinking with no Stop button — keep waiting instead of giving up
+            // while the reply is already on the page.
             if (!sawGenerating && !sawNewContent && DateTime.UtcNow > firstByteDeadline) {
-                if (promptLeftComposer) {
-                    firstByteDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
-                    deadline = DateTime.UtcNow + inactivity;
-                    Log.Write("driver: still waiting for first reply token (prompt already sent)");
-                } else {
+                if (!promptLeftComposer) {
+                    Log.Write("driver: no reply started within "
+                        + ((int)firstByteTimeout.TotalSeconds) + "s (prompt still in composer)");
                     throw new DriverException(DriverFailure.Timeout, "the model didn't start a reply");
+                }
+                if (!loggedThinking) {
+                    loggedThinking = true;
+                    Log.Write("driver: prompt sent, waiting for a reply without a visible spinner");
                 }
             }
             if (DateTime.UtcNow > deadline) {
-                if (sawNewContent && Fingerprint(lastReply) != prevKey) {
-                    return lastReply;
+                ModelReply landed = NewTurnReplyOrEmpty(lastReply, prevKey);
+                if (sawNewContent && !landed.IsEmpty) {
+                    return landed;
                 }
                 throw new DriverException(DriverFailure.Timeout, "the model reply never settled");
             }
             await Task.Delay(300);
         }
+    }
+
+    private static bool ReplyMatchesUserBubble(ModelReply reply, string user) {
+        if (reply.IsEmpty || string.IsNullOrWhiteSpace(user)) {
+            return false;
+        }
+        return string.Equals(reply.Text.Trim(), user.Trim(), StringComparison.Ordinal);
+    }
+
+    private static ModelReply NewTurnReplyOrEmpty(ModelReply reply, string previousFingerprint) {
+        if (reply.IsEmpty || Fingerprint(reply) == previousFingerprint) {
+            return ModelReply.Empty;
+        }
+        return reply;
     }
 
     /// <summary>
@@ -1772,23 +2129,32 @@ internal sealed class DictationDriver {
 
     /// <summary>
     /// ChatGPT/Gemini image jobs emit a short status line first and leave Send
-    /// enabled. That line is not the finished reply.
+    /// enabled. That line is not the finished reply. Long answers that merely
+    /// mention images (translations, app documentation) must not match.
     /// </summary>
     private static bool LooksLikeImagePlaceholder(string text) {
         if (string.IsNullOrWhiteSpace(text)) {
             return false;
         }
         string sample = text.Trim();
-        if (sample.Length > 220) {
-            sample = sample[..220];
+        if (sample.Length > 160) {
+            return false;
         }
         return Regex.IsMatch(
             sample,
-            @"generating.{0,40}image|creating.{0,40}image|working on.{0,24}image|image.{0,24}(generat|creat)|جار[يٍ]?\s*إنشاء.{0,20}صور|جار[يٍ].{0,24}صور|توليد.{0,20}صور|إنشاء صور|generando.{0,24}imagen|g[eé]n[eé]ration.{0,24}image|正在生成.{0,12}图",
+            @"^(generating.{0,40}image|creating.{0,40}image|working on.{0,24}image|image.{0,24}(generat|creat)|جار[يٍ]?\s*إنشاء.{0,20}صور|توليد.{0,20}صور|إنشاء صور|generando.{0,24}imagen|g[eé]n[eé]ration.{0,24}image|正在生成.{0,12}图)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
-    private sealed record ReplyState(bool Generating, bool ImagePending, string Composer, ModelReply Reply, string User);
+    private sealed record ReplyState(
+        bool Generating,
+        bool ImagePending,
+        string Composer,
+        ModelReply Reply,
+        string User,
+        int UserTurns,
+        int AssistantTurns,
+        string AssistantKey);
 
     private async Task<ReplyState?> ReadReplyStateAsync() {
         string json = await EvalAsync("__echotype.replyState()");
@@ -1806,7 +2172,10 @@ internal sealed class DictationDriver {
                 Reply: new ModelReply(
                     r.GetProperty("last").GetString() ?? "",
                     ParseImages(r)),
-                User: r.TryGetProperty("user", out var user) ? user.GetString() ?? "" : "");
+                User: r.TryGetProperty("user", out var user) ? user.GetString() ?? "" : "",
+                UserTurns: r.TryGetProperty("userTurns", out var ut) && ut.TryGetInt32(out int uti) ? uti : 0,
+                AssistantTurns: r.TryGetProperty("assistantTurns", out var at) && at.TryGetInt32(out int ati) ? ati : 0,
+                AssistantKey: r.TryGetProperty("assistantKey", out var ak) ? ak.GetString() ?? "" : "");
         } catch (Exception ex) {
             throw new DriverException(DriverFailure.JavaScript, "bad reply JSON: " + ex.Message);
         }
@@ -1839,6 +2208,7 @@ internal sealed class DictationDriver {
     /// the deadline is an inactivity window that extends while the page shows progress.
     /// </summary>
     public async Task<string> AwaitTranscriptAsync(TimeSpan recordingDuration) {
+        int epoch = _waitEpoch;
         TimeSpan inactivityWindow = TimeSpan.FromSeconds(Math.Max(60, recordingDuration.TotalSeconds * 0.5));
         DateTime deadline = DateTime.UtcNow + inactivityWindow;
         string lastText = "";
@@ -1854,10 +2224,18 @@ internal sealed class DictationDriver {
         string axHold = "";
 
         while (true) {
+            if (epoch != _waitEpoch) {
+                Log.Write("driver: transcript wait aborted (superseded)");
+                return "";
+            }
             var st = await StateAsync(); // failure → propagate (mac parity)
             string text = st.ComposerText;
             if (DateTime.UtcNow > deadline) {
-                string lateUser = await TryUserTranscriptFallbackAsync();
+                if (epoch != _waitEpoch) {
+                    Log.Write("driver: transcript wait aborted (superseded)");
+                    return "";
+                }
+                string lateUser = await TryUserTranscriptFallbackAsync(epoch);
                 if (lateUser.Length > 0) {
                     return lateUser;
                 }
@@ -1910,7 +2288,7 @@ internal sealed class DictationDriver {
                         Log.Write("driver: composer debug failed: " + ex.Message);
                     }
                 }
-                string user = await TryUserTranscriptFallbackAsync();
+                string user = await TryUserTranscriptFallbackAsync(epoch);
                 if (user.Length > 0) {
                     return user;
                 }
@@ -2130,8 +2508,11 @@ internal sealed class DictationDriver {
             || t.StartsWith("How can I help", StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task<string> TryUserTranscriptFallbackAsync() {
+    private async Task<string> TryUserTranscriptFallbackAsync(int epoch = 0) {
         if (!_selectors.UseUserMessageAsTranscriptFallback) {
+            return "";
+        }
+        if (epoch != 0 && epoch != _waitEpoch) {
             return "";
         }
         string user = "";
@@ -2141,8 +2522,11 @@ internal sealed class DictationDriver {
             user = "";
         }
         if (user.Length > 0 && user != _userTextBeforeDictation) {
+            if (epoch != 0 && epoch != _waitEpoch) {
+                return "";
+            }
             Log.Write("driver: composer empty after dictation — using last user message (auto-send)");
-            await StopUnexpectedGenerationAsync();
+            await StopUnexpectedGenerationAsync(epoch);
             return user;
         }
         return "";
@@ -2152,9 +2536,15 @@ internal sealed class DictationDriver {
     // Forensics
     // ------------------------------------------------------------------
 
-    private async Task StopUnexpectedGenerationAsync() {
+    private async Task StopUnexpectedGenerationAsync(int epoch = 0) {
+        if (epoch != 0 && epoch != _waitEpoch) {
+            return;
+        }
         try {
             if (await ReadReplyStateAsync() is { Generating: true }) {
+                if (epoch != 0 && epoch != _waitEpoch) {
+                    return;
+                }
                 Log.Write("driver: stopping auto-sent generation so the transcript isn't lost in a reply");
                 _ = await EvalAsync("__echotype.jsClick('stop')");
             }

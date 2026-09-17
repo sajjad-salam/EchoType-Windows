@@ -131,6 +131,10 @@ internal static class Selectors {
         NewChatCss = NewChatCss,
         OpenSidebar = OpenSidebar,
         OpenSidebarCss = OpenSidebarCss,
+        DictatingCss = [
+            "button[aria-label=\"Submit dictation\"]",
+            "button[aria-label=\"Cancel dictation\"]",
+        ],
         GeneratingCss = [".result-streaming", "[data-testid=\"stop-button\"]"],
         Assistant = Assistant,
         AssistantMarkdown = AssistantMarkdown,

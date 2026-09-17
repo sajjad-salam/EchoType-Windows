@@ -3,6 +3,20 @@ namespace EchoType.Hotkey;
 /// <summary>Human-readable names for virtual-key codes used as hold-to-talk keys.</summary>
 internal static class HotkeyNames {
 
+    public static string For(HotkeyChord chord) {
+        if (chord.IsEmpty) {
+            return "(none)";
+        }
+        if (chord.Count == 1) {
+            return For((int)chord.K1);
+        }
+        string s = ComboName(chord.K1);
+        for (int i = 1; i < chord.Count; i++) {
+            s += " + " + ComboName(chord[i]);
+        }
+        return s;
+    }
+
     public static string For(int vk) {
         if (vk <= 0) {
             return "(none)";
@@ -41,4 +55,12 @@ internal static class HotkeyNames {
                 : $"VK 0x{vk:X2}",
         };
     }
+
+    private static string ComboName(uint vk) => HotkeyChord.Canonical(vk) switch {
+        0x11 => "Ctrl",
+        0x10 => "Shift",
+        0x12 => "Alt",
+        0x5B => "Win",
+        _ => For((int)vk),
+    };
 }

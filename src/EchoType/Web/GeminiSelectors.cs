@@ -8,7 +8,8 @@ namespace EchoType.Web;
 /// Voice input: click the mic to start. Ctrl+Shift+D (same as ChatGPT) stops it —
 /// clicking the mic again is unreliable, especially on non-English UI. The transcript
 /// lands in the Quill composer and should NOT be sent. If Gemini auto-sends on silence,
-/// EchoType scrapes the last <c>user-query</c> bubble instead and stops the unwanted reply.
+/// EchoType alerts that recording stopped, scrapes the last <c>user-query</c> bubble
+/// instead, and stops the unwanted reply.
 /// Do not read the accessibility tree for the transcript — Gemini exposes conversation
 /// titles as textboxes, and that used to get pasted while speech-to-text was still running.
 /// </summary>

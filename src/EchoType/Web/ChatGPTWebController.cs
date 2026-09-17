@@ -121,13 +121,14 @@ internal sealed class ChatGPTWebController : IDisposable {
             }
           } catch (e) {}
         })();
-        """;
+        """ + "\n" + MicCapture.HookScript;
 
     private ChatSite _site;
     private readonly WebViewHostForm _form = new();
     private CoreWebView2Environment? _env;
     private CoreWebView2Controller? _controller;
     private CoreWebView2? _webview;
+    private string? _browserExecutableFolder;
     private DictationDriver? _driver;
     private volatile bool _loading;
     private bool _loginVisible;
@@ -339,12 +340,23 @@ internal sealed class ChatGPTWebController : IDisposable {
     }
 
     private async Task InitAsync() {
+        WebView2RuntimeLocator.EnsureNativeLoader();
         string version;
         try {
             version = CoreWebView2Environment.GetAvailableBrowserVersionString();
-        } catch (Exception ex) {
-            Log.Write("webview: WebView2 runtime not found: " + ex.Message);
-            throw new WebView2RuntimeMissingException();
+        } catch (Exception evergreenEx) {
+            _browserExecutableFolder = WebView2RuntimeLocator.FindBrowserExecutableFolder();
+            if (_browserExecutableFolder == null) {
+                Log.Write("webview: WebView2 runtime not found: " + evergreenEx.Message);
+                throw new WebView2RuntimeMissingException();
+            }
+            try {
+                version = CoreWebView2Environment.GetAvailableBrowserVersionString(_browserExecutableFolder);
+            } catch (Exception ex) {
+                Log.Write("webview: WebView2 runtime not found: " + ex.Message);
+                throw new WebView2RuntimeMissingException();
+            }
+            Log.Write("webview: evergreen missing, using fixed runtime");
         }
 
         var options = new CoreWebView2EnvironmentOptions {
@@ -360,7 +372,7 @@ internal sealed class ChatGPTWebController : IDisposable {
         string userDataFolder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "EchoType", _site.ProfileFolder);
-        _env = await CoreWebView2Environment.CreateAsync(null, userDataFolder, options);
+        _env = await CoreWebView2Environment.CreateAsync(_browserExecutableFolder, userDataFolder, options);
 
         // Create the compositor on a real monitor first. Parking at -32000 before
         // CreateCoreWebView2ControllerAsync leaves a black GPU surface forever.
@@ -386,7 +398,8 @@ internal sealed class ChatGPTWebController : IDisposable {
         _webview.NewWindowRequested += OnNewWindowRequested;
 
         _inited = true;
-        Log.Write("webview: initialized " + _site.Id + " (runtime " + version + ")");
+        Log.Write("webview: initialized " + _site.Id + " (runtime " + version
+            + (_browserExecutableFolder != null ? ", fixed" : ", evergreen") + ")");
 
         NavigateToChat();
         if (!_loginVisible) {
@@ -397,10 +410,12 @@ internal sealed class ChatGPTWebController : IDisposable {
     }
 
     /// <summary>Chrome UA without the Edg/ token that makes Google/ChatGPT refuse embedded browsers.</summary>
-    private static void ApplyChromeIdentity(CoreWebView2 webview) {
+    private void ApplyChromeIdentity(CoreWebView2 webview) {
         string major = "131";
         try {
-            string version = CoreWebView2Environment.GetAvailableBrowserVersionString();
+            string version = _browserExecutableFolder == null
+                ? CoreWebView2Environment.GetAvailableBrowserVersionString()
+                : CoreWebView2Environment.GetAvailableBrowserVersionString(_browserExecutableFolder);
             major = version.Split('.')[0];
         } catch {
             // keep fallback

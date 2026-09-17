@@ -2,7 +2,7 @@
 
 Voice dictation for Windows powered by **ChatGPT or Gemini's own web dictation** — no API keys, no per-use cost.
 
-Two recording modes (tray menu → **Recording mode**), both using **Right Ctrl** by default:
+Two recording modes (window or tray menu → **Recording**), both using **Right Ctrl** by default:
 
 - **Hold to talk** (default): hold the key, speak, release to stop.
 - **Press to start/stop**: press once to start, press the same key again to stop.
@@ -11,11 +11,11 @@ The transcript is typed into the app and field that had focus when you started. 
 
 If you **select text first**, then record an instruction, EchoType sends the selection plus your spoken instruction to the selected model and pastes the model's reply over that selection. No selection means normal dictation: the transcript is pasted as-is.
 
-Pick **ChatGPT** or **Gemini** from the tray menu, or assign tap shortcuts to switch between them. Each model has its own login session. Custom-command prompts are shared by both and always use whichever model is selected.
+Pick **ChatGPT** or **Gemini** from the window or the tray menu, or assign tap shortcuts to switch between them. Each model has its own login session. Custom-command prompts are shared by both and always use whichever model is selected.
 
 Add extra recording shortcuts that send the transcript to the selected model with your own prompt and paste the model's reply instead. A command can be one button or a group of buttons. Custom commands are shared across ChatGPT and Gemini, and they follow the same hold vs press-to-start/stop mode as dictation.
 
-This is the Windows port of [DevWizardHQ/EchoType](https://github.com/DevWizardHQ/EchoType) (macOS). Same idea, rebuilt natively in C# / WinForms / WebView2.
+This is the Windows port of [DevWizardHQ/EchoType](https://github.com/DevWizardHQ/EchoType) (macOS). Same idea, rebuilt natively in C# / WinForms / WebView2. Settings live in the EchoType window — the same dark, rounded HUD language as the on-screen notices — and the tray icon stays for quick access while you dictate.
 
 ```text
 Right Ctrl (hold, or press to start/stop)
@@ -43,23 +43,24 @@ Your audio never touches this app: the selected model's page captures it via `ge
 
 ## Usage
 
-1. Start `EchoType.exe`. A tray icon appears (gray = ready).
-2. Tray menu → **Transcription model** → **ChatGPT** or **Gemini**. Optional: **Set model shortcuts…** to pick a tap key for each model so you can switch without opening the menu.
-3. First time for that model: tray menu → **Log in to …** → sign in (Google SSO works), or bind a tap shortcut via **Set model window shortcut…**. The window hides itself once you're logged in, and the session persists across restarts. Each model keeps its own cookies.
-4. Optional: tray menu → **Recording mode** → **Hold to talk** (default) or **Press to start/stop**. The choice applies to dictation, selection rewrite, Ask model, and custom commands, and is saved.
-5. Focus any text field anywhere. In hold mode, **hold Right Ctrl**, talk, **release**. In press-to-start/stop mode, **press Right Ctrl**, talk, **press it again**. The tray icon turns red while listening, blue while transcribing, then EchoType switches back to that window (and virtual desktop, if you left it) and pastes. You'll hear a confirmation sound. Other apps that are playing sound (YouTube, Spotify, …) are muted while you record so they don't leak into the microphone; they unmute when you stop. Tray menu → **Mute other apps while dictating** turns this off. Highlight text first, then record an instruction (for example “make this shorter” or “translate to Arabic”) to rewrite that selection instead of pasting the raw transcript.
-6. Optional: tray menu → **Custom Commands → Add or edit…** to add more recording keys. Each command can be a single button or a group of buttons (for example three rewrite actions on one key). EchoType dictates the same way (hold or press-to-start/stop), then runs a single button immediately or shows the group so you can pick. The chosen prompt plus the transcript go to the selected model, and the reply is pasted.
+1. Start `EchoType.exe`. A tray icon appears (gray = ready) and EchoType stays in the tray. Double-click the tray icon (or **Open EchoType**) to open the window. Close the window to hide it again; EchoType keeps running in the tray.
+2. In the window (or tray menu) choose **ChatGPT** or **Gemini**. Optional: set a tap key for each model so you can switch without opening the window.
+3. First time for that model: **Log in to …** in the window (or tray) → sign in (Google SSO works), or bind a tap shortcut via **Model window**. The login window hides itself once you're logged in, and the session persists across restarts. Each model keeps its own cookies.
+4. Optional: **Recording** → **Hold to talk** (default) or **Press to start/stop**. The choice applies to dictation, selection rewrite, Ask model, and custom commands, and is saved.
+5. Focus any text field anywhere. In hold mode, **hold Right Ctrl**, talk, **release**. In press-to-start/stop mode, **press Right Ctrl**, talk, **press it again**. The tray icon turns red while listening, blue while transcribing, then EchoType switches back to that window (and virtual desktop, if you left it) and pastes. You'll hear a confirmation sound. If Gemini or ChatGPT cuts the recording off while you are still speaking (silence detection or a max clip length), EchoType plays a warning tone, shows a “Recording stopped” toast, and transcribes only what was captured. Other apps that are playing sound (YouTube, Spotify, …) are muted while you record so they don't leak into the microphone; they unmute when you stop. **Mute other apps while dictating** turns this off. Highlight text first, then record an instruction (for example “make this shorter” or “translate to Arabic”) to rewrite that selection instead of pasting the raw transcript.
+6. Optional: **Custom commands → Add or edit…** to add more recording keys. Each command can be a single button or a group of buttons (for example three rewrite actions on one key). EchoType dictates the same way (hold or press-to-start/stop), then runs a single button immediately or shows the group so you can pick. The chosen prompt plus the transcript go to the selected model, and the reply is pasted.
 
 Tray icon states: gray = ready · amber = waking/starting · **red = listening** · blue = transcribing / waiting for a reply · orange (slashed) = offline · red (ring) = logged out.
 
 ### Gestures
 
-Hold to talk is the default. Switch to press-to-start/stop from tray menu → **Recording mode**. The same mode is used for dictation, selection rewrite, Ask model, and custom commands.
+Hold to talk is the default. Switch to press-to-start/stop from the EchoType window or tray menu → **Recording**. The same mode is used for dictation, selection rewrite, Ask model, and custom commands.
 
 | Gesture | Result |
 |---|---|
 | **Hold to talk:** hold Right Ctrl (≥ 0.35 s), release | Transcribe and paste |
 | **Press to start/stop:** press Right Ctrl, speak, press again | Transcribe and paste |
+| Model ends the recording while you are still speaking | Warning sound + on-screen toast; only the captured audio is transcribed |
 | Record with text selected | Transcribe the instruction, send it with the selected text to the model, paste the reply over the selection |
 | Record with a custom-command key | Transcribe, then run that command: one button is sent immediately; a group of buttons asks you to pick first. The reply is pasted |
 | Tap a model-switch shortcut | Switch to ChatGPT or Gemini (whichever key you assigned). Custom commands keep using that model. |
@@ -71,9 +72,9 @@ Hold to talk is the default. Switch to press-to-start/stop from tray menu → **
 
 ### Custom commands
 
-Tray menu → **Custom Commands → Add or edit…**. Commands are **global**: the same list is used for ChatGPT and Gemini. Switch models and the shortcuts still work — the prompt is sent to whichever model is selected.
+Tray menu → **Custom Commands → Add or edit…**, or the same button in the EchoType window. Commands are **global**: the same list is used for ChatGPT and Gemini. Switch models and the shortcuts still work — the prompt is sent to whichever model is selected.
 
-Each command is a recording key plus one or more **buttons**. A command can be a single button (the original behaviour) or a group — for example Proofread, Shorten, and Expand on the same key. EchoType transcribes as usual (hold or press-to-start/stop, matching **Recording mode**). One button is sent immediately; two or more open a small chooser (click, or press 1–9). EchoType then starts a new chat on the selected model, sends that button’s `prompt + transcript`, waits for the reply, and pastes that reply into the field where you started — even if you switched apps or virtual desktops while waiting.
+Each command is a recording key plus one or more **buttons**. A command can be a single button (the original behaviour) or a group — for example Proofread, Shorten, and Expand on the same key. EchoType transcribes as usual (hold or press-to-start/stop, matching **Recording mode**). One button is sent immediately; two or more open a small chooser (click, or press 1–9). EchoType then sends that button’s `prompt + transcript` to the selected model, waits for the reply, and pastes that reply into the field where you started — even if you switched apps or virtual desktops while waiting. ChatGPT reuses the same chat for up to 25 successful requests, then rotates (or immediately if a send times out or fails). Gemini still starts a new chat each time.
 
 If the prompt contains `{transcript}`, that placeholder is replaced with the spoken text. Otherwise the transcript is appended after the prompt.
 
@@ -81,7 +82,7 @@ The command’s key is reserved (swallowed) while EchoType is running, same as t
 
 ## Configuration
 
-`%APPDATA%\EchoType\config.json` (created on first run). The dictation hotkey still requires a restart after a manual edit; recording mode, custom commands and model-switch shortcuts saved from the tray UI apply immediately.
+`%APPDATA%\EchoType\config.json` (created on first run). Changes made in the EchoType window or tray UI apply immediately.
 
 ```json
 {
@@ -133,14 +134,14 @@ The command’s key is reserved (swallowed) while EchoType is running, same as t
 }
 ```
 
-- `hotkeyVk` — virtual-key code of the dictation key. `163` = Right Ctrl. Other good options: `161` Right Shift, `162` Left Ctrl… any key works; it is swallowed while the app runs, so pick something you don't type with.
+- `hotkeyVk` — virtual-key code of the dictation key. `163` = Right Ctrl. Other good options: `161` Right Shift, `162` Left Ctrl… any key works; it is swallowed while the app runs, so pick something you don't type with. Also set from the EchoType window.
 - `keepTranscriptOnClipboard` — `true` (default): the pasted text stays on the clipboard after pasting. `false`: your previous clipboard content is restored ~0.7 s after the paste.
-- `toggleRecording` — `false` (default): hold the recording key to talk, release to stop. `true`: press once to start, press the same key again to stop. Also switched from tray menu → **Recording mode**. Applies to dictation, selection rewrite, Ask model, and custom commands.
-- `transcriptionProvider` — `"chatgpt"` (default) or `"gemini"`. Also switched from the tray menu or a model-switch shortcut.
-- `chatgptSwitchVk` / `geminiSwitchVk` — tap keys that switch to that model. `0` (default) = none. `112` = F1, `113` = F2. Set from tray menu → **Transcription model → Set model shortcuts…**. Reserved while EchoType is running, same as other shortcuts.
-- `openModelWindowVk` — tap key that opens the ChatGPT/Gemini window (same as tray Login). `0` (default) = none. Set from tray menu → **Set model window shortcut…**. Tap again to close the window. Reserved while EchoType is running.
-- `muteOtherAppsWhileDictating` — `true` (default): other apps that are playing sound are muted while you record, then restored when you stop. Also toggled from the tray menu.
-- `customCommands` — global recording-key commands, managed from the tray menu. Used with whichever model is selected. `hotkeyVk` `165` = Right Alt. They follow `toggleRecording`. Each command has a `buttons` list (1–8). A single button is sent right after dictation; two or more show a chooser. The top-level `prompt` is kept in sync with the first button so older builds still load the file.
+- `toggleRecording` — `false` (default): hold the recording key to talk, release to stop. `true`: press once to start, press the same key again to stop. Also switched from the window or tray menu → **Recording**. Applies to dictation, selection rewrite, Ask model, and custom commands.
+- `transcriptionProvider` — `"chatgpt"` (default) or `"gemini"`. Also switched from the window, the tray menu, or a model-switch shortcut.
+- `chatgptSwitchVk` / `geminiSwitchVk` — tap keys that switch to that model. `0` (default) = none. `112` = F1, `113` = F2. Set from the window or tray menu → **Transcription model → Set model shortcuts…**. Reserved while EchoType is running, same as other shortcuts.
+- `openModelWindowVk` — tap key that opens the ChatGPT/Gemini window (same as Login). `0` (default) = none. Set from the window or tray menu → **Set model window shortcut…**. Tap again to close the window. Reserved while EchoType is running.
+- `muteOtherAppsWhileDictating` — `true` (default): other apps that are playing sound are muted while you record, then restored when you stop. Also toggled from the window or tray menu.
+- `customCommands` — global recording-key commands, managed from the window or tray menu. Used with whichever model is selected. `hotkeyVk` `165` = Right Alt. They follow `toggleRecording`. Each command has a `buttons` list (1–8). A single button is sent right after dictation; two or more show a chooser. The top-level `prompt` is kept in sync with the first button so older builds still load the file.
 
 ## Build
 
@@ -165,7 +166,7 @@ Global hotkey: a low-level keyboard hook (`WH_KEYBOARD_LL`) that swallows the di
 
 ## Troubleshooting
 
-- **Log file**: tray menu → *Open log*. Also written to `EchoType.log` in the project root, next to the EXE, and `%LOCALAPPDATA%\EchoType\Logs\EchoType.log`. Every dictation step, failure, and the page's real button labels are logged there.
+- **Log file**: window → *Open log*, or tray menu → *Open log*. Also written to `EchoType.log` in the project root, next to the EXE, and `%LOCALAPPDATA%\EchoType\Logs\EchoType.log`. Every dictation step, failure, and the page's real button labels are logged there.
 - **"Dictation didn't start"** — check the log: if the button dump shows different labels than `Selectors.cs` (ChatGPT) or `GeminiSelectors.cs` (Gemini), that site changed its UI (patch the selectors).
 - **Mic never picks up sound** (`gum=err:...` in the log) — check the Windows microphone privacy switch above, and that the right input device is the Windows default.
 - **Login window shows "No internet connection"** — its Retry button works once the network is back.
@@ -176,7 +177,7 @@ Global hotkey: a low-level keyboard hook (`WH_KEYBOARD_LL`) that swallows the di
 
 Ported: hidden ChatGPT/Gemini webview with persistent login, hold-to-talk and press-to-start/stop recording, the full start/submit/cancel ladder with its fallbacks, transcript scraping with the same timings, paste-anywhere with clipboard restore, offline/logged-out handling, self-heal reload after repeated failures.
 
-Not yet ported (follow-ups): HUD status pill, history window, full settings UI, keep-warm/unload webview policy, self-updater.
+Not yet ported (follow-ups): history window, keep-warm/unload webview policy, self-updater.
 
 ## Privacy
 

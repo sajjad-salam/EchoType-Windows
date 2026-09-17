@@ -14,6 +14,34 @@ internal static class Paster {
 
     internal enum Outcome { Pasted, CopiedToClipboard }
 
+    /// <summary>Puts text on the clipboard without pasting. Used to keep a spoken
+    /// transcript if a model reply never arrives.</summary>
+    public static void Copy(string text) => CopyToClipboard(text);
+
+    /// <summary>
+    /// Puts <paramref name="text"/> on the clipboard after a short delay so a
+    /// Ctrl+V already in flight can still read whatever we just pasted. Qt and
+    /// Electron apps often read the clipboard on the next event-loop tick.
+    /// </summary>
+    public static void CopyLater(string text, int delayMs = 1000) {
+        if (string.IsNullOrEmpty(text)) {
+            return;
+        }
+        var timer = new System.Windows.Forms.Timer { Interval = Math.Max(delayMs, 200) };
+        timer.Tick += (_, _) => {
+            try {
+                CopyToClipboard(text);
+                Log.Write("clipboard: copied transcript after paste (" + text.Length + " chars)");
+            } catch (Exception ex) {
+                Log.Write("clipboard: delayed transcript copy failed: " + ex.Message);
+            } finally {
+                timer.Stop();
+                timer.Dispose();
+            }
+        };
+        timer.Start();
+    }
+
     public static Outcome Deliver(
         string text,
         bool keepTranscriptOnClipboard,
@@ -36,6 +64,8 @@ internal static class Paster {
         if (keepTranscriptOnClipboard) {
             CopyToClipboard(text);
             SynthesizeCtrlV();
+            // Let the target read the clipboard before the caller replaces it.
+            Thread.Sleep(80);
         } else {
             string? saved = TryGetClipboardText();
             CopyToClipboard(text);
@@ -82,7 +112,7 @@ internal static class Paster {
     /// <summary>Pastes, then restores whatever was previously on the clipboard
     /// (unless the paste itself replaced our text) — mac pasteRestoringClipboard parity.</summary>
     private static void RestoreClipboardLater(string? saved, string text) {
-        var timer = new System.Windows.Forms.Timer { Interval = 700 };
+        var timer = new System.Windows.Forms.Timer { Interval = 1000 };
         timer.Tick += (_, _) => {
             try {
                 if (TryGetClipboardText() == text && saved is not null) {

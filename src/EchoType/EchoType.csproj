@@ -9,14 +9,45 @@
     <PlatformTarget>x64</PlatformTarget>
     <RootNamespace>EchoType</RootNamespace>
     <AssemblyName>EchoType</AssemblyName>
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <InvariantGlobalization>false</InvariantGlobalization>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Single-file FDD otherwise extracts without WebView2Loader.dll on the native
+         probe path; GetAvailableBrowserVersionString then fails and EchoType shows
+         the "runtime required" dialog even when Evergreen is installed. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2792.45" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2792.45" GeneratePathProperty="true" />
   </ItemGroup>
+
+  <!-- Single-file publish swallows the RID-native WebView2Loader.dll into the bundle.
+       Microsoft.Web.WebView2.Core then DllImports it from the exe directory (not the
+       extract dir), so GetAvailableBrowserVersionString fails even when Evergreen is
+       installed. Copy the x64 loader beside the exe after build/publish. -->
+  <Target Name="CopyWebView2LoaderToOutput" AfterTargets="CopyFilesToOutputDirectory">
+    <PropertyGroup>
+      <_WebView2LoaderDll>$(PkgMicrosoft_Web_WebView2)\runtimes\win-x64\native\WebView2Loader.dll</_WebView2LoaderDll>
+    </PropertyGroup>
+    <Copy SourceFiles="$(_WebView2LoaderDll)"
+          DestinationFolder="$(OutputPath)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(_WebView2LoaderDll)')" />
+  </Target>
+  <Target Name="CopyWebView2LoaderToPublish" AfterTargets="Publish">
+    <PropertyGroup>
+      <_WebView2LoaderDll>$(PkgMicrosoft_Web_WebView2)\runtimes\win-x64\native\WebView2Loader.dll</_WebView2LoaderDll>
+    </PropertyGroup>
+    <Copy SourceFiles="$(_WebView2LoaderDll)"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true"
+          Condition="'$(PublishDir)' != '' And Exists('$(_WebView2LoaderDll)')" />
+    <Copy SourceFiles="$(_WebView2LoaderDll)"
+          DestinationFolder="$(PublishDir)runtimes\win-x64\native\"
+          SkipUnchangedFiles="true"
+          Condition="'$(PublishDir)' != '' And Exists('$(_WebView2LoaderDll)')" />
+  </Target>
 
 </Project>

@@ -25,7 +25,7 @@ internal sealed class CustomCommandsForm : Form {
             HeaderStyle = ColumnHeaderStyle.Nonclickable,
         };
         _list.Columns.Add("Name", 160);
-        _list.Columns.Add("Shortcut", 120);
+        _list.Columns.Add("Shortcut", 180);
         _list.Columns.Add("Buttons", 320);
         _list.DoubleClick += (_, _) => EditSelected();
         _list.KeyDown += OnListKeyDown;
@@ -72,8 +72,8 @@ internal sealed class CustomCommandsForm : Form {
             ForeColor = SystemColors.GrayText,
             Text = "Commands are shared by ChatGPT and Gemini. "
                 + (settings.ToggleRecording
-                    ? "Press a command’s key to start, press it again to stop. "
-                    : "Hold a command’s key to dictate. ")
+                    ? "Press a command’s shortcut to start, press it again to stop. "
+                    : "Hold a command’s shortcut to dictate. ")
                 + "A command can be one button or a group of buttons; after dictation EchoType runs a single button or lets you pick. Then it pastes "
                 + modelName + "’s reply.",
             Padding = new Padding(0, 8, 0, 0),
@@ -123,7 +123,7 @@ internal sealed class CustomCommandsForm : Form {
         foreach (var cmd in _settings.ActiveCommands) {
             cmd.Normalize();
             var item = new ListViewItem(cmd.DisplayName) { Tag = cmd };
-            item.SubItems.Add(HotkeyNames.For(cmd.HotkeyVk));
+            item.SubItems.Add(HotkeyNames.For(cmd.Chord));
             item.SubItems.Add(Preview(cmd));
             _list.Items.Add(item);
         }
@@ -131,30 +131,42 @@ internal sealed class CustomCommandsForm : Form {
     }
 
     private void AddCommand() {
-        var draft = new CustomCommand();
-        using var editor = new CommandEditorForm(draft, _hotkey, _settings);
-        if (editor.ShowDialog(this) != DialogResult.OK) {
-            return;
+        try {
+            var draft = new CustomCommand();
+            using var editor = new CommandEditorForm(draft, _hotkey, _settings);
+            if (editor.ShowDialog(this) != DialogResult.OK) {
+                return;
+            }
+            _settings.ActiveCommands.Add(editor.Result);
+            Persist();
+            Reload();
+            SelectId(editor.Result.Id);
+        } catch (Exception ex) {
+            Log.Write("commands ui: add failed: " + ex);
+            MessageBox.Show(this, "Could not add a custom command: " + ex.Message, "EchoType",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
-        _settings.ActiveCommands.Add(editor.Result);
-        Persist();
-        Reload();
-        SelectId(editor.Result.Id);
     }
 
     private void EditSelected() {
         if (SelectedCommand() is not { } cmd) {
             return;
         }
-        var draft = cmd.Clone();
-        using var editor = new CommandEditorForm(draft, _hotkey, _settings);
-        if (editor.ShowDialog(this) != DialogResult.OK) {
-            return;
+        try {
+            var draft = cmd.Clone();
+            using var editor = new CommandEditorForm(draft, _hotkey, _settings);
+            if (editor.ShowDialog(this) != DialogResult.OK) {
+                return;
+            }
+            cmd.CopyFrom(draft);
+            Persist();
+            Reload();
+            SelectId(cmd.Id);
+        } catch (Exception ex) {
+            Log.Write("commands ui: edit failed: " + ex);
+            MessageBox.Show(this, "Could not edit that custom command: " + ex.Message, "EchoType",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
-        cmd.CopyFrom(draft);
-        Persist();
-        Reload();
-        SelectId(cmd.Id);
     }
 
     private void DeleteSelected() {

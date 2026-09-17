@@ -11,7 +11,7 @@ internal sealed class CommandEditorForm : Form {
     private readonly TextBox _hotkeyBox;
     private readonly FlowLayoutPanel _actions;
     private readonly Button _addAction;
-    private int _hotkeyVk;
+    private HotkeyChord _chord;
 
     public CustomCommand Result { get; }
 
@@ -22,7 +22,7 @@ internal sealed class CommandEditorForm : Form {
         Result = draft;
         _settings = settings;
         _hotkey = hotkey;
-        _hotkeyVk = draft.HotkeyVk;
+        _chord = draft.Chord;
         draft.Normalize();
 
         Text = string.IsNullOrWhiteSpace(draft.Name) ? "New custom command" : "Edit custom command";
@@ -42,19 +42,21 @@ internal sealed class CommandEditorForm : Form {
         _hotkeyBox = new TextBox {
             Dock = DockStyle.Top,
             ReadOnly = true,
-            Text = HotkeyLabel(_hotkeyVk),
+            Text = HotkeyLabel(_chord),
         };
         _hotkeyBox.GotFocus += (_, _) => {
             _hotkeyBox.BackColor = Color.FromArgb(232, 242, 255);
+            _hotkey.CaptureMaxKeys = HotkeyChord.MaxKeys;
             _hotkey.CaptureKeys = true;
-            if (_hotkeyVk == 0) {
-                _hotkeyBox.Text = "Press a key…";
+            if (_chord.IsEmpty) {
+                _hotkeyBox.Text = "Press up to 3 keys…";
             }
         };
         _hotkeyBox.LostFocus += (_, _) => {
             _hotkey.CaptureKeys = false;
+            _hotkey.CaptureMaxKeys = 1;
             _hotkeyBox.BackColor = SystemColors.Window;
-            _hotkeyBox.Text = HotkeyLabel(_hotkeyVk);
+            _hotkeyBox.Text = HotkeyLabel(_chord);
         };
 
         _actions = new FlowLayoutPanel {
@@ -103,11 +105,11 @@ internal sealed class CommandEditorForm : Form {
         body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         body.Controls.Add(Field("Name", _nameBox), 0, 0);
         body.Controls.Add(Field(
-            settings.ToggleRecording ? "Recording key" : "Hold-to-talk key",
+            settings.ToggleRecording ? "Recording shortcut" : "Hold-to-talk shortcut",
             _hotkeyBox,
             settings.ToggleRecording
-                ? "Click the box, then press the key that starts and stops this command. That key is reserved while EchoType runs."
-                : "Click the box, then press the key to hold while speaking. That key is reserved while EchoType runs."), 0, 1);
+                ? "Click the box, then press one, two, or three keys (for example F8, Ctrl+Space, or Ctrl+Shift+Space). That shortcut is reserved while EchoType runs."
+                : "Click the box, then hold one, two, or three keys (for example F8, Ctrl+Space, or Ctrl+Shift+Space). That shortcut is reserved while EchoType runs."), 0, 1);
         body.Controls.Add(Field(
             "Buttons",
             _actions,
@@ -192,7 +194,7 @@ internal sealed class CommandEditorForm : Form {
 
     protected override void OnShown(EventArgs e) {
         base.OnShown(e);
-        _hotkey.KeyCaptured += OnKeyCaptured;
+        _hotkey.ChordCaptured += OnChordCaptured;
         ResizeActionRows();
         _nameBox.Select();
     }
@@ -203,6 +205,9 @@ internal sealed class CommandEditorForm : Form {
     }
 
     private void ResizeActionRows() {
+        if (_actions is not { IsHandleCreated: true }) {
+            return;
+        }
         int width = Math.Max(200, _actions.ClientSize.Width - 24);
         foreach (Control control in _actions.Controls) {
             control.Width = width;
@@ -211,26 +216,27 @@ internal sealed class CommandEditorForm : Form {
 
     protected override void OnFormClosed(FormClosedEventArgs e) {
         _hotkey.CaptureKeys = false;
-        _hotkey.KeyCaptured -= OnKeyCaptured;
+        _hotkey.CaptureMaxKeys = 1;
+        _hotkey.ChordCaptured -= OnChordCaptured;
         base.OnFormClosed(e);
     }
 
-    private void OnKeyCaptured(uint vk) {
-        if (IsDisposed || vk == 0) {
+    private void OnChordCaptured(HotkeyChord chord) {
+        if (IsDisposed || chord.IsEmpty) {
             return;
         }
-        _hotkeyVk = (int)vk;
-        _hotkeyBox.Text = HotkeyNames.For(_hotkeyVk);
+        _chord = chord;
+        _hotkeyBox.Text = HotkeyNames.For(_chord);
     }
 
     private void TrySave() {
-        if (_hotkeyVk <= 0) {
-            MessageBox.Show(this, "Press a recording key first.", "EchoType",
+        if (_chord.IsEmpty) {
+            MessageBox.Show(this, "Press a recording shortcut first (one to three keys).", "EchoType",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             _hotkeyBox.Focus();
             return;
         }
-        string? conflict = HotkeyConflicts.Message(_hotkeyVk, _settings, Result.HotkeyVk);
+        string? conflict = HotkeyConflicts.Message(_chord, _settings, Result.Chord);
         if (conflict != null) {
             MessageBox.Show(this, conflict, "EchoType", MessageBoxButtons.OK, MessageBoxIcon.Information);
             _hotkeyBox.Focus();
@@ -257,15 +263,15 @@ internal sealed class CommandEditorForm : Form {
         }
 
         Result.Name = _nameBox.Text.Trim();
-        Result.HotkeyVk = _hotkeyVk;
+        Result.SetChord(_chord);
         Result.Buttons = buttons;
         Result.Prompt = buttons[0].Prompt;
         DialogResult = DialogResult.OK;
         Close();
     }
 
-    private static string HotkeyLabel(int vk) =>
-        vk <= 0 ? "Click here, then press a key" : HotkeyNames.For(vk);
+    private static string HotkeyLabel(HotkeyChord chord) =>
+        chord.IsEmpty ? "Click here, then press up to 3 keys" : HotkeyNames.For(chord);
 
     private sealed class ActionRow : Panel {
 
