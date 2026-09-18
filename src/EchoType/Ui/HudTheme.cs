@@ -49,7 +49,7 @@ internal static class HudTheme {
         _ => Blue,
     };
 
-    public static Color PhaseAccent(AppPhase phase, bool loggedIn, bool online) {
+    public static Color PhaseAccent(AppPhase phase, bool loggedIn, bool online, bool pageReady) {
         if (!online) {
             return Amber;
         }
@@ -60,11 +60,11 @@ internal static class HudTheme {
             AppPhase.Listening => ListenDot,
             AppPhase.Transcribing or AppPhase.ChoosingAction or AppPhase.Generating => Blue,
             AppPhase.Waking or AppPhase.Engaging => Amber,
-            _ => Teal,
+            _ => pageReady ? Teal : Title,
         };
     }
 
-    public static string PhaseLabel(AppPhase phase, bool loggedIn, bool online) {
+    public static string PhaseLabel(AppPhase phase, bool loggedIn, bool online, bool pageReady) {
         if (!online) {
             return "Offline";
         }
@@ -78,7 +78,7 @@ internal static class HudTheme {
             AppPhase.Generating => "Waiting for reply",
             AppPhase.Waking => "Waking up",
             AppPhase.Engaging => "Starting",
-            _ => "Ready",
+            _ => pageReady ? "Ready" : "Loading",
         };
     }
 

@@ -80,6 +80,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private int _listenFinishGate;
     private int _chatgptThreadSends;
     private bool _chatgptForceNewThread;
+    private int _warmupEpoch;
 
     public TrayAppContext() {
         _settings = Settings.Load();
@@ -154,7 +155,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _statusItem.Text = StatusLine();
 
         _tray = new NotifyIcon {
-            Icon = TrayIcons.For(_phase, _loggedIn, _online),
+            Icon = TrayIcons.For(_phase, _loggedIn, _online, pageReady: false),
             Text = "EchoType — " + StatusLine(),
             ContextMenuStrip = menu,
             Visible = true,
@@ -163,6 +164,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
         _web.LoginStateChanged += OnLoginStateChanged;
         _web.ReachabilityChanged += OnReachabilityChanged;
+        _web.InteractiveChanged += OnInteractiveChanged;
 
         // BeginInvoke on this control is how the keyboard hook reaches the UI
         // thread. A Control with no HWND throws, which kills the hook — Right
@@ -656,9 +658,14 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     }
 
     private void DeliverPaste(string text, string logLabel) {
-        switch (Paster.Deliver(text, _settings.KeepTranscriptOnClipboard, _settings.PressEnterAfterPaste, _pasteTarget)) {
+        Paster.DeliverResult result = Paster.Deliver(
+            text, _settings.KeepTranscriptOnClipboard, _settings.PressEnterAfterPaste, _pasteTarget);
+        switch (result.Outcome) {
             case Paster.Outcome.Pasted:
                 Sounds.Pasted();
+                if (result.KeptUserFocus) {
+                    ShowBalloon("Pasted into the original field.", OverlayKind.Success);
+                }
                 ResetToIdle();
                 break;
             case Paster.Outcome.CopiedToClipboard:
@@ -677,7 +684,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     /// If there was nowhere to paste, the reply stays on the clipboard.
     /// </summary>
     private void DeliverGeneratedPaste(string reply, string logLabel, string transcript) {
-        switch (Paster.Deliver(reply, keepTranscriptOnClipboard: true, _settings.PressEnterAfterPaste, _pasteTarget)) {
+        Paster.DeliverResult result = Paster.Deliver(
+            reply, keepTranscriptOnClipboard: true, _settings.PressEnterAfterPaste, _pasteTarget);
+        switch (result.Outcome) {
             case Paster.Outcome.Pasted:
                 Sounds.Pasted();
                 Paster.CopyLater(transcript);
@@ -720,7 +729,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
 
         using (image) {
-            switch (Paster.DeliverImage(image, _settings.PressEnterAfterPaste, _pasteTarget)) {
+            Paster.DeliverResult result = Paster.DeliverImage(image, _settings.PressEnterAfterPaste, _pasteTarget);
+            switch (result.Outcome) {
                 case Paster.Outcome.Pasted:
                     Sounds.Pasted();
                     ShowBalloon("Pasted image. Transcript copied to clipboard.", OverlayKind.Success);
@@ -905,9 +915,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _ => new DriverException(DriverFailure.NotReady, outcome.ToString()),
     };
 
-    private async Task CancelAndResetAsync(string reason) {
+    private Task CancelAndResetAsync(string reason) {
         if (_phase == AppPhase.Idle) {
-            return;
+            return Task.CompletedTask;
         }
         Log.Write("dictation: " + reason);
         StopListenWatch();
@@ -916,13 +926,14 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         DismissActionPicker();
         try {
             _web.Driver?.InvalidateWaits();
-            if (_web.Driver != null) {
-                await _web.Driver.StopGenerationAsync();
-                await _web.Driver.CancelDictationAsync();
-                await _web.Driver.ClearComposerAsync();
-            }
         } catch { /* best effort */ }
+        _engagementFailures = 0;
+        // Cancel leaves ChatGPT/Gemini's mic UI wedged often enough that the next
+        // recording does not start until a later self-heal reload. Reload now so
+        // the next hotkey waits on a fresh page instead of clicking a stuck mic.
+        _web.ReloadAfterCancel();
         ResetToIdle();
+        return Task.CompletedTask;
     }
 
     // ------------------------------------------------------------------
@@ -1142,7 +1153,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     }
 
     private void UpdateStatusIcon() {
-        _tray.Icon = TrayIcons.For(_phase, _loggedIn, _online);
+        _tray.Icon = TrayIcons.For(_phase, _loggedIn, _online, _web.IsInteractive);
         NotifyUi();
     }
 
@@ -1158,6 +1169,11 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         UpdateLoginMenuItem();
     }
 
+    private void OnInteractiveChanged(bool _) {
+        UpdateStatusIcon();
+        UpdateStatusText();
+    }
+
     private void UpdateLoginMenuItem() {
         string name = _web.Site.DisplayName;
         _loginItem.Text = !_online ? "No internet connection — retry"
@@ -1166,9 +1182,11 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     }
 
     private string StatusLine() =>
-        _settings.RecordingVerb + " " + HotkeyNames.For(_settings.HotkeyVk)
-            + (_settings.ToggleRecording ? " to start/stop · " : " to dictate · ")
-            + _web.Site.DisplayName;
+        !_web.IsInteractive && _online && _loggedIn && _phase == AppPhase.Idle
+            ? "Loading " + _web.Site.DisplayName + "…"
+            : _settings.RecordingVerb + " " + HotkeyNames.For(_settings.HotkeyVk)
+                + (_settings.ToggleRecording ? " to start/stop · " : " to dictate · ")
+                + _web.Site.DisplayName;
 
     private void UpdateStatusText() {
         _statusItem.Text = StatusLine();
@@ -1204,11 +1222,11 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _engagementFailures = 0;
         SyncModelMenu();
         UpdateLoginMenuItem();
+        UpdateStatusIcon();
         UpdateStatusText();
         RebuildCommandsMenu();
         _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
         Log.Write("settings: transcriptionProvider=" + _settings.TranscriptionProviderName);
-        ShowBalloon("Now using " + _web.Site.DisplayName + ". Sign in if needed.");
         _ = WarmupAsync();
     }
 
@@ -1387,8 +1405,12 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     }
 
     private async Task WarmupAsync() {
+        int epoch = ++_warmupEpoch;
         try {
             var outcome = await _web.EnsureReadyAsync();
+            if (epoch != _warmupEpoch) {
+                return;
+            }
             Log.Write("launch: warmup -> " + outcome);
             if (outcome == ReadyOutcome.RuntimeMissing) {
                 ChatGPTWebController.ShowRuntimeMissingDialog();
@@ -1397,6 +1419,15 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 UpdateStatusIcon();
                 UpdateLoginMenuItem();
                 ShowBalloon("Log in to " + _web.Site.DisplayName + " before dictating.", OverlayKind.Warning);
+            } else if (outcome == ReadyOutcome.Offline) {
+                _online = false;
+                UpdateStatusIcon();
+                UpdateLoginMenuItem();
+            } else if (outcome == ReadyOutcome.Ready) {
+                _loggedIn = true;
+                UpdateStatusIcon();
+                UpdateLoginMenuItem();
+                UpdateStatusText();
             }
         } catch (Exception ex) {
             Log.Write("launch: warmup failed: " + ex.Message);
@@ -1527,6 +1558,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     AppPhase IAppWindowHost.Phase => _phase;
     bool IAppWindowHost.LoggedIn => _loggedIn;
     bool IAppWindowHost.Online => _online;
+    bool IAppWindowHost.PageReady => _web.IsInteractive;
     string IAppWindowHost.ModelName => _web.Site.DisplayName;
     bool IAppWindowHost.LoginWindowVisible => _web.IsLoginWindowVisible;
     float IAppWindowHost.MicLevel => _micMeter.Level;

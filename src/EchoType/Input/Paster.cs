@@ -14,6 +14,23 @@ internal static class Paster {
 
     internal enum Outcome { Pasted, CopiedToClipboard }
 
+    internal readonly struct DeliverResult {
+        public Outcome Outcome { get; }
+        /// <summary>
+        /// True when the user had switched away and was left on that window
+        /// (background paste, or focus handed back after Ctrl+V).
+        /// </summary>
+        public bool KeptUserFocus { get; }
+
+        public DeliverResult(Outcome outcome, bool keptUserFocus = false) {
+            Outcome = outcome;
+            KeptUserFocus = keptUserFocus;
+        }
+
+        public static DeliverResult Copied() => new(Outcome.CopiedToClipboard);
+        public static DeliverResult Pasted(bool keptUserFocus) => new(Outcome.Pasted, keptUserFocus);
+    }
+
     /// <summary>Puts text on the clipboard without pasting. Used to keep a spoken
     /// transcript if a model reply never arrives.</summary>
     public static void Copy(string text) => CopyToClipboard(text);
@@ -42,23 +59,41 @@ internal static class Paster {
         timer.Start();
     }
 
-    public static Outcome Deliver(
+    public static DeliverResult Deliver(
         string text,
         bool keepTranscriptOnClipboard,
         bool pressEnterAfterPaste,
         PasteTarget? target = null) {
 
+        PasteTarget? resume = CaptureResume(target);
+
+        if (target != null
+            && resume != null
+            && !pressEnterAfterPaste
+            && target.AcceptsBackgroundPaste) {
+            string? saved = keepTranscriptOnClipboard ? null : TryGetClipboardText();
+            CopyToClipboard(text);
+            if (target.TryBackgroundPaste()) {
+                if (keepTranscriptOnClipboard) {
+                    Thread.Sleep(80);
+                } else {
+                    RestoreClipboardLater(saved, text);
+                }
+                return DeliverResult.Pasted(keptUserFocus: true);
+            }
+        }
+
         if (target != null) {
             if (!target.Restore()) {
                 CopyToClipboard(text);
-                return Outcome.CopiedToClipboard;
+                return DeliverResult.Copied();
             }
             // Give the restored app a beat to accept input after a desktop/window switch.
             Thread.Sleep(80);
         } else if (!HasTextTarget()) {
             // Nowhere sensible to paste — always leave the transcript on the clipboard.
             CopyToClipboard(text);
-            return Outcome.CopiedToClipboard;
+            return DeliverResult.Copied();
         }
 
         if (keepTranscriptOnClipboard) {
@@ -77,27 +112,30 @@ internal static class Paster {
             Thread.Sleep(120);
             SynthesizeEnter();
         }
-        return Outcome.Pasted;
+
+        return HandBackFocus(resume);
     }
 
     /// <summary>
     /// Puts an image on the clipboard and pastes it into the captured target.
     /// The image stays on the clipboard so the user can paste it again.
     /// </summary>
-    public static Outcome DeliverImage(
+    public static DeliverResult DeliverImage(
         Image image,
         bool pressEnterAfterPaste,
         PasteTarget? target = null) {
 
+        PasteTarget? resume = CaptureResume(target);
+
         if (target != null) {
             if (!target.Restore()) {
                 CopyImageToClipboard(image);
-                return Outcome.CopiedToClipboard;
+                return DeliverResult.Copied();
             }
             Thread.Sleep(80);
         } else if (!HasTextTarget()) {
             CopyImageToClipboard(image);
-            return Outcome.CopiedToClipboard;
+            return DeliverResult.Copied();
         }
 
         CopyImageToClipboard(image);
@@ -106,7 +144,25 @@ internal static class Paster {
             Thread.Sleep(120);
             SynthesizeEnter();
         }
-        return Outcome.Pasted;
+
+        return HandBackFocus(resume);
+    }
+
+    private static PasteTarget? CaptureResume(PasteTarget? target) =>
+        target == null ? null : PasteTarget.CaptureForegroundExcept(target);
+
+    /// <summary>
+    /// After Ctrl+V, put the user back on the window they were reading. Windows
+    /// cannot send keystrokes to a background Chromium/Qt field, so this is a
+    /// brief steal-and-restore rather than a true background paste.
+    /// </summary>
+    private static DeliverResult HandBackFocus(PasteTarget? resume) {
+        if (resume == null) {
+            return DeliverResult.Pasted(keptUserFocus: false);
+        }
+        Thread.Sleep(80);
+        resume.Restore(required: false);
+        return DeliverResult.Pasted(keptUserFocus: true);
     }
 
     /// <summary>Pastes, then restores whatever was previously on the clipboard

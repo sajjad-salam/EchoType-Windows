@@ -8,7 +8,8 @@ namespace EchoType.Input;
 /// The window, focused control, and virtual desktop the user was in when they
 /// started holding the dictation key. Restored just before paste so the
 /// transcript lands in that field even if they switched apps or desktops while
-/// waiting for ChatGPT/Gemini.
+/// waiting for ChatGPT/Gemini. After paste, the window they were actually using
+/// is restored the same way so processing does not leave them in the target app.
 /// </summary>
 internal sealed class PasteTarget {
     private readonly IntPtr _hwnd;
@@ -28,6 +29,13 @@ internal sealed class PasteTarget {
     public bool StillExists => NativeMethods.IsWindow(_hwnd);
 
     /// <summary>
+    /// True for classic Win32 edit/rich-edit controls that accept <c>WM_PASTE</c>
+    /// without being the foreground window. Chromium, Qt, and Electron fields do not.
+    /// </summary>
+    public bool AcceptsBackgroundPaste =>
+        NativeMethods.IsWindow(_focusHwnd) && IsNativeEdit(_focusHwnd);
+
+    /// <summary>
     /// Snapshot the foreground window and its focused child. Returns null when
     /// there is nowhere sensible to paste (our own windows, desktop, taskbar,
     /// Explorer) so the caller can leave the text on the clipboard instead.
@@ -40,23 +48,26 @@ internal sealed class PasteTarget {
             return null;
         }
 
-        uint threadId = NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
-        var info = new NativeMethods.GUITHREADINFO {
-            cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.GUITHREADINFO>(),
-        };
-        IntPtr focus = hwnd;
-        if (threadId != 0 && NativeMethods.GetGUIThreadInfo(threadId, ref info)
-            && info.hwndFocus != IntPtr.Zero) {
-            focus = info.hwndFocus;
-        }
+        return FromWindow(hwnd, "captured");
+    }
 
-        string className = ClassName(hwnd);
-        string title = WindowTitle(hwnd);
-        string process = ProcessName(pid);
-        VirtualDesktops.TryGetDesktopId(hwnd, out Guid desktop);
-        string description = $"{process} hwnd=0x{hwnd.ToInt64():X} class={className} title=\"{Truncate(title, 40)}\" desktop={desktop:N}";
-        Log.Write("paste: captured " + description);
-        return new PasteTarget(hwnd, focus, threadId, description);
+    /// <summary>
+    /// Snapshot whatever the user is looking at now, so focus can be handed back
+    /// after paste. Returns null when they never left the paste target, or when
+    /// the foreground window is one of EchoType's own non-interactive surfaces.
+    /// </summary>
+    public static PasteTarget? CaptureForegroundExcept(PasteTarget? except) {
+        IntPtr hwnd = NativeMethods.GetForegroundWindow();
+        if (hwnd == IntPtr.Zero) {
+            return null;
+        }
+        if (except != null && except.Owns(hwnd)) {
+            return null;
+        }
+        if (IsOurNonInteractiveWindow(hwnd)) {
+            return null;
+        }
+        return FromWindow(hwnd, "resume");
     }
 
     /// <summary>
@@ -64,11 +75,14 @@ internal sealed class PasteTarget {
     /// focus on the original control. Returns false if the window is gone or
     /// could not be made foreground — the caller should then leave the text on
     /// the clipboard rather than paste into whatever is focused now.
+    /// When <paramref name="required"/> is false (handing focus back after paste),
+    /// failure is logged and ignored so a successful paste is not rolled back.
     /// </summary>
-    public bool Restore() {
+    public bool Restore(bool required = true) {
+        string label = required ? "original window" : "user window";
         if (!NativeMethods.IsWindow(_hwnd)) {
-            Log.Write("paste: original window is gone, " + _description);
-            return false;
+            Log.Write("paste: " + label + " is gone, " + _description);
+            return !required;
         }
 
         try {
@@ -78,16 +92,41 @@ internal sealed class PasteTarget {
             RestoreChildFocus();
 
             if (IsForegroundOurs()) {
-                Log.Write("paste: restored " + _description + (switched ? "" : " (desktop switch skipped/failed)"));
+                Log.Write("paste: restored " + (required ? "" : "user focus ")
+                    + _description + (switched ? "" : " (desktop switch skipped/failed)"));
                 return true;
             }
 
-            Log.Write("paste: could not foreground original window, " + _description);
-            return false;
+            Log.Write("paste: could not foreground " + label + ", " + _description);
+            return !required;
         } catch (Exception ex) {
             Log.Write("paste: restore threw: " + ex.Message);
+            return !required;
+        }
+    }
+
+    /// <summary>
+    /// Inserts the current clipboard into the captured native edit without
+    /// activating the window. Returns false when the control is gone or is not
+    /// a Win32 edit — the caller should then steal focus and send Ctrl+V.
+    /// </summary>
+    public bool TryBackgroundPaste() {
+        if (!AcceptsBackgroundPaste) {
             return false;
         }
+        NativeMethods.SendMessageW(_focusHwnd, NativeMethods.WM_PASTE, IntPtr.Zero, IntPtr.Zero);
+        Log.Write("paste: background WM_PASTE to native edit, " + _description);
+        return true;
+    }
+
+    public bool Owns(IntPtr hwnd) {
+        if (hwnd == IntPtr.Zero) {
+            return false;
+        }
+        if (hwnd == _hwnd || hwnd == _focusHwnd) {
+            return true;
+        }
+        return NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT) == _hwnd;
     }
 
     private void ForceForeground() {
@@ -167,15 +206,48 @@ internal sealed class PasteTarget {
         }
     }
 
-    private bool IsForegroundOurs() {
-        IntPtr fg = NativeMethods.GetForegroundWindow();
-        if (fg == IntPtr.Zero) {
+    private bool IsForegroundOurs() => Owns(NativeMethods.GetForegroundWindow());
+
+    private static PasteTarget FromWindow(IntPtr hwnd, string logPrefix) {
+        uint threadId = NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
+        var info = new NativeMethods.GUITHREADINFO {
+            cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.GUITHREADINFO>(),
+        };
+        IntPtr focus = hwnd;
+        if (threadId != 0 && NativeMethods.GetGUIThreadInfo(threadId, ref info)
+            && info.hwndFocus != IntPtr.Zero) {
+            focus = info.hwndFocus;
+        }
+
+        string className = ClassName(hwnd);
+        string title = WindowTitle(hwnd);
+        string process = ProcessName(pid);
+        VirtualDesktops.TryGetDesktopId(hwnd, out Guid desktop);
+        string description = $"{process} hwnd=0x{hwnd.ToInt64():X} class={className} title=\"{Truncate(title, 40)}\" desktop={desktop:N}";
+        Log.Write("paste: " + logPrefix + " " + description);
+        return new PasteTarget(hwnd, focus, threadId, description);
+    }
+
+    /// <summary>
+    /// Hidden WebView2 host and the status HUD must never be treated as the
+    /// window the user was "reading" — restoring them would yank focus into
+    /// an offscreen or overlay surface.
+    /// </summary>
+    private static bool IsOurNonInteractiveWindow(IntPtr hwnd) {
+        NativeMethods.GetWindowThreadProcessId(hwnd, out uint pid);
+        if (pid != (uint)Environment.ProcessId) {
             return false;
         }
-        if (fg == _hwnd || fg == _focusHwnd) {
-            return true;
-        }
-        return NativeMethods.GetAncestor(fg, NativeMethods.GA_ROOT) == _hwnd;
+        long ex = NativeMethods.GetWindowLongPtrW(hwnd, NativeMethods.GWL_EXSTYLE);
+        return (ex & NativeMethods.WS_EX_NOACTIVATE) != 0
+            || (ex & NativeMethods.WS_EX_TOOLWINDOW) != 0;
+    }
+
+    private static bool IsNativeEdit(IntPtr hwnd) {
+        string className = ClassName(hwnd);
+        return className is "Edit" or "RichEdit" or "RichEdit20W"
+            or "RichEdit20A" or "RICHEDIT50W" or "RichEdit50W"
+            or "RICHEDIT60W" or "RichEdit60W";
     }
 
     private static string ClassName(IntPtr hwnd) {

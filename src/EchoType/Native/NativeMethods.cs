@@ -235,6 +235,7 @@ internal static partial class NativeMethods {
     public const int WM_GETTEXT = 0x000D;
     public const int WM_GETTEXTLENGTH = 0x000E;
     public const int WM_COPY = 0x0301;
+    public const int WM_PASTE = 0x0302;
     public const int EM_GETSEL = 0x00B0;
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]

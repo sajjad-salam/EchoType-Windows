@@ -46,10 +46,16 @@ internal sealed record PageState(
     bool LoggedIn,
     bool Dictating,
     bool ComposerPresent,
+    bool CanDictate,
+    bool LoginMarker,
     string ComposerText,
     string Gum,           // getUserMedia outcome: none | requested | ok | ended | err:<name>:<msg>
     string UserActivation, // none | active | had | unsupported
-    string LastClick);
+    string LastClick)
+{
+    /// <summary>Composer (or live dictation) is up and the mic control is on screen.</summary>
+    public bool IsChatReady => LoggedIn && (CanDictate || Dictating);
+}
 
 /// <summary>Whether the model's page is still actually capturing audio.</summary>
 internal sealed record CaptureState(
@@ -901,6 +907,8 @@ internal sealed class DictationDriver {
             loggedIn: E.loggedIn(),
             dictating: E.isDictating(),
             composerPresent: !!E.composer(),
+            canDictate: !!(E.findCss(S.startCss) || E.findButton(S.start, true) || E.isDictating()),
+            loginMarker: !!document.querySelector(S.loggedOutMarker),
             text: E.composerText(),
             gum: window.__etGUM || 'none',
             ua: navigator.userActivation
@@ -988,6 +996,8 @@ internal sealed class DictationDriver {
                 LoggedIn: r.GetProperty("loggedIn").GetBoolean(),
                 Dictating: r.GetProperty("dictating").GetBoolean(),
                 ComposerPresent: r.GetProperty("composerPresent").GetBoolean(),
+                CanDictate: Flag(r, "canDictate"),
+                LoginMarker: Flag(r, "loginMarker"),
                 ComposerText: r.GetProperty("text").GetString() ?? "",
                 Gum: r.GetProperty("gum").GetString() ?? "none",
                 UserActivation: r.GetProperty("ua").GetString() ?? "?",
@@ -1114,6 +1124,9 @@ internal sealed class DictationDriver {
         if (!obj.TryGetProperty(name, out var v)) return "?";
         return v.ValueKind == JsonValueKind.String ? v.GetString() ?? "?" : v.GetRawText();
     }
+
+    private static bool Flag(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.True;
 
     // ------------------------------------------------------------------
     // CDP input synthesis

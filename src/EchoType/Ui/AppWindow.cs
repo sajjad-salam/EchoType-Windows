@@ -18,6 +18,7 @@ internal interface IAppWindowHost {
     AppPhase Phase { get; }
     bool LoggedIn { get; }
     bool Online { get; }
+    bool PageReady { get; }
     string ModelName { get; }
     bool LoginWindowVisible { get; }
     float MicLevel { get; }
@@ -373,8 +374,8 @@ internal sealed class AppWindow : Form {
                 c.Normalize();
                 return (c.DisplayName, HotkeyNames.For(c.Chord));
             }).ToList());
-            Icon = TrayIcons.For(_host.Phase, _host.LoggedIn, _host.Online);
-            _statusCard.Accent = HudTheme.PhaseAccent(_host.Phase, _host.LoggedIn, _host.Online);
+            Icon = TrayIcons.For(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
+            _statusCard.Accent = HudTheme.PhaseAccent(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
             _statusCard.Invalidate();
             _caption.Invalidate();
             Relayout();
@@ -414,7 +415,7 @@ internal sealed class AppWindow : Form {
         e.Graphics.Clear(HudTheme.Window);
         int pad = HudTheme.Dip(this, 22);
         int cy = _caption.Height / 2;
-        Color accent = HudTheme.PhaseAccent(_host.Phase, _host.LoggedIn, _host.Online);
+        Color accent = HudTheme.PhaseAccent(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
         float pulse = _host.Phase == AppPhase.Listening
             ? 0.55f + 0.45f * MathF.Sin(_time * 5.5f)
             : 1f;
@@ -447,10 +448,12 @@ internal sealed class AppWindow : Form {
         var pill = Rectangle.Inflate(_statusCard.ClientRectangle, -shadow, -shadow);
         int left = pill.Left + HudTheme.Dip(this, 28);
         int top = pill.Top + HudTheme.Dip(this, 16);
-        string phase = HudTheme.PhaseLabel(_host.Phase, _host.LoggedIn, _host.Online);
+        string phase = HudTheme.PhaseLabel(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
         string body = _host.ModelName
-            + (_host.LoggedIn ? " · Signed in" : " · Sign in to dictate")
-            + (_host.Online ? "" : " · No internet");
+            + (!_host.Online ? " · No internet"
+                : !_host.LoggedIn ? " · Sign in to dictate"
+                : _host.PageReady ? " · Signed in"
+                : " · Waiting for page");
         TextRenderer.DrawText(e.Graphics, phase, HudTheme.Display,
             new Rectangle(left, top, pill.Width - HudTheme.Dip(this, 48), HudTheme.Dip(this, 32)),
             HudTheme.Body, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);

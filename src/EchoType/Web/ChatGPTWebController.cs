@@ -136,6 +136,9 @@ internal sealed class ChatGPTWebController : IDisposable {
     private bool _isOnline;
     private bool _inited;
     private bool _disposed;
+    private bool _interactive;
+    private int _navGeneration;
+    private int _navCompletedGeneration;
     private Task<ReadyOutcome>? _ensureTask;
     private Task? _initTask;
     private readonly List<Form> _popups = [];
@@ -164,6 +167,7 @@ internal sealed class ChatGPTWebController : IDisposable {
         Log.Write("webview: switching site " + _site.Id + " -> " + site.Id);
         HideLoginWindow();
         Unload();
+        _ensureTask = null; // don't reuse the previous model's in-flight load
         _site = site;
         _form.Text = _site.LoginTitle;
     }
@@ -171,12 +175,19 @@ internal sealed class ChatGPTWebController : IDisposable {
     /// <summary>True once a webview exists to start dictation on (decides Waking vs Engaging).</summary>
     public bool HasWebView => _webview != null;
 
+    /// <summary>
+    /// True when the selected model's chat UI is fully up (signed in, composer,
+    /// dictation mic). False from launch / a model switch until that finishes.
+    /// </summary>
+    public bool IsInteractive => _interactive;
+
     public bool IsOnline => _isOnline;
 
     public bool IsLoginWindowVisible => _loginVisible;
 
     public event Action<bool>? LoginStateChanged;
     public event Action<bool>? ReachabilityChanged;
+    public event Action<bool>? InteractiveChanged;
 
     // ------------------------------------------------------------------
     // Readiness (mac ensureReady / waitUntilInteractive parity)
@@ -227,10 +238,26 @@ internal sealed class ChatGPTWebController : IDisposable {
         }
 
         // Already loaded: single state probe. On probe failure, reload once (mac parity).
+        // A missing composer is still-hydrating, not logged-out — wait instead of
+        // flipping the tray to "log in" and rejecting the next record press.
         try {
             var st = await _driver.StateAsync();
-            LoginStateChanged?.Invoke(st.LoggedIn);
-            return st.LoggedIn ? ReadyOutcome.Ready : ReadyOutcome.LoggedOut;
+            if (_loading) {
+                // Cancel (or another caller) started a reload while we were probing.
+                return await WaitUntilInteractiveAsync(TimeSpan.FromSeconds(25));
+            }
+            if (st.IsChatReady) {
+                SetInteractive(true);
+                LoginStateChanged?.Invoke(true);
+                return ReadyOutcome.Ready;
+            }
+            if (st.LoginMarker && !st.ComposerPresent) {
+                SetInteractive(false);
+                LoginStateChanged?.Invoke(false);
+                return ReadyOutcome.LoggedOut;
+            }
+            _loading = true;
+            return await WaitUntilInteractiveAsync(TimeSpan.FromSeconds(25));
         } catch (DriverException ex) {
             Log.Write("webview: state probe failed (" + ex.Message + "), reloading");
             Unload();
@@ -247,6 +274,30 @@ internal sealed class ChatGPTWebController : IDisposable {
         } catch (Exception ex) {
             Log.Write("webview: self-heal reload failed: " + ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Reloads ChatGPT/Gemini after the user cancels. Cancel often leaves the site's
+    /// mic UI wedged, so the next recording would otherwise fail until a later
+    /// self-heal reload. The next hotkey joins EnsureReadyAsync and waits here.
+    /// </summary>
+    public void ReloadAfterCancel() {
+        if (_disposed) {
+            return;
+        }
+        Log.Write("webview: reloading " + _site.DisplayName + " after cancel");
+        if (_webview == null || _driver == null) {
+            _ = ReloadInBackgroundAsync();
+            return;
+        }
+        BeginPageLoad();
+        try {
+            _webview.Reload();
+        } catch (Exception ex) {
+            Log.Write("webview: Reload() failed (" + ex.Message + "), navigating to chat");
+            _webview.Navigate(_site.ChatUrl);
+        }
+        _ = EnsureReadyAsync();
     }
 
     /// <summary>
@@ -280,28 +331,77 @@ internal sealed class ChatGPTWebController : IDisposable {
 
     private async Task<ReadyOutcome> WaitUntilInteractiveAsync(TimeSpan timeout) {
         DateTime deadline = DateTime.UtcNow + timeout;
+        DateTime? signedInAt = null;
+        int loginMarkerHits = 0;
         while (true) {
-            if (!_loading || _driver == null) {
+            if (_driver == null) {
                 return ReadyOutcome.NotReady; // unloaded mid-load
+            }
+            if (!_loading) {
+                return _interactive ? ReadyOutcome.Ready : ReadyOutcome.NotReady;
             }
             if (!_isOnline) {
                 Log.Write("webview: went offline during load");
+                SetInteractive(false);
                 return ReadyOutcome.Offline;
+            }
+            if (_navCompletedGeneration != _navGeneration) {
+                if (DateTime.UtcNow > deadline) {
+                    Log.Write("webview: load timeout (navigation never completed)");
+                    _loading = false;
+                    SetInteractive(false);
+                    return ReadyOutcome.Timeout;
+                }
+                await Task.Delay(150);
+                continue;
             }
             try {
                 var st = await _driver.StateAsync();
-                if (st.LoggedIn) {
-                    Log.Write("webview: ready, logged in");
+                if (_navCompletedGeneration != _navGeneration || !_loading) {
+                    continue;
+                }
+                bool micSettled = st.LoggedIn && signedInAt is { } since
+                    && DateTime.UtcNow - since >= TimeSpan.FromSeconds(3);
+                if (st.IsChatReady || micSettled) {
+                    Log.Write(st.IsChatReady
+                        ? "webview: ready, logged in, dictation mic present"
+                        : "webview: ready, logged in (composer up)");
                     _loading = false;
+                    SetInteractive(true);
                     LoginStateChanged?.Invoke(true);
                     if (_loginVisible) {
                         HideLoginWindow(); // logged in while the login window was up
                     }
                     return ReadyOutcome.Ready;
                 }
+                if (st.LoggedIn) {
+                    signedInAt ??= DateTime.UtcNow;
+                    loginMarkerHits = 0;
+                } else if (st.LoginMarker && !st.ComposerPresent) {
+                    loginMarkerHits++;
+                    // SPA boot can flash a sign-in control; require a couple of
+                    // stable probes before treating this as actually logged out.
+                    if (loginMarkerHits >= 4) {
+                        Log.Write("webview: ready but logged OUT");
+                        _loading = false;
+                        SetInteractive(false);
+                        LoginStateChanged?.Invoke(false);
+                        return ReadyOutcome.LoggedOut;
+                    }
+                } else {
+                    loginMarkerHits = 0;
+                }
                 if (DateTime.UtcNow > deadline) {
+                    if (st.LoggedIn) {
+                        Log.Write("webview: load timeout (signed in, page still settling)");
+                        _loading = false;
+                        SetInteractive(true);
+                        LoginStateChanged?.Invoke(true);
+                        return ReadyOutcome.Ready;
+                    }
                     Log.Write("webview: ready but logged OUT");
                     _loading = false;
+                    SetInteractive(false);
                     LoginStateChanged?.Invoke(false);
                     return ReadyOutcome.LoggedOut;
                 }
@@ -309,6 +409,7 @@ internal sealed class ChatGPTWebController : IDisposable {
                 if (DateTime.UtcNow > deadline) {
                     Log.Write("webview: load timeout (" + ex.Message + ")");
                     _loading = false;
+                    SetInteractive(false);
                     return ReadyOutcome.Timeout;
                 }
             }
@@ -435,6 +536,9 @@ internal sealed class ChatGPTWebController : IDisposable {
         _loading = false;
         _inited = false;
         _showingOfflinePage = false;
+        _navGeneration = 0;
+        _navCompletedGeneration = 0;
+        SetInteractive(false);
         _driver = null;
         if (_webview != null) {
             _webview.PermissionRequested -= OnPermissionRequested;
@@ -672,6 +776,7 @@ internal sealed class ChatGPTWebController : IDisposable {
     }
 
     private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e) {
+        _navCompletedGeneration = _navGeneration;
         Log.Write($"webview: navigation completed ok={e.IsSuccess}");
         if (e.IsSuccess) {
             _showingOfflinePage = false;
@@ -694,10 +799,14 @@ internal sealed class ChatGPTWebController : IDisposable {
         }
         try {
             var st = await _driver.StateAsync();
-            Log.Write("webview: post-navigation probe, loggedIn=" + st.LoggedIn);
-            LoginStateChanged?.Invoke(st.LoggedIn);
-            if (st.LoggedIn && _loginVisible) {
-                HideLoginWindow();
+            Log.Write("webview: post-navigation probe, loggedIn=" + st.LoggedIn
+                + ", canDictate=" + st.CanDictate);
+            if (st.IsChatReady) {
+                SetInteractive(true);
+                LoginStateChanged?.Invoke(true);
+                if (_loginVisible) {
+                    HideLoginWindow();
+                }
             }
         } catch {
             // page mid-reload etc. — the readiness probes cover the flow
@@ -796,11 +905,25 @@ internal sealed class ChatGPTWebController : IDisposable {
         }
     }
 
-    private void NavigateToChat() {
+    private void BeginPageLoad() {
+        _navGeneration++;
         _loading = true;
         _showingOfflinePage = false;
+        SetInteractive(false);
+    }
+
+    private void NavigateToChat() {
+        BeginPageLoad();
         Log.Write("webview: loading " + _site.ChatUrl);
         _webview?.Navigate(_site.ChatUrl);
+    }
+
+    private void SetInteractive(bool value) {
+        if (_interactive == value) {
+            return;
+        }
+        _interactive = value;
+        InteractiveChanged?.Invoke(value);
     }
 
     public static void ShowRuntimeMissingDialog() {
