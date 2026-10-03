@@ -20,6 +20,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="GTranslate" Version="2.4.0" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2792.45" GeneratePathProperty="true" />
   </ItemGroup>
 

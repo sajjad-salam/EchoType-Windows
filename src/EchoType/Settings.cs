@@ -59,6 +59,17 @@ internal sealed class Settings {
     public int AskModelVk { get; set; }
 
     /// <summary>
+    /// Hold-to-talk / press-to-toggle key that transcribes with the selected model, then
+    /// translates the transcript with Google Translate (no model reply) and pastes it. 0 = none.
+    /// </summary>
+    [JsonPropertyName("translateVk")]
+    public int TranslateVk { get; set; }
+
+    /// <summary>Google Translate target language code for <see cref="TranslateVk"/> (e.g. "en", "ar").</summary>
+    [JsonPropertyName("translateTargetLanguage")]
+    public string TranslateTargetLanguage { get; set; } = "en";
+
+    /// <summary>
     /// Tap key that opens the ChatGPT/Gemini window (same as tray Login). 0 = none.
     /// </summary>
     [JsonPropertyName("openModelWindowVk")]
@@ -125,6 +136,9 @@ internal sealed class Settings {
             var loaded = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), JsonOptions) ?? new Settings();
             loaded.CustomCommands ??= [];
             loaded.GeminiCustomCommands ??= [];
+            if (string.IsNullOrWhiteSpace(loaded.TranslateTargetLanguage)) {
+                loaded.TranslateTargetLanguage = "en";
+            }
             if (string.IsNullOrWhiteSpace(loaded.TranscriptionProviderName)) {
                 loaded.TranscriptionProviderName = "chatgpt";
             }

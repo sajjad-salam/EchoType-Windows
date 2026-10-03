@@ -1,11 +1,13 @@
 using EchoType.Hotkey;
 using EchoType.Native;
+using EchoType.Translation;
 
 namespace EchoType.Ui;
 
 internal enum AppShortcut {
     Dictation,
     AskModel,
+    Translate,
     PressEnter,
     ModelWindow,
     ChatGpt,
@@ -27,6 +29,7 @@ internal interface IAppWindowHost {
     void SelectModel(TranscriptionProvider provider);
     void SetToggleRecording(bool toggle);
     void SetMuteOthers(bool value);
+    void SetTranslateLanguage(string code);
     void SetPressEnterAfterPaste(bool value);
     void SetKeepTranscriptOnClipboard(bool value);
     bool TrySetShortcut(AppShortcut shortcut, int vk);
@@ -54,6 +57,8 @@ internal sealed class AppWindow : Form {
     private readonly HudButton _loginButton;
     private readonly HudHotkeyRow _dictationKey;
     private readonly HudHotkeyRow _askModelKey;
+    private readonly HudHotkeyRow _translateKey;
+    private readonly ComboBox _translateLanguage;
     private readonly HudHotkeyRow _chatgptKey;
     private readonly HudHotkeyRow _geminiKey;
     private readonly HudHotkeyRow _enterKey;
@@ -166,6 +171,22 @@ internal sealed class AppWindow : Form {
         AddControl(recordCard, _modeSeg, 40);
         _dictationKey = AddHotkey(recordCard, "Dictation key", AppShortcut.Dictation, optional: false);
         _askModelKey = AddHotkey(recordCard, "Ask model", AppShortcut.AskModel);
+        _translateKey = AddHotkey(recordCard, "Translate (Google Translate)", AppShortcut.Translate);
+        _translateLanguage = new ComboBox {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            FlatStyle = FlatStyle.Flat,
+            ForeColor = HudTheme.Body,
+            Font = Font,
+        };
+        foreach (var (code, name) in GoogleTranslation.Languages) {
+            _translateLanguage.Items.Add(new LanguageItem(code, name));
+        }
+        _translateLanguage.SelectedIndexChanged += (_, _) => {
+            if (!_syncing && _translateLanguage.SelectedItem is LanguageItem item) {
+                _host.SetTranslateLanguage(item.Code);
+            }
+        };
+        AddControl(recordCard, _translateLanguage, 32);
         FinishCard(recordCard);
 
         var optionsCard = MakeCard();
@@ -356,12 +377,15 @@ internal sealed class AppWindow : Form {
             _clipboardToggle.SetSilent(s.KeepTranscriptOnClipboard);
             _dictationKey.Value = HotkeyNames.For(s.HotkeyVk);
             _askModelKey.Value = HotkeyLabel(s.AskModelVk);
+            _translateKey.Value = HotkeyLabel(s.TranslateVk);
+            _translateLanguage.SelectedIndex = IndexOfLanguage(s.TranslateTargetLanguage);
             _chatgptKey.Value = HotkeyLabel(s.ChatGptSwitchVk);
             _geminiKey.Value = HotkeyLabel(s.GeminiSwitchVk);
             _enterKey.Value = HotkeyLabel(s.PressEnterToggleVk);
             _windowKey.Value = HotkeyLabel(s.OpenModelWindowVk);
             _dictationKey.Invalidate();
             _askModelKey.Invalidate();
+            _translateKey.Invalidate();
             _chatgptKey.Invalidate();
             _geminiKey.Invalidate();
             _enterKey.Invalidate();
@@ -644,6 +668,20 @@ internal sealed class AppWindow : Form {
         if (!_host.TrySetShortcut(shortcut, (int)vk)) {
             row.Capturing = false;
         }
+    }
+
+    private int IndexOfLanguage(string code) {
+        for (int i = 0; i < _translateLanguage.Items.Count; i++) {
+            if (_translateLanguage.Items[i] is LanguageItem item
+                && string.Equals(item.Code, code, StringComparison.OrdinalIgnoreCase)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private sealed record LanguageItem(string Code, string Name) {
+        public override string ToString() => "Translate to " + Name;
     }
 
     private static string HotkeyLabel(int vk) => vk <= 0 ? "(none)" : HotkeyNames.For(vk);
