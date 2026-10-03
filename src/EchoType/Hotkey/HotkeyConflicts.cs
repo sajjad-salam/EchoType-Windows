@@ -48,6 +48,11 @@ internal static class HotkeyConflicts {
                 ? "That key is already the Ask model shortcut."
                 : "That shortcut uses the Ask model key.";
         }
+        if (ConflictsWithReserved(chord, settings.TranslateVk, ignoreVks)) {
+            return chord.Count == 1
+                ? "That key is already the Translate shortcut."
+                : "That shortcut uses the Translate key.";
+        }
         if (ConflictsWithReserved(chord, settings.OpenModelWindowVk, ignoreVks)) {
             return chord.Count == 1
                 ? "That key is already the model window shortcut."
