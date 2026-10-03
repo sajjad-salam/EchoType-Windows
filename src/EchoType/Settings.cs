@@ -24,8 +24,9 @@ internal sealed class Settings {
     public int PressEnterToggleVk { get; set; }
 
     /// <summary>
-    /// When dictation starts, mute other apps that are currently playing sound so
-    /// they don't bleed into the microphone. Restored when listening ends.
+    /// When dictation starts, pause other apps that expose play/pause (YouTube,
+    /// Spotify, …) and mute remaining playback so it doesn't bleed into the
+    /// microphone. Restored when listening ends.
     /// </summary>
     [JsonPropertyName("muteOtherAppsWhileDictating")]
     public bool MuteOtherAppsWhileDictating { get; set; } = true;

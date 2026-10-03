@@ -77,6 +77,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private Task<string?> _selectionTask = Task.FromResult<string?>(null);
     private bool _commandsUiOpen;
     private CancellationTokenSource? _listenWatchCts;
+    private CancellationTokenSource? _micLevelCts;
     private int _listenFinishGate;
     private int _chatgptThreadSends;
     private bool _chatgptForceNewThread;
@@ -114,7 +115,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _modelWindowShortcutItem = new ToolStripMenuItem();
         _modelWindowShortcutItem.Click += (_, _) => OpenModelWindowShortcutUi();
         UpdateModelWindowShortcutMenu();
-        _muteOthersItem = new ToolStripMenuItem("Mute other apps while dictating") {
+        _muteOthersItem = new ToolStripMenuItem("Pause or mute other apps while dictating") {
             CheckOnClick = true,
             Checked = _settings.MuteOtherAppsWhileDictating,
         };
@@ -227,6 +228,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                         ? "ask-model: key down"
                         : "dictation: key down");
                 MuteOtherAppsIfEnabled();
+                EnsureMicAtFullVolume();
                 int session = ++_session;
                 SetPhase(_web.HasWebView ? AppPhase.Engaging : AppPhase.Waking);
                 _ = StartDictationSessionAsync(session);
@@ -405,6 +407,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return;
         }
 
+        // Opening the mic is when Windows most often drops the input slider.
+        EnsureMicAtFullVolume();
         _engagementFailures = 0;
         Sounds.Start();
         SetPhase(AppPhase.Listening);
@@ -414,6 +418,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
         if (_hotkeyHeld) {
             StartListenWatch(session);
+            _ = RecheckMicVolumeSoonAsync(session);
             return; // normal hold — wait for release, or a model-side cutoff
         }
 
@@ -1049,6 +1054,49 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         cts.Dispose();
     }
 
+    private void StartMicLevelPump() {
+        StopMicLevelPump();
+        var cts = new CancellationTokenSource();
+        _micLevelCts = cts;
+        _ = PumpWebMicLevelAsync(cts.Token);
+    }
+
+    private void StopMicLevelPump() {
+        CancellationTokenSource? cts = _micLevelCts;
+        _micLevelCts = null;
+        if (cts == null) {
+            return;
+        }
+        try {
+            cts.Cancel();
+        } catch (ObjectDisposedException) {
+            return;
+        }
+        cts.Dispose();
+    }
+
+    /// <summary>
+    /// Reads the page analyser ~25×/s so the HUD wave tracks the same audio
+    /// ChatGPT/Gemini is capturing. WASAPI remains as a fallback inside the meter.
+    /// </summary>
+    private async Task PumpWebMicLevelAsync(CancellationToken cancel) {
+        while (!cancel.IsCancellationRequested) {
+            try {
+                var driver = _web.Driver;
+                if (driver != null) {
+                    _micMeter.SetWebLevel(await driver.MicLevelAsync());
+                }
+            } catch (Exception) {
+                // Keep the last sample; idle motion still runs on the overlay.
+            }
+            try {
+                await Task.Delay(40, cancel);
+            } catch (OperationCanceledException) {
+                return;
+            }
+        }
+    }
+
     private async Task WatchListeningCutoffAsync(int session, CancellationToken cancel) {
         var driver = _web.Driver;
         if (driver == null) {
@@ -1076,6 +1124,30 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkeyHeld = false;
         _releasedAt = DateTime.UtcNow;
         await FinishListeningAsync(session);
+    }
+
+    /// <summary>
+    /// Capture clients sometimes write a lower endpoint volume just after the
+    /// stream opens. One later pass catches that without watching the whole take.
+    /// </summary>
+    private async Task RecheckMicVolumeSoonAsync(int session) {
+        try {
+            await Task.Delay(500);
+        } catch (Exception) {
+            return;
+        }
+        if (!IsLive(session) || _phase != AppPhase.Listening) {
+            return;
+        }
+        EnsureMicAtFullVolume();
+    }
+
+    private static void EnsureMicAtFullVolume() {
+        try {
+            MicInputVolume.EnsureFull();
+        } catch (Exception ex) {
+            Log.Write("audio: mic volume check threw: " + ex.Message);
+        }
     }
 
     private void MuteOtherAppsIfEnabled() {
@@ -1138,11 +1210,13 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (phase == AppPhase.Listening) {
             try {
                 _micMeter.Start();
+                StartMicLevelPump();
                 StatusOverlay.ShowListening(_web.Site.DisplayName, () => _micMeter.Level);
             } catch (Exception ex) {
                 Log.Write("hud: listening overlay failed: " + ex.Message);
             }
         } else if (previous == AppPhase.Listening) {
+            StopMicLevelPump();
             try {
                 _micMeter.Stop();
             } catch (Exception ex) {
@@ -1227,6 +1301,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         RebuildCommandsMenu();
         _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
         Log.Write("settings: transcriptionProvider=" + _settings.TranscriptionProviderName);
+        ShowBalloon("Switched to " + _web.Site.DisplayName + ".", OverlayKind.Success);
         _ = WarmupAsync();
     }
 
@@ -1669,6 +1744,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     protected override void ExitThreadCore() {
         Log.Write("shutdown");
         StopListenWatch();
+        StopMicLevelPump();
         RestoreOtherApps();
         _micMeter.Dispose();
         StatusOverlay.Shutdown();

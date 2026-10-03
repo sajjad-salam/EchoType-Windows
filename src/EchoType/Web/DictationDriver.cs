@@ -966,7 +966,18 @@ internal sealed class DictationDriver {
     /// expression is wrapped in an IIFE, and its JSON-encoded result is unwrapped.
     /// </summary>
     private async Task<string> EvalAsync(string expression) {
-        string js = _script + "\n(function(){ return String(" + expression + "); })();";
+        return await EvalCoreAsync(_script + "\n(function(){ return String(" + expression + "); })();");
+    }
+
+    /// <summary>
+    /// Cheap read that does not re-inject the driver script. Used for the HUD
+    /// mic-level poll so we are not parsing kilobytes of JS 25 times a second.
+    /// </summary>
+    private async Task<string> EvalLiteAsync(string expression) {
+        return await EvalCoreAsync("(function(){ return String(" + expression + "); })();");
+    }
+
+    private async Task<string> EvalCoreAsync(string js) {
         try {
             string encoded = await _webview.ExecuteScriptAsync(js);
             using var doc = JsonDocument.Parse(encoded);
@@ -1007,6 +1018,22 @@ internal sealed class DictationDriver {
         } catch (Exception ex) {
             throw new DriverException(DriverFailure.JavaScript, "bad state JSON: " + ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Instant 0–1 energy from the page's live getUserMedia stream (same audio the
+    /// model is recording). 0 if the analyser is not running yet.
+    /// </summary>
+    public async Task<float> MicLevelAsync() {
+        try {
+            string raw = await EvalLiteAsync("(typeof window.__etReadMicLevel === 'function' ? window.__etReadMicLevel() : 0)");
+            if (float.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out float value)) {
+                return Math.Clamp(value, 0, 1);
+            }
+        } catch (DriverException) {
+            // Page not ready or script missing — the WASAPI meter is the fallback.
+        }
+        return 0;
     }
 
     public async Task<CaptureState> CaptureStateAsync() {
@@ -1259,7 +1286,7 @@ internal sealed class DictationDriver {
             _axChromeBeforeDictation.Clear();
         }
         try {
-            _ = await EvalAsync("(window.__etGUM = 'none', window.__etListen = false, window.__etMicLive = false, window.__etStreams = [], 'ok')");
+            _ = await EvalAsync("(function(){ try { if (typeof window.__etStopMeter === 'function') window.__etStopMeter(); } catch (e) {} window.__etGUM = 'none'; window.__etListen = false; window.__etMicLive = false; window.__etStreams = []; window.__etMicLevel = 0; return 'ok'; })()");
         } catch (DriverException) {
             // best effort — a stale gum flag would only make engagement succeed early
         }

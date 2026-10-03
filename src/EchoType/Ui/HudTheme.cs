@@ -149,11 +149,13 @@ internal static class HudTheme {
         float gap = Math.Max(1.4f, 2.2f * dip / 18f);
         float barW = Math.Max(2f * dip / 18f, (bounds.Width - gap * (bars.Length - 1)) / bars.Length);
         float mid = bounds.Top + bounds.Height / 2f;
+        float minH = Math.Max(1.6f, 1.8f * dip / 18f);
         float maxH = bounds.Height * 0.48f;
+        float span = Math.Max(6f, maxH - minH);
         using var fill = new SolidBrush(Color.FromArgb(230, accent.R, accent.G, accent.B));
         using var dim = new SolidBrush(Color.FromArgb(70, 210, 220, 224));
         for (int i = 0; i < bars.Length; i++) {
-            float h = Math.Max(3f * dip / 18f, bars[i] * maxH);
+            float h = minH + Math.Clamp(bars[i], 0, 1) * span;
             float x = bounds.Left + i * (barW + gap);
             var rect = new RectangleF(x, mid - h, barW, h * 2);
             using var path = Rounded(rect, barW / 2f);
@@ -163,21 +165,22 @@ internal static class HudTheme {
 
     public static void StepWave(float[] bars, ref float smoothed, float incoming, float time) {
         incoming = Math.Clamp(incoming, 0, 1);
-        smoothed += (incoming - smoothed) * 0.38f;
-        float idle = 0.07f + 0.035f * (0.5f + 0.5f * MathF.Sin(time * 2.1f));
-        float energy = Math.Max(smoothed, idle);
+        float follow = incoming > smoothed ? 0.55f : 0.22f;
+        smoothed += (incoming - smoothed) * follow;
+
         int n = bars.Length;
         for (int i = 0; i < n; i++) {
             float t = n == 1 ? 0.5f : i / (float)(n - 1);
-            float envelope = 0.42f + 0.58f * MathF.Sin(t * MathF.PI);
-            float travel = MathF.Sin(time * 9.5f + i * 0.55f) * 0.18f
-                + MathF.Sin(time * 4.2f + i * 1.1f) * 0.10f;
-            float target = envelope * energy * (0.78f + travel);
-            if (smoothed > 0.08f) {
-                float voice = envelope * smoothed * (0.9f + 0.22f * MathF.Sin(time * 17f + i * 0.9f));
-                target = Math.Max(target, voice);
+            float envelope = 0.38f + 0.62f * MathF.Sin(t * MathF.PI);
+            float flicker = 1f;
+            if (smoothed > 0.03f) {
+                // Independent oscillators so bars bounce with voice, not a traveling crest.
+                float f = 10f + (i * 13 % 10) * 1.7f;
+                flicker = 0.58f + 0.42f * MathF.Sin(time * f);
             }
-            bars[i] += (Math.Clamp(target, 0.04f, 1f) - bars[i]) * 0.42f;
+            float target = envelope * smoothed * flicker;
+            float lerp = incoming > 0.04f ? 0.5f : 0.2f;
+            bars[i] += (Math.Clamp(target, 0f, 1f) - bars[i]) * lerp;
         }
     }
 

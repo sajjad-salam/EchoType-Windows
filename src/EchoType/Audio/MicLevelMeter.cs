@@ -29,13 +29,24 @@ internal sealed class MicLevelMeter : IDisposable {
     private CancellationTokenSource? _cts;
     private Thread? _thread;
     private float _level;
+    private float _webLevel;
 
     /// <summary>Smoothed 0–1 microphone energy, safe to read from the UI thread.</summary>
     public float Level {
         get {
             lock (_gate) {
-                return _level;
+                return Math.Max(_level, _webLevel);
             }
+        }
+    }
+
+    /// <summary>
+    /// Energy from the page's getUserMedia analyser — the same stream ChatGPT/Gemini
+    /// is recording. Preferred over WASAPI when both are present.
+    /// </summary>
+    public void SetWebLevel(float value) {
+        lock (_gate) {
+            _webLevel = Math.Clamp(value, 0, 1);
         }
     }
 
@@ -64,6 +75,7 @@ internal sealed class MicLevelMeter : IDisposable {
             _cts = null;
             _thread = null;
             _level = 0;
+            _webLevel = 0;
         }
         try {
             cts?.Cancel();

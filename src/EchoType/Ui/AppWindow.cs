@@ -170,7 +170,7 @@ internal sealed class AppWindow : Form {
 
         var optionsCard = MakeCard();
         AddCaption(optionsCard, "Options");
-        _muteToggle = AddToggle(optionsCard, "Mute other apps while dictating",
+        _muteToggle = AddToggle(optionsCard, "Pause or mute other apps while dictating",
             toggle => _host.SetMuteOthers(toggle.Checked));
         _enterToggle = AddToggle(optionsCard, "Press Enter after paste",
             toggle => _host.SetPressEnterAfterPaste(toggle.Checked));
@@ -419,7 +419,9 @@ internal sealed class AppWindow : Form {
         float pulse = _host.Phase == AppPhase.Listening
             ? 0.55f + 0.45f * MathF.Sin(_time * 5.5f)
             : 1f;
-        float glow = HudTheme.DipF(this, 7) + HudTheme.DipF(this, 4) * _smoothed * pulse;
+        float glow = HudTheme.DipF(this, 7)
+            + HudTheme.DipF(this, 3) * (pulse - 0.55f)
+            + HudTheme.DipF(this, 4) * _smoothed * pulse;
         int cx = pad + HudTheme.Dip(this, 6);
         using (var glowBrush = new SolidBrush(Color.FromArgb((int)(36 + 40 * _smoothed), accent))) {
             e.Graphics.FillEllipse(glowBrush, cx - glow, cy - glow - 6, glow * 2, glow * 2);

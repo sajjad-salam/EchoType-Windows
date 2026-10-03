@@ -373,7 +373,7 @@ internal sealed class StatusOverlay : Form {
         int cx = pill.Left + pad + Dip(5);
         int cy = pill.Top + pill.Height / 2;
         float pulse = 0.55f + 0.45f * MathF.Sin(_time * 5.5f);
-        float glow = Dip(6) + Dip(5) * _smoothed * pulse;
+        float glow = Dip(6) + Dip(3) * pulse + Dip(6) * _smoothed * pulse;
         using (var glowBrush = new SolidBrush(Color.FromArgb((int)(40 + 50 * _smoothed), 255, 88, 88))) {
             g.FillEllipse(glowBrush, cx - glow, cy - glow, glow * 2, glow * 2);
         }

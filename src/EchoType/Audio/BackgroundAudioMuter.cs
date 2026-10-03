@@ -1,13 +1,15 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Windows.Media.Control;
 
 namespace EchoType.Audio;
 
 /// <summary>
-/// Mutes other apps' playback sessions (YouTube, Spotify, …) while dictation is
-/// in progress, then restores each session's previous mute state. EchoType's
-/// own process and the Windows system-sounds session are left alone so the
-/// start/paste/error beeps still play.
+/// Silences other apps while dictation is in progress: pauses media that
+/// exposes play/pause (YouTube, Spotify, …), then mutes remaining playback
+/// sessions that cannot be paused. Restores both when listening ends.
+/// EchoType's own process and the Windows system-sounds session are left
+/// alone so the start/paste/error beeps still play.
 /// </summary>
 internal sealed class BackgroundAudioMuter {
 
@@ -20,68 +22,155 @@ internal sealed class BackgroundAudioMuter {
     private static readonly Guid IidAudioSessionManager2 = new("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
 
     private readonly object _gate = new();
+    private bool _held;
+    private List<PausedMedia>? _paused;
     private List<ISimpleAudioVolume>? _muted;
 
     public void MuteOthers() {
         lock (_gate) {
-            if (_muted != null) {
+            if (_held) {
                 return;
             }
+            _held = true;
         }
 
+        List<PausedMedia> paused = [];
         List<ISimpleAudioVolume> muted = [];
         try {
-            MuteAllRenderDevices(muted);
+            paused = PausePlaying();
+            MuteAllRenderDevices(muted, paused);
         } catch (Exception ex) {
-            Log.Write("audio: mute others failed: " + ex.Message);
-            RestoreVolumes(muted);
+            Log.Write("audio: silence others failed: " + ex.Message);
+            RestoreAll(paused, muted);
+            lock (_gate) {
+                _held = false;
+            }
             return;
         }
 
         lock (_gate) {
-            if (_muted != null) {
-                RestoreVolumes(muted);
+            if (!_held) {
+                RestoreAll(paused, muted);
                 return;
             }
-            if (muted.Count == 0) {
-                return;
-            }
+            _paused = paused;
             _muted = muted;
         }
 
-        Log.Write("audio: muted " + muted.Count + " other playback session(s)");
+        Log.Write("audio: paused " + paused.Count + " media session(s), muted "
+            + muted.Count + " other playback session(s)");
     }
 
     public void Restore() {
+        List<PausedMedia>? paused;
         List<ISimpleAudioVolume>? muted;
         lock (_gate) {
+            if (!_held) {
+                return;
+            }
+            _held = false;
+            paused = _paused;
             muted = _muted;
+            _paused = null;
             _muted = null;
         }
-        if (muted == null) {
-            return;
-        }
-        RestoreVolumes(muted);
+        RestoreAll(paused ?? [], muted ?? []);
         Log.Write("audio: restored other playback sessions");
     }
 
-    private static void MuteAllRenderDevices(List<ISimpleAudioVolume> muted) {
+    private static List<PausedMedia> PausePlaying() {
+        try {
+            return Task.Run(PausePlayingAsync).GetAwaiter().GetResult();
+        } catch (Exception ex) {
+            Log.Write("audio: pause others failed: " + ex.Message);
+            return [];
+        }
+    }
+
+    private static async Task<List<PausedMedia>> PausePlayingAsync() {
+        var manager = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
+        List<PausedMedia> paused = [];
+        foreach (var session in manager.GetSessions()) {
+            try {
+                var info = session.GetPlaybackInfo();
+                if (info.PlaybackStatus != GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing) {
+                    continue;
+                }
+                var controls = info.Controls;
+                bool ok = false;
+                if (controls.IsPauseEnabled) {
+                    ok = await session.TryPauseAsync();
+                } else if (controls.IsPlayPauseToggleEnabled) {
+                    ok = await session.TryTogglePlayPauseAsync();
+                }
+                if (!ok) {
+                    continue;
+                }
+                string name = session.SourceAppUserModelId;
+                if (string.IsNullOrWhiteSpace(name)) {
+                    name = "media";
+                }
+                paused.Add(new PausedMedia(session, name));
+                Log.Write("audio: paused " + name);
+            } catch (Exception ex) {
+                Log.Write("audio: pause session skipped: " + ex.Message);
+            }
+        }
+        return paused;
+    }
+
+    private static void ResumePaused(List<PausedMedia> paused) {
+        if (paused.Count == 0) {
+            return;
+        }
+        try {
+            Task.Run(() => ResumePausedAsync(paused)).GetAwaiter().GetResult();
+        } catch (Exception ex) {
+            Log.Write("audio: resume others failed: " + ex.Message);
+        }
+    }
+
+    private static async Task ResumePausedAsync(List<PausedMedia> paused) {
+        foreach (var item in paused) {
+            try {
+                var info = item.Session.GetPlaybackInfo();
+                if (info.PlaybackStatus != GlobalSystemMediaTransportControlsSessionPlaybackStatus.Paused) {
+                    continue;
+                }
+                var controls = info.Controls;
+                bool ok = false;
+                if (controls.IsPlayEnabled) {
+                    ok = await item.Session.TryPlayAsync();
+                } else if (controls.IsPlayPauseToggleEnabled) {
+                    ok = await item.Session.TryTogglePlayPauseAsync();
+                }
+                Log.Write(ok
+                    ? "audio: resumed " + item.Name
+                    : "audio: resume skipped " + item.Name);
+            } catch (Exception ex) {
+                Log.Write("audio: resume failed (" + item.Name + "): " + ex.Message);
+            }
+        }
+    }
+
+    private static void MuteAllRenderDevices(List<ISimpleAudioVolume> muted, List<PausedMedia> paused) {
         var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
         try {
-            MuteDefaultEndpoint(enumerator, RoleMultimedia, muted);
-            MuteDefaultEndpoint(enumerator, RoleCommunications, muted);
-            MuteEnumeratedEndpoints(enumerator, muted);
+            MuteDefaultEndpoint(enumerator, RoleMultimedia, muted, paused);
+            MuteDefaultEndpoint(enumerator, RoleCommunications, muted, paused);
+            MuteEnumeratedEndpoints(enumerator, muted, paused);
         } finally {
             Release(enumerator);
         }
     }
 
-    private static void MuteDefaultEndpoint(IMMDeviceEnumerator enumerator, int role, List<ISimpleAudioVolume> muted) {
+    private static void MuteDefaultEndpoint(
+        IMMDeviceEnumerator enumerator, int role, List<ISimpleAudioVolume> muted, List<PausedMedia> paused) {
         if (enumerator.GetDefaultAudioEndpoint(DataFlowRender, role, out IMMDevice? device) != 0 || device == null) {
             return;
         }
         try {
-            MuteDeviceSessions(device, muted);
+            MuteDeviceSessions(device, muted, paused);
         } catch (Exception ex) {
             Log.Write("audio: device mute failed: " + ex.Message);
         } finally {
@@ -89,7 +178,8 @@ internal sealed class BackgroundAudioMuter {
         }
     }
 
-    private static void MuteEnumeratedEndpoints(IMMDeviceEnumerator enumerator, List<ISimpleAudioVolume> muted) {
+    private static void MuteEnumeratedEndpoints(
+        IMMDeviceEnumerator enumerator, List<ISimpleAudioVolume> muted, List<PausedMedia> paused) {
         IMMDeviceCollection? devices = null;
         try {
             if (enumerator.EnumAudioEndpoints(DataFlowRender, DeviceStateActive, out devices) != 0 || devices == null) {
@@ -103,7 +193,7 @@ internal sealed class BackgroundAudioMuter {
                     continue;
                 }
                 try {
-                    MuteDeviceSessions(device, muted);
+                    MuteDeviceSessions(device, muted, paused);
                 } finally {
                     Release(device);
                 }
@@ -115,7 +205,7 @@ internal sealed class BackgroundAudioMuter {
         }
     }
 
-    private static void MuteDeviceSessions(IMMDevice device, List<ISimpleAudioVolume> muted) {
+    private static void MuteDeviceSessions(IMMDevice device, List<ISimpleAudioVolume> muted, List<PausedMedia> paused) {
         Guid iid = IidAudioSessionManager2;
         if (device.Activate(ref iid, ClsCtxAll, IntPtr.Zero, out object? raw) != 0 || raw is not IAudioSessionManager2 manager) {
             return;
@@ -133,7 +223,7 @@ internal sealed class BackgroundAudioMuter {
                 if (sessions.GetSession(i, out IAudioSessionControl? control) != 0 || control == null) {
                     continue;
                 }
-                if (!TryMuteSession(control, self, muted)) {
+                if (!TryMuteSession(control, self, muted, paused)) {
                     Release(control);
                 }
             }
@@ -143,7 +233,8 @@ internal sealed class BackgroundAudioMuter {
         }
     }
 
-    private static bool TryMuteSession(IAudioSessionControl control, int selfPid, List<ISimpleAudioVolume> muted) {
+    private static bool TryMuteSession(
+        IAudioSessionControl control, int selfPid, List<ISimpleAudioVolume> muted, List<PausedMedia> paused) {
         if (control is not IAudioSessionControl2 ctl2) {
             return false;
         }
@@ -156,6 +247,9 @@ internal sealed class BackgroundAudioMuter {
         int pid = 0;
         ctl2.GetProcessId(out pid);
         if (pid == selfPid) {
+            return false;
+        }
+        if (MatchesPausedApp(pid, paused)) {
             return false;
         }
         if (control is not ISimpleAudioVolume volume) {
@@ -172,6 +266,35 @@ internal sealed class BackgroundAudioMuter {
         Log.Write("audio: muted " + Describe(ctl2, pid));
         return true;
     }
+
+    private static bool MatchesPausedApp(int pid, List<PausedMedia> paused) {
+        if (paused.Count == 0 || pid <= 0) {
+            return false;
+        }
+        string processName;
+        try {
+            using var process = Process.GetProcessById(pid);
+            processName = process.ProcessName;
+        } catch {
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(processName)) {
+            return false;
+        }
+        foreach (var item in paused) {
+            if (item.Name.Contains(processName, StringComparison.OrdinalIgnoreCase)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void RestoreAll(List<PausedMedia> paused, List<ISimpleAudioVolume> muted) {
+        RestoreVolumes(muted);
+        ResumePaused(paused);
+    }
+
+    private sealed record PausedMedia(GlobalSystemMediaTransportControlsSession Session, string Name);
 
     private static string Describe(IAudioSessionControl2 ctl, int pid) {
         string name = "";
