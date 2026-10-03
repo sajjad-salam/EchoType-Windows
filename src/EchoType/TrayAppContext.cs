@@ -197,7 +197,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkey.TapPressed += OnTapPressed;
         _hotkey.CancelRequested += OnCancelRequested;
 
-        Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey VK=0x{_settings.HotkeyVk:X2}, askModelVk=0x{_settings.AskModelVk:X2}, translateVk=0x{_settings.TranslateVk:X2}, translateTo={_settings.TranslateTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating})");
+        Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey VK=0x{_settings.HotkeyVk:X2}, askModelVk=0x{_settings.AskModelVk:X2}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateTo={_settings.TranslateTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating})");
         // Stay in the tray on launch. Double-click the icon (or Open EchoType) to show the window.
         _ = WarmupAsync(); // alwaysReady: load the selected model at launch (mac applyPolicyAtLaunch)
     }
@@ -237,9 +237,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 _translate = _activeCommand == null
                     && !isDictation
                     && !_askModel
-                    && _settings.TranslateVk != 0
-                    && chord.Count == 1
-                    && chord.K1 == (uint)_settings.TranslateVk;
+                    && !_settings.TranslateChord.IsEmpty
+                    && chord.Equals(_settings.TranslateChord);
                 _selectedText = null;
                 _selectionTask = _pasteTarget != null
                     ? SelectionCapture.CaptureAsync()
@@ -1452,9 +1451,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
     private void UpdateTranslateMenu() {
         string language = GoogleTranslation.NameFor(_settings.TranslateTargetLanguage);
-        _translateShortcutItem.Text = _settings.TranslateVk <= 0
+        var chord = _settings.TranslateChord;
+        _translateShortcutItem.Text = chord.IsEmpty
             ? "Set Translate shortcut…"
-            : "Translate shortcut: " + HotkeyNames.For(_settings.TranslateVk) + " → " + language;
+            : "Translate shortcut: " + HotkeyNames.For(chord) + " → " + language;
         _translateLanguageRoot.Text = "Translate to: " + language;
         foreach (ToolStripItem item in _translateLanguageRoot.DropDownItems) {
             if (item is ToolStripMenuItem mi) {
@@ -1476,6 +1476,15 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         NotifyUi();
     }
 
+    private void ApplyTranslateChord(HotkeyChord chord) {
+        _settings.SetTranslateChord(chord);
+        _settings.Save();
+        UpdateTranslateMenu();
+        _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
+        Log.Write("settings: translate=" + HotkeyNames.For(chord));
+        NotifyUi();
+    }
+
     private void OpenTranslateShortcutUi() {
         if (_commandsUiOpen) {
             return;
@@ -1484,24 +1493,18 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         try {
             string language = GoogleTranslation.NameFor(_settings.TranslateTargetLanguage);
             using var form = new ShortcutPickerForm(
-                _settings.TranslateVk,
+                _settings.TranslateChord,
                 _hotkey,
                 _settings,
-                _settings.TranslateVk,
                 "EchoType — Translate shortcut",
-                _settings.ToggleRecording ? "Recording key" : "Hold-to-talk key",
+                _settings.ToggleRecording ? "Recording shortcut (1–3 keys)" : "Hold-to-talk shortcut (1–3 keys)",
                 (_settings.ToggleRecording
-                    ? "Click the box, then press the key. Press it to start, speak, and press it again to stop."
-                    : "Click the box, then press the key. Hold it and speak.")
+                    ? "Click the box, then press one to three keys together (for example Ctrl+Shift+T). Press the shortcut to start, speak, and press it again to stop."
+                    : "Click the box, then press one to three keys together (for example Ctrl+Shift+T). Hold them and speak.")
                     + " EchoType transcribes with the selected model, translates the text to " + language
                     + " with Google Translate, and pastes it. Change the language from Translate to. Clear removes the shortcut.");
             if (form.ShowDialog() == DialogResult.OK) {
-                _settings.TranslateVk = form.HotkeyVk;
-                _settings.Save();
-                UpdateTranslateMenu();
-                _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
-                Log.Write("settings: translateVk=0x" + _settings.TranslateVk.ToString("X2"));
-                NotifyUi();
+                ApplyTranslateChord(form.Chord);
             }
         } catch (Exception ex) {
             Log.Write("translate shortcut ui: " + ex);
@@ -1690,8 +1693,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (_settings.AskModelVk != 0) {
             chords.Add(HotkeyChord.Single(_settings.AskModelVk));
         }
-        if (_settings.TranslateVk != 0) {
-            chords.Add(HotkeyChord.Single(_settings.TranslateVk));
+        if (!_settings.TranslateChord.IsEmpty) {
+            chords.Add(_settings.TranslateChord);
         }
         foreach (var cmd in _settings.ActiveCommands) {
             var chord = cmd.Chord;
@@ -1815,7 +1818,20 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         NotifyUi();
     }
 
+    bool IAppWindowHost.TrySetTranslateChord(HotkeyChord chord) {
+        string? conflict = HotkeyConflicts.Message(chord, _settings, _settings.TranslateChord);
+        if (conflict != null) {
+            ShowBalloon(conflict, OverlayKind.Warning);
+            return false;
+        }
+        ApplyTranslateChord(chord);
+        return true;
+    }
+
     bool IAppWindowHost.TrySetShortcut(AppShortcut shortcut, int vk) {
+        if (shortcut == AppShortcut.Translate) {
+            return ((IAppWindowHost)this).TrySetTranslateChord(HotkeyChord.Single(vk));
+        }
         if (shortcut == AppShortcut.Dictation && vk <= 0) {
             ShowBalloon("Pick a dictation key — EchoType needs one to record.", OverlayKind.Warning);
             return false;
@@ -1832,7 +1848,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         int ignore = shortcut switch {
             AppShortcut.Dictation => _settings.HotkeyVk,
             AppShortcut.AskModel => _settings.AskModelVk,
-            AppShortcut.Translate => _settings.TranslateVk,
             AppShortcut.PressEnter => _settings.PressEnterToggleVk,
             AppShortcut.ModelWindow => _settings.OpenModelWindowVk,
             AppShortcut.ChatGpt => _settings.ChatGptSwitchVk,
@@ -1851,9 +1866,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 break;
             case AppShortcut.AskModel:
                 _settings.AskModelVk = vk;
-                break;
-            case AppShortcut.Translate:
-                _settings.TranslateVk = vk;
                 break;
             case AppShortcut.PressEnter:
                 _settings.PressEnterToggleVk = vk;

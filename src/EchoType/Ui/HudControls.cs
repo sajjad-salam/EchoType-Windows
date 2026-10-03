@@ -490,6 +490,14 @@ internal sealed class HudHotkeyRow : Control {
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public bool Optional { get; set; } = true;
 
+    /// <summary>Accepts a 1–3 key combination instead of a single key.</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool MultiKey { get; set; }
+
+    /// <summary>Keys pressed so far while capturing (multi-key rows); null shows "Listening".</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string? CapturePreview { get; set; }
+
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public bool Capturing {
         get => _capturing;
@@ -576,7 +584,7 @@ internal sealed class HudHotkeyRow : Control {
         TextRenderer.DrawText(e.Graphics, Title, HudTheme.BodyBold,
             new Rectangle(label.X, label.Y + HudTheme.Dip(this, 8), label.Width, HudTheme.Dip(this, 20)),
             HudTheme.Title, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-        TextRenderer.DrawText(e.Graphics, _capturing ? "Press a key…" : "Click to change", HudTheme.Tiny,
+        TextRenderer.DrawText(e.Graphics, _capturing ? (MultiKey ? "Press up to 3 keys…" : "Press a key…") : "Click to change", HudTheme.Tiny,
             new Rectangle(label.X, label.Y + HudTheme.Dip(this, 28), label.Width, HudTheme.Dip(this, 18)),
             HudTheme.Muted, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
 
@@ -591,7 +599,9 @@ internal sealed class HudHotkeyRow : Control {
             e.Graphics.DrawPath(pen, path);
         }
 
-        string text = _capturing ? "Listening" : (string.IsNullOrWhiteSpace(Value) ? "(none)" : Value);
+        string text = _capturing
+            ? CapturePreview ?? "Listening"
+            : (string.IsNullOrWhiteSpace(Value) ? "(none)" : Value);
         var textRect = chip;
         if (Optional && !_capturing) {
             textRect.Width -= HudTheme.Dip(this, 22);

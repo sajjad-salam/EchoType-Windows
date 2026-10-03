@@ -48,6 +48,12 @@ internal sealed class HotkeyMonitor : IDisposable {
     /// <summary>Raised on the UI thread while capturing a 1–3 key custom-command shortcut.</summary>
     public event Action<HotkeyChord>? ChordCaptured;
 
+    /// <summary>
+    /// Raised on the UI thread when every key of a multi-key capture is released,
+    /// carrying the final chord. Lets inline pickers commit without a Save button.
+    /// </summary>
+    public event Action<HotkeyChord>? ChordReleased;
+
     /// <summary>When true the hook swallows Esc presses. Set while Listening or choosing a command button.</summary>
     public volatile bool EscSwallowActive;
 
@@ -67,7 +73,8 @@ internal sealed class HotkeyMonitor : IDisposable {
     private int _swallowedCount;
     private readonly uint[] _captureKeys = new uint[HotkeyChord.MaxKeys];
     private int _captureCount;
-    private int _capturePhysDown;
+    private readonly uint[] _captureHeld = new uint[MaxPressed];
+    private int _captureHeldCount;
     private HotkeyChord _eventChord;
     private uint _eventVk;
     private HotkeyChord _capturedChord;
@@ -83,6 +90,7 @@ internal sealed class HotkeyMonitor : IDisposable {
     private SendOrPostCallback? _raiseCancel;
     private SendOrPostCallback? _raiseCaptured;
     private SendOrPostCallback? _raiseChordCaptured;
+    private SendOrPostCallback? _raiseChordReleased;
     private object?[]? _selfArgs;
 
     public bool Start(IReadOnlyCollection<HotkeyChord> holdKeys, IReadOnlyCollection<uint> tapVks, ISynchronizeInvoke ui) {
@@ -96,6 +104,7 @@ internal sealed class HotkeyMonitor : IDisposable {
         _raiseCancel = static state => ((HotkeyMonitor)state!).RaiseCancel();
         _raiseCaptured = static state => ((HotkeyMonitor)state!).RaiseCaptured();
         _raiseChordCaptured = static state => ((HotkeyMonitor)state!).RaiseChordCaptured();
+        _raiseChordReleased = static state => ((HotkeyMonitor)state!).RaiseChordReleased();
         _proc = HookCallback;
         // WH_KEYBOARD_LL runs in this process; passing null for hMod is valid and
         // avoids GetModuleHandle issues with single-file published exes.
@@ -132,8 +141,7 @@ internal sealed class HotkeyMonitor : IDisposable {
         _tapDownVk = 0;
         _pressedCount = 0;
         _swallowedCount = 0;
-        _captureCount = 0;
-        _capturePhysDown = 0;
+        ResetCapture();
         if (_held) {
             _held = false;
             NativeMethods.ReleaseStuckModifiers(_eventVk);
@@ -154,6 +162,20 @@ internal sealed class HotkeyMonitor : IDisposable {
     private void RaiseCaptured() => KeyCaptured?.Invoke(_capturedVk);
 
     private void RaiseChordCaptured() => ChordCaptured?.Invoke(_capturedChord);
+
+    private void RaiseChordReleased() => ChordReleased?.Invoke(_capturedChord);
+
+    /// <summary>
+    /// Forgets keys collected by an earlier capture. Call before starting a new one
+    /// so a capture abandoned mid-press doesn't leak keys into the next. The hook
+    /// runs on the UI thread, so this is safe to call from UI code.
+    /// </summary>
+    public void ResetCapture() {
+        _captureCount = 0;
+        _captureHeldCount = 0;
+        _captureDown = false;
+        _capturedChord = default;
+    }
 
     private void PostToUi(SendOrPostCallback? callback) {
         if (callback == null || _ui == null) {
@@ -186,9 +208,6 @@ internal sealed class HotkeyMonitor : IDisposable {
                             || kbd.vkCode == NativeMethods.VK_TAB) {
                             if (up) {
                                 _captureDown = false;
-                                if (_capturePhysDown > 0) {
-                                    _capturePhysDown--;
-                                }
                             }
                             // Let Esc/Tab through so the command editor can cancel / change focus.
                         } else if (down) {
@@ -196,9 +215,7 @@ internal sealed class HotkeyMonitor : IDisposable {
                             return new IntPtr(1);
                         } else if (up) {
                             _captureDown = false;
-                            if (_capturePhysDown > 0) {
-                                _capturePhysDown--;
-                            }
+                            HandleCaptureUp(distinguished);
                             return new IntPtr(1);
                         }
                     } else if (TryMatchList(_tapList, kbd, out uint tap)) {
@@ -254,15 +271,43 @@ internal sealed class HotkeyMonitor : IDisposable {
             }
             return;
         }
-        if (_capturePhysDown == 0) {
+        if (_captureHeldCount == 0) {
             _captureCount = 0;
         }
         if (!CaptureContains(distinguished) && _captureCount < max) {
             _captureKeys[_captureCount++] = distinguished;
         }
-        _capturePhysDown++;
+        // Track physical keys as a set: auto-repeat sends extra key-downs but only
+        // one key-up, so a plain counter would never get back to zero.
+        if (!HeldContains(distinguished) && _captureHeldCount < _captureHeld.Length) {
+            _captureHeld[_captureHeldCount++] = distinguished;
+        }
         _capturedChord = HotkeyChord.FromCaptured(_captureKeys, _captureCount);
         PostToUi(_raiseChordCaptured);
+    }
+
+    private void HandleCaptureUp(uint distinguished) {
+        if (CaptureMaxKeys <= 1 || _captureHeldCount == 0) {
+            return;
+        }
+        for (int i = 0; i < _captureHeldCount; i++) {
+            if (_captureHeld[i] == distinguished) {
+                _captureHeld[i] = _captureHeld[--_captureHeldCount];
+                break;
+            }
+        }
+        if (_captureHeldCount == 0 && _captureCount > 0) {
+            PostToUi(_raiseChordReleased);
+        }
+    }
+
+    private bool HeldContains(uint vk) {
+        for (int i = 0; i < _captureHeldCount; i++) {
+            if (_captureHeld[i] == vk) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private bool CaptureContains(uint vk) {
