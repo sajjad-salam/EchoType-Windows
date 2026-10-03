@@ -48,10 +48,13 @@ internal static class HotkeyConflicts {
                 ? "That key is already the Ask model shortcut."
                 : "That shortcut uses the Ask model key.";
         }
-        if (ConflictsWithReserved(chord, settings.TranslateVk, ignoreVks)) {
-            return chord.Count == 1
+        var translate = settings.TranslateChord;
+        bool ignoreTranslate = (!ignoreChord.IsEmpty && translate.Equals(ignoreChord))
+            || (translate.Count == 1 && ignoreVks.Contains((int)translate.K1));
+        if (!ignoreTranslate && Conflicts(chord, translate)) {
+            return chord.Count == 1 && translate.Count == 1
                 ? "That key is already the Translate shortcut."
-                : "That shortcut uses the Translate key.";
+                : "That shortcut overlaps the Translate shortcut.";
         }
         if (ConflictsWithReserved(chord, settings.OpenModelWindowVk, ignoreVks)) {
             return chord.Count == 1

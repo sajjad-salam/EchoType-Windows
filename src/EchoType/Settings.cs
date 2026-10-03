@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using EchoType.Hotkey;
 
 namespace EchoType;
 
@@ -59,11 +60,27 @@ internal sealed class Settings {
     public int AskModelVk { get; set; }
 
     /// <summary>
-    /// Hold-to-talk / press-to-toggle key that transcribes with the selected model, then
-    /// translates the transcript with Google Translate (no model reply) and pastes it. 0 = none.
+    /// Legacy single key for the Translate shortcut. Kept in sync with the last key of
+    /// <see cref="TranslateVks"/> so older config files keep working. 0 = none.
     /// </summary>
     [JsonPropertyName("translateVk")]
     public int TranslateVk { get; set; }
+
+    /// <summary>
+    /// One to three keys (e.g. Ctrl+Shift+T) that transcribe with the selected model, then
+    /// translate the transcript with Google Translate (no model reply) and paste it.
+    /// Empty falls back to <see cref="TranslateVk"/>.
+    /// </summary>
+    [JsonPropertyName("translateVks")]
+    public List<int> TranslateVks { get; set; } = [];
+
+    [JsonIgnore]
+    public HotkeyChord TranslateChord => HotkeyChord.FromVks(TranslateVks, TranslateVk);
+
+    public void SetTranslateChord(HotkeyChord chord) {
+        TranslateVks = chord.ToIntArray().ToList();
+        TranslateVk = chord.LegacyVk;
+    }
 
     /// <summary>Google Translate target language code for <see cref="TranslateVk"/> (e.g. "en", "ar").</summary>
     [JsonPropertyName("translateTargetLanguage")]
@@ -136,6 +153,7 @@ internal sealed class Settings {
             var loaded = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), JsonOptions) ?? new Settings();
             loaded.CustomCommands ??= [];
             loaded.GeminiCustomCommands ??= [];
+            loaded.TranslateVks ??= [];
             if (string.IsNullOrWhiteSpace(loaded.TranslateTargetLanguage)) {
                 loaded.TranslateTargetLanguage = "en";
             }

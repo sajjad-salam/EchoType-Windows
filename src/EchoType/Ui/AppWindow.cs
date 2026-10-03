@@ -33,6 +33,7 @@ internal interface IAppWindowHost {
     void SetPressEnterAfterPaste(bool value);
     void SetKeepTranscriptOnClipboard(bool value);
     bool TrySetShortcut(AppShortcut shortcut, int vk);
+    bool TrySetTranslateChord(HotkeyChord chord);
     void ToggleLoginWindow();
     void OpenCommands();
     void OpenLog();
@@ -172,6 +173,7 @@ internal sealed class AppWindow : Form {
         _dictationKey = AddHotkey(recordCard, "Dictation key", AppShortcut.Dictation, optional: false);
         _askModelKey = AddHotkey(recordCard, "Ask model", AppShortcut.AskModel);
         _translateKey = AddHotkey(recordCard, "Translate (Google Translate)", AppShortcut.Translate);
+        _translateKey.MultiKey = true;
         _translateLanguage = new ComboBox {
             DropDownStyle = ComboBoxStyle.DropDownList,
             FlatStyle = FlatStyle.Flat,
@@ -334,6 +336,8 @@ internal sealed class AppWindow : Form {
         if (disposing) {
             _host.UiChanged -= OnHostChanged;
             _host.Hotkey.KeyCaptured -= OnKeyCaptured;
+            _host.Hotkey.ChordCaptured -= OnChordCaptured;
+            _host.Hotkey.ChordReleased -= OnChordReleased;
             _tick.Dispose();
             _intro.Dispose();
         }
@@ -377,7 +381,9 @@ internal sealed class AppWindow : Form {
             _clipboardToggle.SetSilent(s.KeepTranscriptOnClipboard);
             _dictationKey.Value = HotkeyNames.For(s.HotkeyVk);
             _askModelKey.Value = HotkeyLabel(s.AskModelVk);
-            _translateKey.Value = HotkeyLabel(s.TranslateVk);
+            if (_capturing != _translateKey) {
+                _translateKey.Value = HotkeyNames.For(s.TranslateChord);
+            }
             _translateLanguage.SelectedIndex = IndexOfLanguage(s.TranslateTargetLanguage);
             _chatgptKey.Value = HotkeyLabel(s.ChatGptSwitchVk);
             _geminiKey.Value = HotkeyLabel(s.GeminiSwitchVk);
@@ -640,10 +646,18 @@ internal sealed class AppWindow : Form {
         _capturing = row;
         row.Capturing = true;
         row.Tag = shortcut;
-        _host.Hotkey.CaptureMaxKeys = 1;
+        _host.Hotkey.ResetCapture();
+        if (shortcut == AppShortcut.Translate) {
+            // Translate takes one to three keys (e.g. Ctrl+Shift+T); it is saved
+            // once every key of the combination has been released.
+            _host.Hotkey.CaptureMaxKeys = HotkeyChord.MaxKeys;
+            _host.Hotkey.ChordCaptured += OnChordCaptured;
+            _host.Hotkey.ChordReleased += OnChordReleased;
+        } else {
+            _host.Hotkey.CaptureMaxKeys = 1;
+            _host.Hotkey.KeyCaptured += OnKeyCaptured;
+        }
         _host.Hotkey.CaptureKeys = true;
-        _host.Hotkey.KeyCaptured -= OnKeyCaptured;
-        _host.Hotkey.KeyCaptured += OnKeyCaptured;
     }
 
     private void StopCapture() {
@@ -654,6 +668,32 @@ internal sealed class AppWindow : Form {
         _host.Hotkey.CaptureKeys = false;
         _host.Hotkey.CaptureMaxKeys = 1;
         _host.Hotkey.KeyCaptured -= OnKeyCaptured;
+        _host.Hotkey.ChordCaptured -= OnChordCaptured;
+        _host.Hotkey.ChordReleased -= OnChordReleased;
+        _translateKey.CapturePreview = null;
+        _translateKey.Value = HotkeyNames.For(_host.Settings.TranslateChord);
+        _translateKey.Invalidate();
+    }
+
+    private void OnChordCaptured(HotkeyChord chord) {
+        if (IsDisposed || _capturing != _translateKey || chord.IsEmpty) {
+            return;
+        }
+        _translateKey.CapturePreview = HotkeyNames.For(chord);
+        _translateKey.Invalidate();
+    }
+
+    private void OnChordReleased(HotkeyChord chord) {
+        if (IsDisposed || _capturing != _translateKey) {
+            return;
+        }
+        StopCapture();
+        if (chord.IsEmpty) {
+            return;
+        }
+        _host.TrySetTranslateChord(chord);
+        _translateKey.Value = HotkeyNames.For(_host.Settings.TranslateChord);
+        _translateKey.Invalidate();
     }
 
     private void OnKeyCaptured(uint vk) {
