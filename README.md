@@ -43,7 +43,7 @@ Your audio never touches this app: the selected model's page captures it via `ge
 
 ## Usage
 
-1. Start `EchoType.exe`. A tray icon appears (**black** while ChatGPT or Gemini loads, **gray = ready**) and EchoType stays in the tray. Double-click the tray icon (or **Open EchoType**) to open the window. Close the window to hide it again; EchoType keeps running in the tray.
+1. Start `EchoType.exe`. A tray icon appears (**black** while ChatGPT or Gemini loads, **gray = ready**) and EchoType stays in the tray. Double-click the tray icon (or **Open EchoType**) to open the window. Close the window to hide it again; EchoType keeps running in the tray. By default EchoType also starts automatically when you sign in to Windows; turn off **Start EchoType with Windows** under **Options** to stop that.
 2. In the window (or tray menu) choose **ChatGPT** or **Gemini**. Optional: set a tap key for each model so you can switch without opening the window.
 3. First time for that model: **Log in to …** in the window (or tray) → sign in (Google SSO works), or bind a tap shortcut via **Model window**. The login window hides itself once you're logged in, and the session persists across restarts. Each model keeps its own cookies.
 4. Optional: **Recording** → **Hold to talk** (default) or **Press to start/stop**. The choice applies to dictation, selection rewrite, Ask model, and custom commands, and is saved.
