@@ -26,6 +26,7 @@ internal static class Program {
             return;
         }
 
+        _ = Task.Run(Sounds.Preload);
         Application.Run(new TrayAppContext());
     }
 }
