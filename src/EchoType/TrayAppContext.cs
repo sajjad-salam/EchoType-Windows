@@ -40,6 +40,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private readonly ToolStripMenuItem _commandsRoot;
     private readonly ToolStripMenuItem _chatgptModelItem;
     private readonly ToolStripMenuItem _geminiModelItem;
+    private readonly ToolStripMenuItem _claudeModelItem;
     private readonly ToolStripMenuItem _modelShortcutsItem;
     private readonly ToolStripMenuItem _pressEnterItem;
     private readonly ToolStripMenuItem _pressEnterShortcutItem;
@@ -97,11 +98,13 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         var closeLoginItem = new ToolStripMenuItem("Close login window", null, (_, _) => _web.HideLoginWindow());
         _chatgptModelItem = new ToolStripMenuItem("ChatGPT", null, (_, _) => SelectModel(TranscriptionProvider.ChatGpt));
         _geminiModelItem = new ToolStripMenuItem("Gemini", null, (_, _) => SelectModel(TranscriptionProvider.Gemini));
+        _claudeModelItem = new ToolStripMenuItem("Claude", null, (_, _) => SelectModel(TranscriptionProvider.Claude));
         _modelShortcutsItem = new ToolStripMenuItem();
         _modelShortcutsItem.Click += (_, _) => OpenModelShortcutsUi();
         var modelRoot = new ToolStripMenuItem("Transcription model");
         modelRoot.DropDownItems.Add(_chatgptModelItem);
         modelRoot.DropDownItems.Add(_geminiModelItem);
+        modelRoot.DropDownItems.Add(_claudeModelItem);
         modelRoot.DropDownItems.Add(new ToolStripSeparator());
         modelRoot.DropDownItems.Add(_modelShortcutsItem);
         _commandsRoot = new ToolStripMenuItem("Custom Commands");
@@ -337,6 +340,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
         if (_settings.GeminiSwitchVk != 0 && vk == (uint)_settings.GeminiSwitchVk) {
             SelectModel(TranscriptionProvider.Gemini);
+            return;
+        }
+        if (_settings.ClaudeSwitchVk != 0 && vk == (uint)_settings.ClaudeSwitchVk) {
+            SelectModel(TranscriptionProvider.Claude);
             return;
         }
         if (_settings.OpenModelWindowVk != 0 && vk == (uint)_settings.OpenModelWindowVk) {
@@ -1146,6 +1153,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         var cts = new CancellationTokenSource();
         _micLevelCts = cts;
         _ = PumpWebMicLevelAsync(cts.Token);
+        if (_web.Driver is { SupportsLiveTranscript: true }) {
+            _ = PumpLiveTranscriptAsync(cts.Token);
+        }
     }
 
     private void StopMicLevelPump() {
@@ -1178,6 +1188,34 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             }
             try {
                 await Task.Delay(40, cancel);
+            } catch (OperationCanceledException) {
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Claude writes words into its composer while you speak. Mirror them in the
+    /// Listening HUD so the transcript is visible live; the final text is still
+    /// taken from the composer after recording stops.
+    /// </summary>
+    private async Task PumpLiveTranscriptAsync(CancellationToken cancel) {
+        string shown = "";
+        while (!cancel.IsCancellationRequested) {
+            try {
+                var driver = _web.Driver;
+                if (driver != null) {
+                    string text = await driver.LiveTranscriptAsync();
+                    if (!cancel.IsCancellationRequested && text != shown) {
+                        shown = text;
+                        StatusOverlay.SetLiveTranscript(text);
+                    }
+                }
+            } catch (Exception) {
+                // Keep the last text; the final transcript is read separately.
+            }
+            try {
+                await Task.Delay(200, cancel);
             } catch (OperationCanceledException) {
                 return;
             }
@@ -1360,6 +1398,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _geminiModelItem.Text = ModelMenuLabel("Gemini", _settings.GeminiSwitchVk);
         _chatgptModelItem.Checked = _settings.TranscriptionProvider == TranscriptionProvider.ChatGpt;
         _geminiModelItem.Checked = _settings.TranscriptionProvider == TranscriptionProvider.Gemini;
+        _claudeModelItem.Text = ModelMenuLabel("Claude", _settings.ClaudeSwitchVk);
+        _claudeModelItem.Checked = _settings.TranscriptionProvider == TranscriptionProvider.Claude;
     }
 
     private static string ModelMenuLabel(string name, int vk) =>
@@ -1856,6 +1896,15 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             ShowBalloon("ChatGPT and Gemini cannot share the same shortcut.", OverlayKind.Warning);
             return false;
         }
+        if ((shortcut is AppShortcut.ChatGpt or AppShortcut.Gemini) && vk != 0 && vk == _settings.ClaudeSwitchVk) {
+            ShowBalloon("That key already switches to Claude.", OverlayKind.Warning);
+            return false;
+        }
+        if (shortcut == AppShortcut.Claude && vk != 0
+            && (vk == _settings.ChatGptSwitchVk || vk == _settings.GeminiSwitchVk)) {
+            ShowBalloon("Each model needs its own switch shortcut.", OverlayKind.Warning);
+            return false;
+        }
 
         int ignore = shortcut switch {
             AppShortcut.Dictation => _settings.HotkeyVk,
@@ -1864,6 +1913,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             AppShortcut.ModelWindow => _settings.OpenModelWindowVk,
             AppShortcut.ChatGpt => _settings.ChatGptSwitchVk,
             AppShortcut.Gemini => _settings.GeminiSwitchVk,
+            AppShortcut.Claude => _settings.ClaudeSwitchVk,
             _ => 0,
         };
         string? conflict = HotkeyConflicts.Message(vk, _settings, ignore);
@@ -1890,6 +1940,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 break;
             case AppShortcut.Gemini:
                 _settings.GeminiSwitchVk = vk;
+                break;
+            case AppShortcut.Claude:
+                _settings.ClaudeSwitchVk = vk;
                 break;
         }
         _settings.Save();

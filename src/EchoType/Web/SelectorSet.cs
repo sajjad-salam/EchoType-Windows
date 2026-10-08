@@ -2,7 +2,7 @@ namespace EchoType.Web;
 
 /// <summary>
 /// DOM hooks for one chat site. Rendered into the injected <c>__echotype</c> script
-/// so ChatGPT and Gemini can share DictationDriver.
+/// so ChatGPT, Gemini and Claude can share DictationDriver.
 /// </summary>
 internal sealed class SelectorSet {
 
@@ -61,6 +61,18 @@ internal sealed class SelectorSet {
     /// using AX there copies conversation titles from the sidebar/header.
     /// </summary>
     public bool UseAccessibilityTranscriptFallback { get; init; }
+
+    /// <summary>
+    /// The site writes words into the composer while you are still speaking (Claude).
+    /// EchoType mirrors that text in the HUD as a live transcript.
+    /// </summary>
+    public bool LiveTranscript { get; init; }
+
+    /// <summary>
+    /// Consecutive unchanged composer reads (250 ms apart) before the transcript counts
+    /// as final. Live sites keep revising interim words briefly after the mic closes.
+    /// </summary>
+    public int TranscriptSettlePolls { get; init; } = 2;
 
     public string Js() {
         return "{"

@@ -12,6 +12,7 @@ internal enum AppShortcut {
     ModelWindow,
     ChatGpt,
     Gemini,
+    Claude,
 }
 
 internal interface IAppWindowHost {
@@ -63,6 +64,7 @@ internal sealed class AppWindow : Form {
     private readonly ComboBox _translateLanguage;
     private readonly HudHotkeyRow _chatgptKey;
     private readonly HudHotkeyRow _geminiKey;
+    private readonly HudHotkeyRow _claudeKey;
     private readonly HudHotkeyRow _enterKey;
     private readonly HudHotkeyRow _windowKey;
     private readonly HudToggleRow _muteToggle;
@@ -148,18 +150,21 @@ internal sealed class AppWindow : Form {
 
         var modelCard = MakeCard();
         AddCaption(modelCard, "Transcription model");
-        _modelSeg = new HudSegmented { Items = ["ChatGPT", "Gemini"] };
+        _modelSeg = new HudSegmented { Items = ["ChatGPT", "Gemini", "Claude"] };
         _modelSeg.SelectedIndexChanged += (_, _) => {
             if (_syncing) {
                 return;
             }
-            _host.SelectModel(_modelSeg.SelectedIndex == 1
-                ? TranscriptionProvider.Gemini
-                : TranscriptionProvider.ChatGpt);
+            _host.SelectModel(_modelSeg.SelectedIndex switch {
+                1 => TranscriptionProvider.Gemini,
+                2 => TranscriptionProvider.Claude,
+                _ => TranscriptionProvider.ChatGpt,
+            });
         };
         AddControl(modelCard, _modelSeg, 40);
         _chatgptKey = AddHotkey(modelCard, "Switch to ChatGPT", AppShortcut.ChatGpt);
         _geminiKey = AddHotkey(modelCard, "Switch to Gemini", AppShortcut.Gemini);
+        _claudeKey = AddHotkey(modelCard, "Switch to Claude (live transcript)", AppShortcut.Claude);
         FinishCard(modelCard);
 
         var recordCard = MakeCard();
@@ -217,7 +222,7 @@ internal sealed class AppWindow : Form {
 
         var moreCard = MakeCard();
         AddCaption(moreCard, "Model window");
-        _windowKey = AddHotkey(moreCard, "Open ChatGPT or Gemini", AppShortcut.ModelWindow);
+        _windowKey = AddHotkey(moreCard, "Open model window", AppShortcut.ModelWindow);
         var actions = new FlowLayoutPanel {
             AutoSize = true,
             WrapContents = false,
@@ -378,7 +383,11 @@ internal sealed class AppWindow : Form {
         _syncing = true;
         try {
             var s = _host.Settings;
-            _modelSeg.SetSilent(s.TranscriptionProvider == TranscriptionProvider.Gemini ? 1 : 0);
+            _modelSeg.SetSilent(s.TranscriptionProvider switch {
+                TranscriptionProvider.Gemini => 1,
+                TranscriptionProvider.Claude => 2,
+                _ => 0,
+            });
             _modeSeg.SetSilent(s.ToggleRecording ? 1 : 0);
             _muteToggle.SetSilent(s.MuteOtherAppsWhileDictating);
             _enterToggle.SetSilent(s.PressEnterAfterPaste);
@@ -392,6 +401,7 @@ internal sealed class AppWindow : Form {
             _translateLanguage.SelectedIndex = IndexOfLanguage(s.TranslateTargetLanguage);
             _chatgptKey.Value = HotkeyLabel(s.ChatGptSwitchVk);
             _geminiKey.Value = HotkeyLabel(s.GeminiSwitchVk);
+            _claudeKey.Value = HotkeyLabel(s.ClaudeSwitchVk);
             _enterKey.Value = HotkeyLabel(s.PressEnterToggleVk);
             _windowKey.Value = HotkeyLabel(s.OpenModelWindowVk);
             _dictationKey.Invalidate();
@@ -399,6 +409,7 @@ internal sealed class AppWindow : Form {
             _translateKey.Invalidate();
             _chatgptKey.Invalidate();
             _geminiKey.Invalidate();
+            _claudeKey.Invalidate();
             _enterKey.Invalidate();
             _windowKey.Invalidate();
             _loginButton.Text = !_host.Online ? "Retry connection"

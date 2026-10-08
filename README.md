@@ -1,6 +1,6 @@
 # EchoType for Windows
 
-Voice dictation for Windows powered by **ChatGPT or Gemini's own web dictation** — no API keys, no per-use cost.
+Voice dictation for Windows powered by **ChatGPT, Gemini or Claude's own web dictation** — no API keys, no per-use cost.
 
 Two recording modes (window or tray menu → **Recording**), both using **Right Ctrl** by default:
 
@@ -11,7 +11,9 @@ The transcript is typed into the app and field that had focus when you started. 
 
 If you **select text first**, then record an instruction, EchoType sends the selection plus your spoken instruction to the selected model and pastes the model's reply over that selection. No selection means normal dictation: the transcript is pasted as-is.
 
-Pick **ChatGPT** or **Gemini** from the window or the tray menu, or assign tap shortcuts to switch between them. Each model has its own login session. Custom-command prompts are shared by both and always use whichever model is selected.
+Pick **ChatGPT**, **Gemini** or **Claude** from the window or the tray menu, or assign tap shortcuts to switch between them. Each model has its own login session. Custom-command prompts are shared by all of them and always use whichever model is selected.
+
+**Claude shows a live transcript.** claude.ai writes your words into its prompt box while you are still speaking, so with Claude selected the Listening HUD grows to show the latest few lines as they arrive. When you stop recording, EchoType waits for Claude's final text and pastes that.
 
 Add extra recording shortcuts that send the transcript to the selected model with your own prompt and paste the model's reply instead. A command can be one button or a group of buttons. Custom commands are shared across ChatGPT and Gemini, and they follow the same hold vs press-to-start/stop mode as dictation.
 
@@ -44,7 +46,7 @@ Your audio never touches this app: the selected model's page captures it via `ge
 ## Usage
 
 1. Start `EchoType.exe`. A tray icon appears (**black** while ChatGPT or Gemini loads, **gray = ready**) and EchoType stays in the tray. Double-click the tray icon (or **Open EchoType**) to open the window. Close the window to hide it again; EchoType keeps running in the tray. By default EchoType also starts automatically when you sign in to Windows; turn off **Start EchoType with Windows** under **Options** to stop that.
-2. In the window (or tray menu) choose **ChatGPT** or **Gemini**. Optional: set a tap key for each model so you can switch without opening the window.
+2. In the window (or tray menu) choose **ChatGPT**, **Gemini** or **Claude**. Optional: set a tap key for each model so you can switch without opening the window.
 3. First time for that model: **Log in to …** in the window (or tray) → sign in (Google SSO works), or bind a tap shortcut via **Model window**. The login window hides itself once you're logged in, and the session persists across restarts. Each model keeps its own cookies.
 4. Optional: **Recording** → **Hold to talk** (default) or **Press to start/stop**. The choice applies to dictation, selection rewrite, Ask model, and custom commands, and is saved.
 5. Focus any text field anywhere. In hold mode, **hold Right Ctrl**, talk, **release**. In press-to-start/stop mode, **press Right Ctrl**, talk, **press it again**. The tray icon turns red while listening, blue while transcribing, then EchoType switches back to that window (and virtual desktop, if you left it) and pastes. You'll hear a confirmation sound. If Gemini or ChatGPT cuts the recording off while you are still speaking (silence detection or a max clip length), EchoType plays a warning tone, shows a “Recording stopped” toast, and transcribes only what was captured. Other apps that are playing sound (YouTube, Spotify, …) are paused when they support it, or muted otherwise, so they don't leak into the microphone; they resume when you stop. **Pause or mute other apps while dictating** turns this off. Highlight text first, then record an instruction (for example “make this shorter” or “translate to Arabic”) to rewrite that selection instead of pasting the raw transcript.
@@ -161,14 +163,14 @@ In DEBUG builds the tray menu has a "Start dictation (debug)" item that simulate
 
 ## How it works
 
-A hidden, focus-stealing-proof WebView2 window loads chatgpt.com or gemini.google.com using that model's persistent cookies. When you start recording it triggers the page's own dictation UI (ChatGPT: ⌃⇧D plus click fallbacks; Gemini: the microphone button), waits for the transcript to appear in the composer, clears it, and pastes it into the app you were using via the clipboard + a synthesized Ctrl+V. ChatGPT DOM selectors live in `src/EchoType/Web/Selectors.cs`; Gemini's live in `src/EchoType/Web/GeminiSelectors.cs`.
+A hidden, focus-stealing-proof WebView2 window loads chatgpt.com or gemini.google.com using that model's persistent cookies. When you start recording it triggers the page's own dictation UI (ChatGPT: ⌃⇧D plus click fallbacks; Gemini: the microphone button), waits for the transcript to appear in the composer, clears it, and pastes it into the app you were using via the clipboard + a synthesized Ctrl+V. ChatGPT DOM selectors live in `src/EchoType/Web/Selectors.cs`; Gemini's live in `src/EchoType/Web/GeminiSelectors.cs`; Claude's in `src/EchoType/Web/ClaudeSelectors.cs` (claude.ai: the dictation mic button, clicked again to stop).
 
 Global hotkey: a low-level keyboard hook (`WH_KEYBOARD_LL`) that swallows the dictation key, custom-command keys, and any tap shortcuts (Auto Enter toggle, model switch). Hold-to-talk stops on key-up; press-to-start/stop ignores key-up and stops on the next press of the same key. Paste targeting: the window, focused control, and virtual desktop from key-down are restored before paste, so you can switch apps (or desktops) while waiting for a reply. Desktop/taskbar/Explorer at key-down still divert to clipboard-only. If text was selected at key-down, EchoType copies that selection, sends it to the model with the transcript as the instruction, and pastes the reply. Custom-command shortcuts reuse the same dictation path, then send the transcript plus the chosen button’s prompt and scrape that model's reply.
 
 ## Troubleshooting
 
 - **Log file**: window → *Open log*, or tray menu → *Open log*. Also written to `EchoType.log` in the project root, next to the EXE, and `%LOCALAPPDATA%\EchoType\Logs\EchoType.log`. Every dictation step, failure, and the page's real button labels are logged there.
-- **"Dictation didn't start"** — check the log: if the button dump shows different labels than `Selectors.cs` (ChatGPT) or `GeminiSelectors.cs` (Gemini), that site changed its UI (patch the selectors).
+- **"Dictation didn't start"** — check the log: if the button dump shows different labels than `Selectors.cs` (ChatGPT) or `GeminiSelectors.cs` (Gemini) or `ClaudeSelectors.cs` (Claude), that site changed its UI (patch the selectors).
 - **Mic never picks up sound** (`gum=err:...` in the log) — check the Windows microphone privacy switch above, and that the right input device is the Windows default.
 - **Login window shows "No internet connection"** — its Retry button works once the network is back.
 - **Pasting into an elevated (admin) app doesn't work** — Windows blocks input injection from a non-elevated process (UIPI). Run EchoType as administrator if you dictate into admin apps.

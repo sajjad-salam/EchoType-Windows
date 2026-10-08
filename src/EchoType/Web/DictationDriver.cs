@@ -246,7 +246,7 @@ internal sealed class DictationDriver {
             return null;
           };
           E.cleanText = (s) => String(s || '').replace(/[\u200b\u200c\u200d\ufeff]/g, '').replace(/\s+/g, ' ').trim();
-          E.isChromeText = (t) => /^(ask anything|ask chatgpt|ask gemini|message chatgpt|enter a prompt for gemini|enter a prompt|what'?s on the agenda today\??|how can i help you today\??|type a message|think|search|study|voice|send|attach|new chat|chatgpt|gemini|اكتب رسالة|اسأل أي شيء)$/i.test(t || '');
+          E.isChromeText = (t) => /^(ask anything|ask chatgpt|ask gemini|message chatgpt|enter a prompt for gemini|enter a prompt|write your prompt to claude|reply to claude(\.\.\.|…)?|talk with claude|claude|what'?s on the agenda today\??|how can i help you today\??|type a message|think|search|study|voice|send|attach|new chat|chatgpt|gemini|اكتب رسالة|اسأل أي شيء)$/i.test(t || '');
           E.elementText = (el) => {
             if (!el) return '';
             const take = (s, best) => { s = E.cleanText(s); return s.length > best.length ? s : best; };
@@ -324,7 +324,7 @@ internal sealed class DictationDriver {
                 (el.getAttribute('placeholder') || '') + ' ' +
                 (el.getAttribute('data-placeholder') || '') + ' ' +
                 (el.id || '') + ' ' + (el.className || '')).toLowerCase();
-              const promptish = /ql-editor|prompt-textarea|prompt|message chatgpt|ask anything|ask gemini|gemini|composer|prosemirror|rich-textarea/.test(lab)
+              const promptish = /ql-editor|prompt-textarea|prompt|message chatgpt|ask anything|ask gemini|gemini|claude|composer|prosemirror|rich-textarea/.test(lab)
                 || !!(el.closest && el.closest('rich-textarea, #prompt-textarea'));
               vis.push({ el, top: r.top, promptish });
             }
@@ -1034,6 +1034,23 @@ internal sealed class DictationDriver {
             // Page not ready or script missing — the WASAPI meter is the fallback.
         }
         return 0;
+    }
+
+    /// <summary>True when the site streams words into the composer while you speak.</summary>
+    public bool SupportsLiveTranscript => _selectors.LiveTranscript;
+
+    /// <summary>
+    /// Text the site has written into the composer so far during dictation (Claude
+    /// streams it live). Empty if nothing is there yet or the page is not ready.
+    /// </summary>
+    public async Task<string> LiveTranscriptAsync() {
+        try {
+            string text = await EvalLiteAsync(
+                "(window.__echotype && typeof window.__echotype.composerText === 'function' ? window.__echotype.composerText() : '')");
+            return text is "undefined" or "null" || IsUiPlaceholder(text) ? "" : text.Trim();
+        } catch (DriverException) {
+            return "";
+        }
     }
 
     public async Task<CaptureState> CaptureStateAsync() {
@@ -2316,7 +2333,7 @@ internal sealed class DictationDriver {
                 emptyGrace = 0;
             } else if (text.Length > 0 && text == lastText) {
                 stableCount++;
-                if (stableCount >= 2) {
+                if (stableCount >= Math.Max(2, _selectors.TranscriptSettlePolls)) {
                     return text;
                 }
             } else if (text.Length == 0) {
@@ -2538,6 +2555,8 @@ internal sealed class DictationDriver {
             || t.Equals("Ask Gemini", StringComparison.OrdinalIgnoreCase)
             || t.Equals("Message ChatGPT", StringComparison.OrdinalIgnoreCase)
             || t.Equals("Enter a prompt for Gemini", StringComparison.OrdinalIgnoreCase)
+            || t.Equals("Write your prompt to Claude", StringComparison.OrdinalIgnoreCase)
+            || t.StartsWith("Reply to Claude", StringComparison.OrdinalIgnoreCase)
             || t.Equals("Enter a prompt", StringComparison.OrdinalIgnoreCase)
             || t.Equals("Type a message", StringComparison.OrdinalIgnoreCase)
             || t.Equals("Search", StringComparison.OrdinalIgnoreCase)

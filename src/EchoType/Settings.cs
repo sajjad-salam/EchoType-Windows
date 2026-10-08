@@ -56,6 +56,10 @@ internal sealed class Settings {
     [JsonPropertyName("geminiSwitchVk")]
     public int GeminiSwitchVk { get; set; }
 
+    /// <summary>Tap key that switches to Claude. 0 = none.</summary>
+    [JsonPropertyName("claudeSwitchVk")]
+    public int ClaudeSwitchVk { get; set; }
+
     /// <summary>
     /// Hold-to-talk / press-to-toggle key that sends the spoken text (and any selection) to the
     /// selected model and pastes the reply — text or image. 0 = none.
@@ -96,7 +100,7 @@ internal sealed class Settings {
     [JsonPropertyName("openModelWindowVk")]
     public int OpenModelWindowVk { get; set; }
 
-    /// <summary>"chatgpt" or "gemini". Unknown values fall back to ChatGPT.</summary>
+    /// <summary>"chatgpt", "gemini" or "claude". Unknown values fall back to ChatGPT.</summary>
     [JsonPropertyName("transcriptionProvider")]
     public string TranscriptionProviderName { get; set; } = "chatgpt";
 
@@ -109,13 +113,19 @@ internal sealed class Settings {
 
     [JsonIgnore]
     public TranscriptionProvider TranscriptionProvider {
-        get => TranscriptionProviderName.Equals("gemini", StringComparison.OrdinalIgnoreCase)
-            ? TranscriptionProvider.Gemini
-            : TranscriptionProvider.ChatGpt;
-        set => TranscriptionProviderName = value == TranscriptionProvider.Gemini ? "gemini" : "chatgpt";
+        get => TranscriptionProviderName.ToLowerInvariant() switch {
+            "gemini" => TranscriptionProvider.Gemini,
+            "claude" => TranscriptionProvider.Claude,
+            _ => TranscriptionProvider.ChatGpt,
+        };
+        set => TranscriptionProviderName = value switch {
+            TranscriptionProvider.Gemini => "gemini",
+            TranscriptionProvider.Claude => "claude",
+            _ => "chatgpt",
+        };
     }
 
-    /// <summary>Custom commands are global — the same list is used for ChatGPT and Gemini.</summary>
+    /// <summary>Custom commands are global — the same list is used for ChatGPT, Gemini and Claude.</summary>
     [JsonIgnore]
     public List<CustomCommand> ActiveCommands => CustomCommands;
 
@@ -131,6 +141,9 @@ internal sealed class Settings {
             }
             if (GeminiSwitchVk > 0) {
                 yield return GeminiSwitchVk;
+            }
+            if (ClaudeSwitchVk > 0) {
+                yield return ClaudeSwitchVk;
             }
             if (OpenModelWindowVk > 0) {
                 yield return OpenModelWindowVk;
