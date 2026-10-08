@@ -1,18 +1,22 @@
 namespace EchoType;
 
 /// <summary>
-/// Feedback sounds. Start and done are soft glass chimes (a rising fifth when
-/// the mic opens, the same fifth falling when the text lands) in the spirit of
-/// the macOS dictation sounds. They are synthesised here rather than shipped as
-/// files, so there is nothing to license and nothing to lose from the bundle.
+/// Feedback sounds. Start and done are the start and stop clicks of a
+/// stopwatch (Pixabay, "start stop stopwatch" by spinopel, Pixabay Content
+/// License), embedded from Assets/Sounds. If a resource is missing, a soft
+/// synthesised bubble pop plays instead. Dropping a <c>start.wav</c> or
+/// <c>done.wav</c> into <c>%APPDATA%\EchoType\Sounds</c> replaces the matching sound.
 /// </summary>
 internal static class Sounds {
     private const int ChimeSampleRate = 44100;
 
-    private static readonly Lazy<byte[]?> StartWav = new(() => TryBuild(
-        [(880.0, 0, 0.8), (1318.51, 75, 1.0)], 520));
-    private static readonly Lazy<byte[]?> DoneWav = new(() => TryBuild(
-        [(1318.51, 0, 0.8), (880.0, 75, 1.0)], 560));
+    private static string CustomDir { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "EchoType", "Sounds");
+
+    private static readonly Lazy<byte[]?> StartWav = new(() => TryLoadCustom("start.wav") ?? TryLoadEmbedded("start.wav") ?? TryBuild(
+        [(420.0, 760.0, 0, 95, 0.7), (640.0, 1040.0, 70, 120, 1.0)], 380));
+    private static readonly Lazy<byte[]?> DoneWav = new(() => TryLoadCustom("done.wav") ?? TryLoadEmbedded("done.wav") ?? TryBuild(
+        [(1040.0, 640.0, 0, 95, 0.8), (760.0, 420.0, 70, 140, 1.0)], 400));
 
     private static System.Media.SoundPlayer? _chimePlayer;
     private static System.Media.SoundPlayer? _cutoffPlayer;
@@ -43,40 +47,66 @@ internal static class Sounds {
         }
     }
 
-    private static byte[]? TryBuild((double Hz, int StartMs, double Gain)[] notes, int totalMs) {
+    private static byte[]? TryLoadCustom(string name) {
+        string path = Path.Combine(CustomDir, name);
         try {
-            return BuildChimeWav(notes, totalMs);
+            if (!File.Exists(path)) {
+                return null;
+            }
+            byte[] wav = File.ReadAllBytes(path);
+            Log.Write("sounds: using custom " + path);
+            return wav;
+        } catch (Exception ex) {
+            Log.Write("sounds: custom " + name + " unreadable: " + ex.Message);
+            return null;
+        }
+    }
+
+    private static byte[]? TryLoadEmbedded(string name) {
+        try {
+            using var stream = typeof(Sounds).Assembly.GetManifestResourceStream("EchoType.Sounds." + name);
+            if (stream == null) {
+                return null;
+            }
+            using var ms = new MemoryStream();
+            stream.CopyTo(ms);
+            return ms.ToArray();
+        } catch {
+            return null;
+        }
+    }
+
+    private static byte[]? TryBuild((double FromHz, double ToHz, int StartMs, int DurMs, double Gain)[] bubbles, int totalMs) {
+        try {
+            return BuildBubbleWav(bubbles, totalMs);
         } catch {
             return null;
         }
     }
 
     /// <summary>
-    /// Bell-like voice per note: a few partials (one slightly inharmonic for a
-    /// glassy edge), a 4 ms attack, an exponential decay where higher partials
-    /// die first, and a tiny upward pitch settle at the onset that gives the
-    /// "pop". A handful of short echoes add a little room, then peak-normalise
-    /// to -6 dBFS so it never sounds harsh.
+    /// Bubble voice: a near-sine (a whisper of 2nd harmonic for body) whose
+    /// pitch glides from FromHz to ToHz, fast at first then settling, which is
+    /// what makes a water-drop "bloop". 3 ms attack, quick exponential decay,
+    /// a few short echoes for a little room, then peak-normalise to -6 dBFS.
     /// </summary>
-    private static byte[] BuildChimeWav((double Hz, int StartMs, double Gain)[] notes, int totalMs) {
+    private static byte[] BuildBubbleWav((double FromHz, double ToHz, int StartMs, int DurMs, double Gain)[] bubbles, int totalMs) {
         const int sr = ChimeSampleRate;
-        (double Ratio, double Amp, double Decay)[] partials =
-            [(1.0, 1.0, 1.0), (2.0, 0.32, 0.55), (3.0, 0.10, 0.35), (4.07, 0.05, 0.25)];
-        const double tau = 0.16;
         int n = MsToSamples(totalMs, sr);
         var dry = new double[n];
-        int attack = MsToSamples(4, sr);
-        foreach (var note in notes) {
-            int start = MsToSamples(note.StartMs, sr);
-            foreach (var p in partials) {
-                double phase = 0;
-                for (int i = 0; start + i < n; i++) {
-                    double t = i / (double)sr;
-                    double glide = 1.0 - 0.06 * Math.Exp(-t / 0.012);
-                    phase += 2 * Math.PI * note.Hz * p.Ratio * glide / sr;
-                    double env = (i < attack ? i / (double)attack : 1.0) * Math.Exp(-t / (tau * p.Decay));
-                    dry[start + i] += Math.Sin(phase) * p.Amp * env * note.Gain;
-                }
+        int attack = MsToSamples(3, sr);
+        foreach (var b in bubbles) {
+            int start = MsToSamples(b.StartMs, sr);
+            double dur = b.DurMs / 1000.0;
+            double tau = dur / 3.2;
+            double phase = 0;
+            for (int i = 0; start + i < n; i++) {
+                double t = i / (double)sr;
+                double x = Math.Min(1.0, t / dur);
+                double hz = b.FromHz * Math.Pow(b.ToHz / b.FromHz, 1 - Math.Pow(1 - x, 2.2));
+                phase += 2 * Math.PI * hz / sr;
+                double env = (i < attack ? i / (double)attack : 1.0) * Math.Exp(-t / tau);
+                dry[start + i] += (Math.Sin(phase) + 0.12 * Math.Sin(2 * phase)) * env * b.Gain;
             }
         }
 
