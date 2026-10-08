@@ -198,6 +198,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkey.CancelRequested += OnCancelRequested;
 
         Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey VK=0x{_settings.HotkeyVk:X2}, askModelVk=0x{_settings.AskModelVk:X2}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateTo={_settings.TranslateTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating})");
+        StartupRegistration.Apply(_settings.StartWithWindows);
         // Stay in the tray on launch. Double-click the icon (or Open EchoType) to show the window.
         _ = WarmupAsync(); // alwaysReady: load the selected model at launch (mac applyPolicyAtLaunch)
     }
@@ -1815,6 +1816,17 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _settings.KeepTranscriptOnClipboard = value;
         _settings.Save();
         Log.Write("settings: keepTranscriptOnClipboard=" + value);
+        NotifyUi();
+    }
+
+    void IAppWindowHost.SetStartWithWindows(bool value) {
+        if (_settings.StartWithWindows == value) {
+            return;
+        }
+        _settings.StartWithWindows = value;
+        _settings.Save();
+        StartupRegistration.Apply(value);
+        Log.Write("settings: startWithWindows=" + value);
         NotifyUi();
     }
 

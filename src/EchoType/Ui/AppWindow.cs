@@ -32,6 +32,7 @@ internal interface IAppWindowHost {
     void SetTranslateLanguage(string code);
     void SetPressEnterAfterPaste(bool value);
     void SetKeepTranscriptOnClipboard(bool value);
+    void SetStartWithWindows(bool value);
     bool TrySetShortcut(AppShortcut shortcut, int vk);
     bool TrySetTranslateChord(HotkeyChord chord);
     void ToggleLoginWindow();
@@ -67,6 +68,7 @@ internal sealed class AppWindow : Form {
     private readonly HudToggleRow _muteToggle;
     private readonly HudToggleRow _enterToggle;
     private readonly HudToggleRow _clipboardToggle;
+    private readonly HudToggleRow _startupToggle;
     private readonly HudCommandList _commands;
     private readonly HudButton _editCommands;
     private readonly HudButton _openLog;
@@ -200,6 +202,8 @@ internal sealed class AppWindow : Form {
         _enterKey = AddHotkey(optionsCard, "Auto Enter shortcut", AppShortcut.PressEnter);
         _clipboardToggle = AddToggle(optionsCard, "Keep transcript on clipboard",
             toggle => _host.SetKeepTranscriptOnClipboard(toggle.Checked));
+        _startupToggle = AddToggle(optionsCard, "Start EchoType with Windows",
+            toggle => _host.SetStartWithWindows(toggle.Checked));
         FinishCard(optionsCard);
 
         var commandsCard = MakeCard();
@@ -379,6 +383,7 @@ internal sealed class AppWindow : Form {
             _muteToggle.SetSilent(s.MuteOtherAppsWhileDictating);
             _enterToggle.SetSilent(s.PressEnterAfterPaste);
             _clipboardToggle.SetSilent(s.KeepTranscriptOnClipboard);
+            _startupToggle.SetSilent(s.StartWithWindows);
             _dictationKey.Value = HotkeyNames.For(s.HotkeyVk);
             _askModelKey.Value = HotkeyLabel(s.AskModelVk);
             if (_capturing != _translateKey) {

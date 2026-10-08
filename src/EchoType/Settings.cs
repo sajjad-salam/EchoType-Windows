@@ -37,6 +37,10 @@ internal sealed class Settings {
     /// When true, press once to start and press the same key again to stop.
     /// Applies to dictation, selection rewrite, Ask model, and custom commands.
     /// </summary>
+    /// <summary>Launch EchoType automatically when the user signs in to Windows.</summary>
+    [JsonPropertyName("startWithWindows")]
+    public bool StartWithWindows { get; set; } = true;
+
     [JsonPropertyName("toggleRecording")]
     public bool ToggleRecording { get; set; }
 
