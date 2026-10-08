@@ -24,6 +24,10 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2792.45" GeneratePathProperty="true" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\Sounds\*.wav" LogicalName="EchoType.Sounds.%(Filename)%(Extension)" />
+  </ItemGroup>
+
   <!-- Single-file publish swallows the RID-native WebView2Loader.dll into the bundle.
        Microsoft.Web.WebView2.Core then DllImports it from the exe directory (not the
        extract dir), so GetAvailableBrowserVersionString fails even when Evergreen is

@@ -1,12 +1,11 @@
 namespace EchoType;
 
 /// <summary>
-/// Feedback sounds. Start and done are soft "bubble" pops in the spirit of the
-/// claude.ai dictation sounds: a rounded tone whose pitch glides up when the
-/// mic opens and back down when the text lands. They are synthesised here
-/// rather than shipped as files, so there is nothing to lose from the bundle.
-/// Dropping a <c>start.wav</c> or <c>done.wav</c> into
-/// <c>%APPDATA%\EchoType\Sounds</c> replaces the matching sound.
+/// Feedback sounds. Start and done are the start and stop clicks of a
+/// stopwatch (Pixabay, "start stop stopwatch" by spinopel, Pixabay Content
+/// License), embedded from Assets/Sounds. If a resource is missing, a soft
+/// synthesised bubble pop plays instead. Dropping a <c>start.wav</c> or
+/// <c>done.wav</c> into <c>%APPDATA%\EchoType\Sounds</c> replaces the matching sound.
 /// </summary>
 internal static class Sounds {
     private const int ChimeSampleRate = 44100;
@@ -14,9 +13,9 @@ internal static class Sounds {
     private static string CustomDir { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "EchoType", "Sounds");
 
-    private static readonly Lazy<byte[]?> StartWav = new(() => TryLoadCustom("start.wav") ?? TryBuild(
+    private static readonly Lazy<byte[]?> StartWav = new(() => TryLoadCustom("start.wav") ?? TryLoadEmbedded("start.wav") ?? TryBuild(
         [(420.0, 760.0, 0, 95, 0.7), (640.0, 1040.0, 70, 120, 1.0)], 380));
-    private static readonly Lazy<byte[]?> DoneWav = new(() => TryLoadCustom("done.wav") ?? TryBuild(
+    private static readonly Lazy<byte[]?> DoneWav = new(() => TryLoadCustom("done.wav") ?? TryLoadEmbedded("done.wav") ?? TryBuild(
         [(1040.0, 640.0, 0, 95, 0.8), (760.0, 420.0, 70, 140, 1.0)], 400));
 
     private static System.Media.SoundPlayer? _chimePlayer;
@@ -59,6 +58,20 @@ internal static class Sounds {
             return wav;
         } catch (Exception ex) {
             Log.Write("sounds: custom " + name + " unreadable: " + ex.Message);
+            return null;
+        }
+    }
+
+    private static byte[]? TryLoadEmbedded(string name) {
+        try {
+            using var stream = typeof(Sounds).Assembly.GetManifestResourceStream("EchoType.Sounds." + name);
+            if (stream == null) {
+                return null;
+            }
+            using var ms = new MemoryStream();
+            stream.CopyTo(ms);
+            return ms.ToArray();
+        } catch {
             return null;
         }
     }
