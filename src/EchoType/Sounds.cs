@@ -5,13 +5,18 @@ namespace EchoType;
 /// the mic opens, the same fifth falling when the text lands) in the spirit of
 /// the macOS dictation sounds. They are synthesised here rather than shipped as
 /// files, so there is nothing to license and nothing to lose from the bundle.
+/// Dropping a <c>start.wav</c> or <c>done.wav</c> into
+/// <c>%APPDATA%\EchoType\Sounds</c> replaces the matching chime.
 /// </summary>
 internal static class Sounds {
     private const int ChimeSampleRate = 44100;
 
-    private static readonly Lazy<byte[]?> StartWav = new(() => TryBuild(
+    private static string CustomDir { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "EchoType", "Sounds");
+
+    private static readonly Lazy<byte[]?> StartWav = new(() => TryLoadCustom("start.wav") ?? TryBuild(
         [(880.0, 0, 0.8), (1318.51, 75, 1.0)], 520));
-    private static readonly Lazy<byte[]?> DoneWav = new(() => TryBuild(
+    private static readonly Lazy<byte[]?> DoneWav = new(() => TryLoadCustom("done.wav") ?? TryBuild(
         [(1318.51, 0, 0.8), (880.0, 75, 1.0)], 560));
 
     private static System.Media.SoundPlayer? _chimePlayer;
@@ -40,6 +45,21 @@ internal static class Sounds {
             _chimePlayer.Play();
         } catch {
             fallback.Play();
+        }
+    }
+
+    private static byte[]? TryLoadCustom(string name) {
+        string path = Path.Combine(CustomDir, name);
+        try {
+            if (!File.Exists(path)) {
+                return null;
+            }
+            byte[] wav = File.ReadAllBytes(path);
+            Log.Write("sounds: using custom " + path);
+            return wav;
+        } catch (Exception ex) {
+            Log.Write("sounds: custom " + name + " unreadable: " + ex.Message);
+            return null;
         }
     }
 
