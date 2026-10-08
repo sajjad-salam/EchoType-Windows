@@ -2,8 +2,8 @@ namespace EchoType;
 
 /// <summary>
 /// Feedback sounds. Start and done are the start and stop clicks of a
-/// stopwatch (Pixabay, "start stop stopwatch" by spinopel, Pixabay Content
-/// License), embedded from Assets/Sounds. If a resource is missing, a soft
+/// stopwatch ("stopwatch start stop, no ticks" by Nicholas Judy), embedded
+/// from Assets/Sounds. If a resource is missing, a soft
 /// synthesised bubble pop plays instead. Dropping a <c>start.wav</c> or
 /// <c>done.wav</c> into <c>%APPDATA%\EchoType\Sounds</c> replaces the matching sound.
 /// </summary>
