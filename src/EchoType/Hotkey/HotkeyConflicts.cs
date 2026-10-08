@@ -43,6 +43,11 @@ internal static class HotkeyConflicts {
                 ? "That key already switches to Gemini."
                 : "That shortcut uses the Gemini switch key.";
         }
+        if (ConflictsWithReserved(chord, settings.ClaudeSwitchVk, ignoreVks)) {
+            return chord.Count == 1
+                ? "That key already switches to Claude."
+                : "That shortcut uses the Claude switch key.";
+        }
         if (ConflictsWithReserved(chord, settings.AskModelVk, ignoreVks)) {
             return chord.Count == 1
                 ? "That key is already the Ask model shortcut."

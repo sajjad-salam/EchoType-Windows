@@ -4,4 +4,5 @@ namespace EchoType;
 internal enum TranscriptionProvider {
     ChatGpt,
     Gemini,
+    Claude,
 }

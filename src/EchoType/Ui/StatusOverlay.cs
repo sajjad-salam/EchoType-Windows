@@ -14,7 +14,8 @@ internal enum OverlayKind {
 
 /// <summary>
 /// Always-on-top HUD that slides up from the taskbar: a live voice wave while
-/// dictating, and short notices that replace Windows balloon tips.
+/// dictating (plus the words so far, for models that stream a live transcript),
+/// and short notices that replace Windows balloon tips.
 /// </summary>
 internal sealed class StatusOverlay : Form {
 
@@ -34,6 +35,8 @@ internal sealed class StatusOverlay : Form {
     private const int ListenWidthDip = 348;
     private const int ListenHeightDip = 62;
     private const int NoticeWidthDip = 400;
+    private const int LiveWidthDip = 440;
+    private const int LiveMaxLines = 3;
     private const int BarCount = 32;
     private const int TimerMs = 16;
     private const int NoticeHoldMs = 3400;
@@ -47,12 +50,16 @@ internal sealed class StatusOverlay : Form {
     private readonly Font _titleFont;
     private readonly Font _bodyFont;
     private readonly Font _listenFont;
+    private readonly Font _liveFont;
 
     private Mode _mode = Mode.Hidden;
     private Motion _motion = Motion.Idle;
     private Func<float>? _level;
     private string _title = "EchoType";
     private string _body = "";
+    private string _live = "";
+    private string _liveShown = "";
+    private bool _liveRtl;
     private OverlayKind _kind = OverlayKind.Info;
     private Rectangle _pill;
     private float _progress;
@@ -74,10 +81,43 @@ internal sealed class StatusOverlay : Form {
             hud._level = level;
             hud._title = "Listening";
             hud._body = string.IsNullOrWhiteSpace(modelName) ? "" : modelName.Trim();
+            hud._live = "";
+            hud._liveShown = "";
             hud._kind = OverlayKind.Info;
             hud.Present(Mode.Listening);
         } catch (Exception ex) {
             Log.Write("hud: listening failed: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Shows the transcript streamed so far under the Listening wave. The pill grows
+    /// to fit the last few lines; empty text collapses it back.
+    /// </summary>
+    public static void SetLiveTranscript(string text) {
+        try {
+            if (_instance is not { IsDisposed: false } hud || hud._mode != Mode.Listening) {
+                return;
+            }
+            text = (text ?? "").Trim();
+            if (text == hud._live) {
+                return;
+            }
+            bool hadLive = hud._live.Length > 0;
+            hud._live = text;
+            int oldHeight = hud._targetHeight;
+            int oldWidth = hud._targetWidth;
+            hud.MeasureLayout();
+            if (hud._targetHeight != oldHeight || hud._targetWidth != oldWidth || hadLive != text.Length > 0) {
+                hud.PlaceAnchor();
+                hud.Size = new Size(hud._targetWidth, hud._targetHeight);
+                if (hud._motion == Motion.Idle) {
+                    hud.Location = new Point(hud._restX, hud._restY);
+                }
+            }
+            hud.PaintFrame();
+        } catch (Exception ex) {
+            Log.Write("hud: live transcript failed: " + ex.Message);
         }
     }
 
@@ -141,6 +181,7 @@ internal sealed class StatusOverlay : Form {
         _ = Handle;
 
         _listenFont = HudTheme.Font(11.5f, FontStyle.Bold);
+        _liveFont = HudTheme.Font(10.5f);
         _titleFont = HudTheme.Font(10.5f, FontStyle.Bold);
         _bodyFont = HudTheme.Font(10f);
 
@@ -180,6 +221,7 @@ internal sealed class StatusOverlay : Form {
             _tick.Stop();
             _tick.Dispose();
             _listenFont.Dispose();
+            _liveFont.Dispose();
             _titleFont.Dispose();
             _bodyFont.Dispose();
             _canvas?.Dispose();
@@ -291,8 +333,16 @@ internal sealed class StatusOverlay : Form {
     private void MeasureLayout() {
         int shadow = Dip(ShadowDip);
         if (_mode == Mode.Listening) {
-            int w = Dip(ListenWidthDip);
+            int w = Dip(_live.Length > 0 ? LiveWidthDip : ListenWidthDip);
             int h = Dip(ListenHeightDip);
+            _liveShown = "";
+            if (_live.Length > 0) {
+                int textW = w - Dip(44);
+                _liveRtl = StartsRightToLeft(_live);
+                _liveShown = TailThatFits(_live, textW);
+                Size size = TextRenderer.MeasureText(_liveShown, _liveFont, new Size(textW, Dip(400)), LiveFlags());
+                h += size.Height + Dip(12);
+            }
             _targetWidth = w + shadow * 2;
             _targetHeight = h + shadow * 2;
             _pill = new Rectangle(shadow, shadow, w, h);
@@ -327,6 +377,44 @@ internal sealed class StatusOverlay : Form {
             _restY = area.Bottom - _targetHeight + Dip(6);
             _hiddenY = bounds.Bottom - Dip(ShadowDip) + Dip(4);
         }
+    }
+
+    private TextFormatFlags LiveFlags() =>
+        TextFormatFlags.WordBreak | TextFormatFlags.NoPadding
+        | (_liveRtl ? TextFormatFlags.RightToLeft | TextFormatFlags.Right : TextFormatFlags.Left);
+
+    /// <summary>The latest words of <paramref name="text"/> that fit in <see cref="LiveMaxLines"/> lines.</summary>
+    private string TailThatFits(string text, int width) {
+        int lineHeight = TextRenderer.MeasureText("Ag", _liveFont, new Size(width, Dip(400)), LiveFlags()).Height;
+        int maxHeight = lineHeight * LiveMaxLines + 2;
+        var proposed = new Size(width, Dip(800));
+        if (TextRenderer.MeasureText(text, _liveFont, proposed, LiveFlags()).Height <= maxHeight) {
+            return text;
+        }
+        // Drop words from the front until the tail fits; start near the end so long
+        // dictations stay cheap.
+        string[] words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        int start = Math.Max(0, words.Length - 60);
+        string candidate = text;
+        for (; start < words.Length; start++) {
+            candidate = "… " + string.Join(' ', words, start, words.Length - start);
+            if (TextRenderer.MeasureText(candidate, _liveFont, proposed, LiveFlags()).Height <= maxHeight) {
+                return candidate;
+            }
+        }
+        return candidate;
+    }
+
+    private static bool StartsRightToLeft(string text) {
+        foreach (char c in text) {
+            if (c is >= '\u0590' and <= '\u08FF' or >= '\uFB1D' and <= '\uFEFC') {
+                return true;
+            }
+            if (char.IsLetter(c)) {
+                return false;
+            }
+        }
+        return false;
     }
 
     private void StepWave() {
@@ -369,6 +457,24 @@ internal sealed class StatusOverlay : Form {
     }
 
     private void DrawListening(Graphics g, Rectangle pill) {
+        if (_liveShown.Length > 0) {
+            var header = new Rectangle(pill.Left, pill.Top, pill.Width, Dip(ListenHeightDip));
+            DrawListeningHeader(g, header);
+            using (var rule = new Pen(Color.FromArgb(40, 255, 255, 255))) {
+                g.DrawLine(rule, pill.Left + Dip(18), header.Bottom - Dip(4), pill.Right - Dip(18), header.Bottom - Dip(4));
+            }
+            var textRect = new Rectangle(
+                pill.Left + Dip(22),
+                header.Bottom + Dip(2),
+                pill.Width - Dip(44),
+                pill.Bottom - header.Bottom - Dip(10));
+            TextRenderer.DrawText(g, _liveShown, _liveFont, textRect, HudTheme.Body, LiveFlags());
+            return;
+        }
+        DrawListeningHeader(g, pill);
+    }
+
+    private void DrawListeningHeader(Graphics g, Rectangle pill) {
         int pad = Dip(18);
         int cx = pill.Left + pad + Dip(5);
         int cy = pill.Top + pill.Height / 2;

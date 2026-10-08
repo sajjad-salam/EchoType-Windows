@@ -40,6 +40,23 @@ internal sealed class ChatSite {
         ],
     };
 
-    public static ChatSite For(TranscriptionProvider provider) =>
-        provider == TranscriptionProvider.Gemini ? Gemini : ChatGpt;
+    public static ChatSite Claude { get; } = new() {
+        Id = "claude",
+        DisplayName = "Claude",
+        ChatUrl = "https://claude.ai/new",
+        ProfileFolder = "WebView2-Claude",
+        LoginTitle = "EchoType — Claude Login",
+        SelectorSet = ClaudeSelectors.Claude,
+        MicHosts = ["claude.ai", "anthropic.com"],
+        StayOnHosts = [
+            "claude.ai", "anthropic.com", "claudeusercontent.com", "google.com",
+            "accounts.google.com", "apple.com", "gstatic.com", "googleapis.com",
+        ],
+    };
+
+    public static ChatSite For(TranscriptionProvider provider) => provider switch {
+        TranscriptionProvider.Gemini => Gemini,
+        TranscriptionProvider.Claude => Claude,
+        _ => ChatGpt,
+    };
 }
