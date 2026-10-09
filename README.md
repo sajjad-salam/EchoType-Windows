@@ -13,6 +13,8 @@ If you **select text first**, then record an instruction, EchoType sends the sel
 
 **Auto Clean (two windows, two models).** EchoType can keep two hidden web windows open at once: one model transcribes (e.g. Claude) and a second, independent model cleans (e.g. ChatGPT). Turn **Auto Clean dictation** on in the window or tray and plain dictation is sent to the cleaning model with a filler-removal prompt (editable via `autoCleanPrompt` in `config.json`) before it is pasted; if cleaning fails, the raw transcript is pasted. The cleaning model also runs custom commands, Ask model and selection rewrites, so they never wait on the transcription window. Pick it under **Auto Clean** in the window or **Cleaning model** in the tray, and log in to it once with **Open … window**.
 
+**Word replacements (dialect).** Under **Word replacements** in the window (or tray → **Word replacements…**) add your own fixes, one word per row: what the model writes → what you want pasted, e.g. `نقول` → `نكول` for Iraqi dialect. They are applied to every transcript (whole words only) before it is pasted or sent anywhere, and again to Auto Clean's reply, without needing Auto Clean. Saved as `wordReplacements` in `config.json`.
+
 Pick **ChatGPT**, **Gemini** or **Claude** from the window or the tray menu, or assign tap shortcuts to switch between them. Each model has its own login session. Custom-command prompts are shared by all of them and always use whichever model is selected.
 
 **Claude shows a live transcript.** claude.ai writes your words into its prompt box while you are still speaking, so with Claude selected the Listening HUD grows to show the latest few lines as they arrive. When you stop recording, EchoType waits for Claude's final text and pastes that.
