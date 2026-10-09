@@ -797,6 +797,23 @@ internal sealed class DictationDriver {
             assistantKey: E.assistantTurnKey(),
             images: E.lastAssistantImages()
           });
+          E.replyDiag = () => {
+            const per = (sels) => (sels || []).map(function (q) {
+              try { return q + '=' + deepQueryAll(q).length; } catch (e) { return q + '=err'; }
+            }).join(' | ');
+            const m = document.querySelector('main') || document.body;
+            const txt = E.cleanText((m && (m.innerText || m.textContent)) || '');
+            return JSON.stringify({
+              url: location.href,
+              vis: document.visibilityState,
+              focus: document.hasFocus(),
+              win: window.innerWidth + 'x' + window.innerHeight,
+              assistant: per(S.assistant),
+              user: per(S.user),
+              generating: E.isGenerating(),
+              tail: txt.slice(-300)
+            });
+          };
           E.micListening = () => {
             const b = E.findCss(S.startCss) || E.findButton(S.start, true);
             if (!b) return false;
@@ -1800,6 +1817,15 @@ internal sealed class DictationDriver {
         return text is "undefined" or "null" ? "" : text;
     }
 
+    private async Task LogReplyDiagAsync(string why) {
+        try {
+            string d = await EvalAsync("__echotype.replyDiag()");
+            Log.Write("driver: reply diag (" + why + ") " + d);
+        } catch (Exception ex) {
+            Log.Write("driver: reply diag failed: " + ex.Message);
+        }
+    }
+
     public async Task<ModelReply> LastAssistantReplyAsync() {
         var st = await ReadReplyStateAsync();
         return st?.Reply ?? ModelReply.Empty;
@@ -1974,6 +2000,7 @@ internal sealed class DictationDriver {
                 if (!loggedThinking) {
                     loggedThinking = true;
                     Log.Write("driver: prompt sent, waiting for a reply without a visible spinner");
+                    await LogReplyDiagAsync("no spinner");
                 }
             }
             if (DateTime.UtcNow > deadline) {
@@ -1981,6 +2008,7 @@ internal sealed class DictationDriver {
                 if (sawNewContent && !landed.IsEmpty) {
                     return landed;
                 }
+                await LogReplyDiagAsync("never settled");
                 throw new DriverException(DriverFailure.Timeout, "the model reply never settled");
             }
             await Task.Delay(300);
