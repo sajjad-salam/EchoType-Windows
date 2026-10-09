@@ -115,7 +115,7 @@ internal sealed class Settings {
     [JsonPropertyName("autoClean")]
     public bool AutoClean { get; set; }
 
-    /// <summary>"chatgpt", "gemini" or "claude". Runs Auto Clean, custom commands, Ask model and selection rewrites.</summary>
+    /// <summary>"chatgpt", "gemini" or "claude". Runs Auto Clean, custom commands and selection rewrites (Ask model uses the transcription model).</summary>
     [JsonPropertyName("cleanProvider")]
     public string CleanProviderName { get; set; } = "chatgpt";
 

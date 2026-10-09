@@ -159,6 +159,12 @@ internal sealed class ChatGPTWebController : IDisposable {
 
     public ChatSite Site => _site;
 
+    /// <summary>Successful prompt sends in this window's current ChatGPT thread.</summary>
+    public int ChatThreadSends { get; set; }
+
+    /// <summary>True after a failed send so the next prompt opens a new ChatGPT chat.</summary>
+    public bool ForceNewChatThread { get; set; }
+
     /// <summary>Swap chatgpt.com / gemini.google.com. Cookies stay in each profile folder.</summary>
     public void SwitchSite(ChatSite site) {
         if (site.Id == _site.Id) {
@@ -170,6 +176,8 @@ internal sealed class ChatGPTWebController : IDisposable {
         _ensureTask = null; // don't reuse the previous model's in-flight load
         _site = site;
         _form.Text = _site.LoginTitle;
+        ChatThreadSends = 0;
+        ForceNewChatThread = false;
     }
 
     /// <summary>True once a webview exists to start dictation on (decides Waking vs Engaging).</summary>

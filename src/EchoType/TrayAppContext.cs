@@ -57,8 +57,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private readonly Settings _settings;
     private readonly ChatGPTWebController _web;
     /// <summary>
-    /// Second hidden window that runs Auto Clean, custom commands, Ask model and selection
-    /// rewrites so dictation and cleaning never wait on each other. Null when the cleaning
+    /// Second hidden window that runs Auto Clean, custom commands and selection rewrites
+    /// so dictation and cleaning never wait on each other (Ask model stays on
+    /// <see cref="_web"/>). Null when the cleaning
     /// model is the same as the transcription model (then <see cref="_web"/> does both).
     /// </summary>
     private ChatGPTWebController? _cleanWeb;
@@ -97,8 +98,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private CancellationTokenSource? _listenWatchCts;
     private CancellationTokenSource? _micLevelCts;
     private int _listenFinishGate;
-    private int _chatgptThreadSends;
-    private bool _chatgptForceNewThread;
     private int _warmupEpoch;
 
     public TrayAppContext() {
@@ -267,8 +266,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             _cleanWeb.SwitchSite(ChatSite.For(provider));
             _ = WarmupCleanAsync();
         }
-        _chatgptThreadSends = 0;
-        _chatgptForceNewThread = false;
         SyncCleanMenu();
         NotifyUi();
     }
@@ -864,8 +861,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 Log.Write(logLabel + ": reply has " + reply.Images.Count + " image(s)");
                 byte[]? imageBytes = null;
                 try {
-                    if (Gen.Driver != null) {
-                        imageBytes = await Gen.Driver.DownloadBestAssistantImageAsync(reply);
+                    if (ReplyWeb.Driver != null) {
+                        imageBytes = await ReplyWeb.Driver.DownloadBestAssistantImageAsync(reply);
                     }
                 } catch (Exception ex) {
                     Log.Write(logLabel + ": image download failed: " + ex.Message);
@@ -888,7 +885,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 Sounds.Error();
                 CopyTranscript(transcript);
                 ShowBalloon(
-                    Gen.Site.DisplayName + " returned an empty reply. Transcript copied to clipboard.",
+                    ReplyWeb.Site.DisplayName + " returned an empty reply. Transcript copied to clipboard.",
                     OverlayKind.Error);
                 ResetToIdle();
                 return;
@@ -901,8 +898,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 return;
             }
             try {
-                if (Gen.Driver != null) {
-                    await Gen.Driver.ClearComposerAsync();
+                if (ReplyWeb.Driver != null) {
+                    await ReplyWeb.Driver.ClearComposerAsync();
                 }
             } catch { /* best effort */ }
             if (IsLive(session)) {
@@ -1075,10 +1072,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     /// in a new chat, then the page is refreshed as a last fallback.
     /// </summary>
     private async Task<ModelReply> RequestCommandReplyAsync(string message, int session) {
-        if (_cleanWeb != null) {
+        if (!ReferenceEquals(ReplyWeb, _web)) {
             // The cleaning window is never touched by dictation, so make sure its page is
             // loaded and signed in (it may have been reloaded or navigated since warmup).
-            var ready = await _cleanWeb.EnsureReadyAsync();
+            var ready = await ReplyWeb.EnsureReadyAsync();
             if (!IsLive(session)) {
                 return ModelReply.Empty;
             }
@@ -1113,7 +1110,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return ModelReply.Empty;
         }
         Log.Write("command: retrying in a new chat");
-        ShowBalloon(Gen.Site.DisplayName + " is slow — retrying in a new chat…", OverlayKind.Warning);
+        ShowBalloon(ReplyWeb.Site.DisplayName + " is slow — retrying in a new chat…", OverlayKind.Warning);
         try {
             ModelReply reply = await SendCommandOnceAsync(message, startNewChat: true, firstByteTimeout);
             if (!IsLive(session)) {
@@ -1136,9 +1133,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (!IsLive(session)) {
             return ModelReply.Empty;
         }
-        Log.Write("command: refreshing " + Gen.Site.DisplayName + " and retrying");
-        ShowBalloon("Still waiting — refreshing " + Gen.Site.DisplayName + " and retrying…", OverlayKind.Warning);
-        var outcome = await Gen.RefreshChatAsync();
+        Log.Write("command: refreshing " + ReplyWeb.Site.DisplayName + " and retrying");
+        ShowBalloon("Still waiting — refreshing " + ReplyWeb.Site.DisplayName + " and retrying…", OverlayKind.Warning);
+        var outcome = await ReplyWeb.RefreshChatAsync();
         if (!IsLive(session)) {
             return ModelReply.Empty;
         }
@@ -1158,7 +1155,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         string message,
         bool startNewChat,
         TimeSpan firstByteTimeout) {
-        var driver = Gen.Driver
+        var driver = ReplyWeb.Driver
             ?? throw new DriverException(DriverFailure.NotReady, "no driver");
         driver.InvalidateWaits();
         if (startNewChat) {
@@ -1205,15 +1202,16 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (!IsChatGptSite) {
             return true;
         }
-        if (_chatgptForceNewThread) {
+        var web = ReplyWeb;
+        if (web.ForceNewChatThread) {
             Log.Write("command: ChatGPT thread needs a new chat after an error");
             return true;
         }
-        if (_chatgptThreadSends >= ChatGptThreadReuseLimit) {
+        if (web.ChatThreadSends >= ChatGptThreadReuseLimit) {
             Log.Write("command: ChatGPT thread reached " + ChatGptThreadReuseLimit + " sends, opening a new chat");
             return true;
         }
-        Log.Write("command: reusing ChatGPT thread (" + (_chatgptThreadSends + 1) + "/" + ChatGptThreadReuseLimit + ")");
+        Log.Write("command: reusing ChatGPT thread (" + (web.ChatThreadSends + 1) + "/" + ChatGptThreadReuseLimit + ")");
         return false;
     }
 
@@ -1221,21 +1219,28 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (!IsChatGptSite) {
             return;
         }
-        _chatgptForceNewThread = false;
-        _chatgptThreadSends = openedNewChat ? 1 : _chatgptThreadSends + 1;
+        var web = ReplyWeb;
+        web.ForceNewChatThread = false;
+        web.ChatThreadSends = openedNewChat ? 1 : web.ChatThreadSends + 1;
     }
 
     private void MarkChatGptThreadFailed() {
         if (!IsChatGptSite) {
             return;
         }
-        _chatgptForceNewThread = true;
+        ReplyWeb.ForceNewChatThread = true;
     }
 
-    /// <summary>Window that generates replies (cleaning model).</summary>
+    /// <summary>Cleaning-model window: Auto Clean, custom commands and selection rewrites.</summary>
     private ChatGPTWebController Gen => _cleanWeb ?? _web;
 
-    private bool IsChatGptSite => Gen.Site.Id == ChatSite.ChatGpt.Id;
+    /// <summary>
+    /// Window that answers the current session. Ask model uses the transcription model;
+    /// everything else goes to the cleaning model.
+    /// </summary>
+    private ChatGPTWebController ReplyWeb => _askModel ? _web : Gen;
+
+    private bool IsChatGptSite => ReplyWeb.Site.Id == ChatSite.ChatGpt.Id;
 
     private static bool IsCommandRetryable(DriverException ex) =>
         ex.Kind is DriverFailure.Timeout or DriverFailure.ButtonNotFound
@@ -1266,12 +1271,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         // Cancel leaves ChatGPT/Gemini's mic UI wedged often enough that the next
         // recording does not start until a later self-heal reload. Reload now so
         // the next hotkey waits on a fresh page instead of clicking a stuck mic.
-        if (_cleanWeb == null || !wasGenerating) {
-            _web.ReloadAfterCancel();
-        }
-        if (_cleanWeb != null && wasGenerating) {
-            _cleanWeb.ReloadAfterCancel();
-        }
+        (wasGenerating ? ReplyWeb : _web).ReloadAfterCancel();
         ResetToIdle();
         return Task.CompletedTask;
     }
@@ -1281,7 +1281,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     // ------------------------------------------------------------------
 
     private void HandleFailure(DriverException ex, string? transcriptToCopy = null) {
-        var web = _phase == AppPhase.Generating ? Gen : _web;
+        var web = _phase == AppPhase.Generating ? ReplyWeb : _web;
         string message;
         switch (ex.Kind) {
             case DriverFailure.LoggedOut:
