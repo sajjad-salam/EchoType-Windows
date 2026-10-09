@@ -1000,10 +1000,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             translated, keepTranscriptOnClipboard: true, _settings.PressEnterAfterPaste, _pasteTarget);
         switch (result.Outcome) {
             case Paster.Outcome.Pasted:
+                // The original transcript was copied first; the translation stays last on the
+                // clipboard so a later Ctrl+V pastes the translation, not the original.
                 Sounds.Pasted();
-                if (_settings.KeepTranscriptOnClipboard) {
-                    Paster.CopyLater(transcript);
-                }
                 break;
             case Paster.Outcome.CopiedToClipboard:
                 Log.Write("translate: no editable field focused, left translation on clipboard");
