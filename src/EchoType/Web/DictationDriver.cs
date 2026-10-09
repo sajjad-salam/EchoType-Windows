@@ -372,8 +372,38 @@ internal sealed class DictationDriver {
             }
             return out;
           };
+          // ChatGPT sometimes ships a DOM without data-message-author-role / data-turn.
+          // Every turn still carries a screen-reader heading ("You said:" /
+          // "ChatGPT said:"), so fall back to the element that heading labels.
+          E.turnLabelRe = /^(you said|chatgpt said|قلت|قال chatgpt)\s*:?$/i;
+          E.stripTurnLabel = (t) => String(t || '').replace(/^\s*(#{1,6}\s*)?(you said|chatgpt said|قلت|قال chatgpt)\s*:\s*/i, '').trim();
+          E.labelledTurns = (role) => {
+            const want = role === 'user' ? /^(you said|قلت)/i : /^(chatgpt said|قال chatgpt)/i;
+            const labels = [];
+            for (const el of deepQueryAll('h1,h2,h3,h4,h5,h6,.sr-only,[class*="sr-only"]')) {
+              const t = E.cleanText(el.textContent);
+              if (E.turnLabelRe.test(t)) labels.push(el);
+            }
+            const countLabels = (root) => labels.filter(l => root.contains(l)).length;
+            const out = [];
+            for (const h of labels) {
+              if (!want.test(E.cleanText(h.textContent))) continue;
+              let p = h.parentElement;
+              while (p && !E.stripTurnLabel(E.cleanText(p.textContent))) p = p.parentElement;
+              if (!p) continue;
+              if (countLabels(p) > 1) {
+                p = h.nextElementSibling;
+                if (!p) continue;
+              }
+              if (!out.includes(p)) out.push(p);
+            }
+            return out;
+          };
           E.messageNodes = (sels) => {
             const nodes = E.queryAll(sels);
+            if (nodes.length === 0 && (sels === S.assistant || sels === S.user)) {
+              return E.labelledTurns(sels === S.user ? 'user' : 'assistant');
+            }
             return nodes.filter(n => !nodes.some(o => o !== n && o.contains(n)));
           };
           E.messageText = (el) => {
@@ -386,10 +416,10 @@ internal sealed class DictationDriver {
             }
             const target = md || el;
             try {
-              const converted = E.toMarkdown(target).replace(/[\u200b\u200c\u200d\ufeff]/g, '').trim();
+              const converted = E.stripTurnLabel(E.toMarkdown(target).replace(/[\u200b\u200c\u200d\ufeff]/g, '').trim());
               if (converted) return converted;
             } catch (e) {}
-            return E.elementText(target);
+            return E.stripTurnLabel(E.elementText(target));
           };
           E.isConversationTitle = (t) => {
             t = E.cleanText(t);
@@ -773,7 +803,7 @@ internal sealed class DictationDriver {
           E.lastUserText = () => {
             const nodes = E.messageNodes(S.user);
             for (let i = nodes.length - 1; i >= 0; i--) {
-              const t = E.elementText(nodes[i]);
+              const t = E.stripTurnLabel(E.elementText(nodes[i]));
               if (t) return t;
             }
             return '';
