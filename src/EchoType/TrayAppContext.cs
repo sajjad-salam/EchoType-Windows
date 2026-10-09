@@ -33,6 +33,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     /// retried within a minute instead of sitting idle.
     /// </summary>
     private const double MaxChatGptFirstReplySeconds = 60;
+    private static readonly TimeSpan AutoCleanMaxWait = TimeSpan.FromSeconds(60);
 
     private readonly NotifyIcon _tray;
     private readonly ToolStripMenuItem _loginItem;
@@ -740,21 +741,28 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         Log.Write("auto-clean: sending " + message.Length + " chars to " + Gen.Site.DisplayName);
         string? cleaned = null;
         try {
-            ModelReply reply = await RequestCommandReplyAsync(message, session);
-            if (!IsLive(session)) {
-                return;
-            }
-            if (reply.Text.Length > 0 && !ReplyIsPromptEcho(reply.Text, message, transcript)) {
-                cleaned = reply.Text;
+            // Hard cap so a stuck cleaning page can never block the paste: after this
+            // long the raw transcript is pasted instead.
+            Task<ModelReply> work = RequestCommandReplyAsync(message, session);
+            Task finished = await Task.WhenAny(work, Task.Delay(AutoCleanMaxWait));
+            if (finished != work) {
+                Log.Write("auto-clean: no reply within " + (int)AutoCleanMaxWait.TotalSeconds + "s, giving up");
+                try { Gen.Driver?.InvalidateWaits(); } catch { /* best effort */ }
+                _ = work.ContinueWith(t => _ = t.Exception, TaskScheduler.Default); // observe late errors
+            } else {
+                ModelReply reply = await work;
+                // Not an echo check: already-clean dictation legitimately comes back unchanged.
+                if (reply.Text.Length > 0) {
+                    cleaned = reply.Text;
+                }
             }
         } catch (DriverException ex) {
-            if (!IsLive(session)) {
-                return;
-            }
             Log.Write("auto-clean: failed (" + ex.Kind + ": " + ex.Message + ")");
-            if (ex.Kind == DriverFailure.LoggedOut) {
+            if (ex.Kind == DriverFailure.LoggedOut && IsLive(session)) {
                 Gen.ShowLoginWindow();
             }
+        } catch (Exception ex) {
+            Log.Write("auto-clean: unexpected " + ex.GetType().Name + ": " + ex.Message);
         }
         if (!IsLive(session)) {
             return;
@@ -869,6 +877,14 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             if (IsLive(session)) {
                 HandleFailure(ex, transcript);
             }
+        } catch (Exception ex) when (ex is not DriverException) {
+            // Anything unexpected (WebView2 COM errors, disposed page…) must not leave the
+            // app stuck in "Generating" with nothing pasted.
+            if (!IsLive(session)) {
+                return;
+            }
+            Log.Write(logLabel + ": unexpected " + ex.GetType().Name + ": " + ex.Message);
+            HandleFailure(new DriverException(DriverFailure.JavaScript, ex.Message), transcript);
         }
     }
 
@@ -1028,6 +1044,17 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     /// in a new chat, then the page is refreshed as a last fallback.
     /// </summary>
     private async Task<ModelReply> RequestCommandReplyAsync(string message, int session) {
+        if (_cleanWeb != null) {
+            // The cleaning window is never touched by dictation, so make sure its page is
+            // loaded and signed in (it may have been reloaded or navigated since warmup).
+            var ready = await _cleanWeb.EnsureReadyAsync();
+            if (!IsLive(session)) {
+                return ModelReply.Empty;
+            }
+            if (ready != ReadyOutcome.Ready) {
+                throw ToDriverException(ready);
+            }
+        }
         TimeSpan firstByteTimeout = CommandFirstByteTimeout();
         Log.Write("command: waiting up to " + ((int)firstByteTimeout.TotalSeconds)
             + "s for a reply (recording " + HeldSeconds().ToString("0.0") + "s)");
