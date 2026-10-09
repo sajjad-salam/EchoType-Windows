@@ -104,6 +104,40 @@ internal sealed class Settings {
     [JsonPropertyName("transcriptionProvider")]
     public string TranscriptionProviderName { get; set; } = "chatgpt";
 
+    /// <summary>
+    /// When true, plain dictation is sent to the cleaning model (<see cref="CleanProvider"/>)
+    /// with <see cref="AutoCleanPrompt"/> and the cleaned text is pasted instead of the raw transcript.
+    /// </summary>
+    [JsonPropertyName("autoClean")]
+    public bool AutoClean { get; set; }
+
+    /// <summary>"chatgpt", "gemini" or "claude". Runs Auto Clean, custom commands, Ask model and selection rewrites.</summary>
+    [JsonPropertyName("cleanProvider")]
+    public string CleanProviderName { get; set; } = "chatgpt";
+
+    public const string DefaultAutoCleanPrompt =
+        "Clean up this dictated text. Remove filler words (um, uh, you know), repeated words and false starts; "
+        + "if I corrected myself keep only the final version; fix punctuation, capitalization and obvious "
+        + "speech-to-text mistakes; keep the original language, meaning and tone. "
+        + "Reply with ONLY the cleaned text, no quotes, no explanation.";
+
+    [JsonPropertyName("autoCleanPrompt")]
+    public string AutoCleanPrompt { get; set; } = DefaultAutoCleanPrompt;
+
+    [JsonIgnore]
+    public TranscriptionProvider CleanProvider {
+        get => CleanProviderName.ToLowerInvariant() switch {
+            "gemini" => TranscriptionProvider.Gemini,
+            "claude" => TranscriptionProvider.Claude,
+            _ => TranscriptionProvider.ChatGpt,
+        };
+        set => CleanProviderName = value switch {
+            TranscriptionProvider.Gemini => "gemini",
+            TranscriptionProvider.Claude => "claude",
+            _ => "chatgpt",
+        };
+    }
+
     [JsonPropertyName("customCommands")]
     public List<CustomCommand> CustomCommands { get; set; } = [];
 
@@ -176,6 +210,12 @@ internal sealed class Settings {
             }
             if (string.IsNullOrWhiteSpace(loaded.TranscriptionProviderName)) {
                 loaded.TranscriptionProviderName = "chatgpt";
+            }
+            if (string.IsNullOrWhiteSpace(loaded.CleanProviderName)) {
+                loaded.CleanProviderName = "chatgpt";
+            }
+            if (string.IsNullOrWhiteSpace(loaded.AutoCleanPrompt)) {
+                loaded.AutoCleanPrompt = DefaultAutoCleanPrompt;
             }
             bool migrated = loaded.MergeLegacyGeminiCommands();
             foreach (var cmd in loaded.CustomCommands) {
