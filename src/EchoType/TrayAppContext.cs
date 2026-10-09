@@ -55,6 +55,17 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private readonly Control _marshal = new(); // UI-thread marshal target for the hook
     private readonly Settings _settings;
     private readonly ChatGPTWebController _web;
+    /// <summary>
+    /// Second hidden window that runs Auto Clean, custom commands, Ask model and selection
+    /// rewrites so dictation and cleaning never wait on each other. Null when the cleaning
+    /// model is the same as the transcription model (then <see cref="_web"/> does both).
+    /// </summary>
+    private ChatGPTWebController? _cleanWeb;
+    private readonly ToolStripMenuItem _autoCleanItem;
+    private readonly ToolStripMenuItem _chatgptCleanItem;
+    private readonly ToolStripMenuItem _geminiCleanItem;
+    private readonly ToolStripMenuItem _claudeCleanItem;
+    private int _cleanWarmupEpoch;
     private readonly HotkeyMonitor _hotkey;
     private readonly BackgroundAudioMuter _audioMuter = new();
     private readonly MicLevelMeter _micMeter = new();
@@ -107,6 +118,20 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         modelRoot.DropDownItems.Add(_claudeModelItem);
         modelRoot.DropDownItems.Add(new ToolStripSeparator());
         modelRoot.DropDownItems.Add(_modelShortcutsItem);
+        _autoCleanItem = new ToolStripMenuItem("Auto Clean dictation") {
+            CheckOnClick = true,
+            Checked = _settings.AutoClean,
+        };
+        _autoCleanItem.CheckedChanged += (_, _) => SetAutoClean(_autoCleanItem.Checked);
+        _chatgptCleanItem = new ToolStripMenuItem("ChatGPT", null, (_, _) => SetCleanModel(TranscriptionProvider.ChatGpt));
+        _geminiCleanItem = new ToolStripMenuItem("Gemini", null, (_, _) => SetCleanModel(TranscriptionProvider.Gemini));
+        _claudeCleanItem = new ToolStripMenuItem("Claude", null, (_, _) => SetCleanModel(TranscriptionProvider.Claude));
+        var cleanRoot = new ToolStripMenuItem("Cleaning model (Auto Clean + commands)");
+        cleanRoot.DropDownItems.Add(_chatgptCleanItem);
+        cleanRoot.DropDownItems.Add(_geminiCleanItem);
+        cleanRoot.DropDownItems.Add(_claudeCleanItem);
+        cleanRoot.DropDownItems.Add(new ToolStripSeparator());
+        cleanRoot.DropDownItems.Add("Open cleaning model window…", null, (_, _) => ToggleCleanWindow());
         _commandsRoot = new ToolStripMenuItem("Custom Commands");
         _pressEnterItem = new ToolStripMenuItem("Press Enter after paste") {
             CheckOnClick = true,
@@ -153,6 +178,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         menu.Items.Add(closeLoginItem);
         menu.Items.Add(_modelWindowShortcutItem);
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(_autoCleanItem);
+        menu.Items.Add(cleanRoot);
         menu.Items.Add(_commandsRoot);
         menu.Items.Add(_askModelShortcutItem);
         menu.Items.Add(_translateShortcutItem);
@@ -170,6 +197,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         menu.Items.Add("Quit EchoType", null, (_, _) => ExitThread());
         RebuildCommandsMenu();
         SyncModelMenu();
+        SyncCleanMenu();
         UpdateModelShortcutsMenu();
         UpdateLoginMenuItem();
         _statusItem.Text = StatusLine();
@@ -204,6 +232,103 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         StartupRegistration.Apply(_settings.StartWithWindows);
         // Stay in the tray on launch. Double-click the icon (or Open EchoType) to show the window.
         _ = WarmupAsync(); // alwaysReady: load the selected model at launch (mac applyPolicyAtLaunch)
+        ApplyCleanSite();  // second window for the cleaning model, warmed in parallel
+    }
+
+    // ------------------------------------------------------------------
+    // Cleaning model (second window)
+    // ------------------------------------------------------------------
+
+    private void SyncCleanMenu() {
+        _autoCleanItem.Checked = _settings.AutoClean;
+        _chatgptCleanItem.Checked = _settings.CleanProvider == TranscriptionProvider.ChatGpt;
+        _geminiCleanItem.Checked = _settings.CleanProvider == TranscriptionProvider.Gemini;
+        _claudeCleanItem.Checked = _settings.CleanProvider == TranscriptionProvider.Claude;
+    }
+
+    /// <summary>
+    /// Keeps the second window in step with settings: a separate hidden window when the
+    /// cleaning model differs from the transcription model, otherwise the single window does both.
+    /// </summary>
+    private void ApplyCleanSite() {
+        var provider = _settings.CleanProvider;
+        if (provider == _settings.TranscriptionProvider) {
+            if (_cleanWeb != null) {
+                _cleanWeb.Dispose();
+                _cleanWeb = null;
+            }
+        } else if (_cleanWeb == null) {
+            _cleanWeb = new ChatGPTWebController(ChatSite.For(provider));
+            _ = WarmupCleanAsync();
+        } else if (_cleanWeb.Site.Id != ChatSite.For(provider).Id) {
+            _cleanWeb.SwitchSite(ChatSite.For(provider));
+            _ = WarmupCleanAsync();
+        }
+        _chatgptThreadSends = 0;
+        _chatgptForceNewThread = false;
+        SyncCleanMenu();
+        NotifyUi();
+    }
+
+    private async Task WarmupCleanAsync() {
+        var web = _cleanWeb;
+        if (web == null) {
+            return;
+        }
+        int epoch = ++_cleanWarmupEpoch;
+        try {
+            var outcome = await web.EnsureReadyAsync();
+            if (epoch != _cleanWarmupEpoch || !ReferenceEquals(web, _cleanWeb)) {
+                return;
+            }
+            Log.Write("launch: clean warmup (" + web.Site.Id + ") -> " + outcome);
+            if (outcome == ReadyOutcome.RuntimeMissing) {
+                ChatGPTWebController.ShowRuntimeMissingDialog();
+            } else if (outcome == ReadyOutcome.LoggedOut) {
+                ShowBalloon("Log in to " + web.Site.DisplayName + " (cleaning model) from the tray menu.", OverlayKind.Warning);
+            }
+        } catch (Exception ex) {
+            Log.Write("launch: clean warmup failed: " + ex.Message);
+        }
+    }
+
+    private void SetAutoClean(bool value) {
+        if (_settings.AutoClean == value) {
+            return;
+        }
+        _settings.AutoClean = value;
+        _settings.Save();
+        SyncCleanMenu();
+        Log.Write("settings: autoClean=" + value);
+        ShowBalloon(value ? "Auto Clean on (" + Gen.Site.DisplayName + ")." : "Auto Clean off.", OverlayKind.Info);
+        NotifyUi();
+    }
+
+    private void SetCleanModel(TranscriptionProvider provider) {
+        if (_settings.CleanProvider == provider) {
+            SyncCleanMenu();
+            return;
+        }
+        if (_phase != AppPhase.Idle) {
+            ShowBalloon("Wait until dictation finishes before switching models.", OverlayKind.Warning);
+            SyncCleanMenu();
+            return;
+        }
+        _settings.CleanProvider = provider;
+        _settings.Save();
+        Log.Write("settings: cleanProvider=" + _settings.CleanProviderName);
+        ApplyCleanSite();
+        RebuildCommandsMenu();
+        ShowBalloon("Cleaning model: " + Gen.Site.DisplayName + ".", OverlayKind.Success);
+    }
+
+    private void ToggleCleanWindow() {
+        if (Gen.IsLoginWindowVisible) {
+            Gen.HideLoginWindow();
+        } else {
+            Gen.ShowLoginWindow();
+        }
+        NotifyUi();
     }
 
     // ------------------------------------------------------------------
@@ -591,8 +716,57 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return;
         }
 
+        if (_settings.AutoClean && !string.IsNullOrWhiteSpace(_settings.AutoCleanPrompt)) {
+            await DeliverCleanedAsync(transcript, session);
+            return;
+        }
+
         Log.Write($"dictation: delivering {transcript.Length} chars");
         DeliverPaste(transcript, "dictation");
+    }
+
+    /// <summary>
+    /// Auto Clean: the transcription window only transcribed; the cleaning window (a different
+    /// model when configured) rewrites it. If cleaning fails the raw transcript is pasted so
+    /// nothing is lost.
+    /// </summary>
+    private async Task DeliverCleanedAsync(string transcript, int session) {
+        if (!IsLive(session)) {
+            return;
+        }
+        SetPhase(AppPhase.Generating);
+        CopyTranscript(transcript);
+        string message = _settings.AutoCleanPrompt.Trim() + "\n\n" + transcript;
+        Log.Write("auto-clean: sending " + message.Length + " chars to " + Gen.Site.DisplayName);
+        string? cleaned = null;
+        try {
+            ModelReply reply = await RequestCommandReplyAsync(message, session);
+            if (!IsLive(session)) {
+                return;
+            }
+            if (reply.Text.Length > 0 && !ReplyIsPromptEcho(reply.Text, message, transcript)) {
+                cleaned = reply.Text;
+            }
+        } catch (DriverException ex) {
+            if (!IsLive(session)) {
+                return;
+            }
+            Log.Write("auto-clean: failed (" + ex.Kind + ": " + ex.Message + ")");
+            if (ex.Kind == DriverFailure.LoggedOut) {
+                Gen.ShowLoginWindow();
+            }
+        }
+        if (!IsLive(session)) {
+            return;
+        }
+        if (cleaned == null) {
+            Log.Write("auto-clean: no usable reply, pasting raw transcript");
+            ShowBalloon("Auto Clean failed — pasted the raw transcript.", OverlayKind.Warning);
+            DeliverPaste(transcript, "dictation");
+            return;
+        }
+        Log.Write("auto-clean: delivering " + cleaned.Length + " chars");
+        DeliverGeneratedPaste(cleaned, "auto-clean", transcript);
     }
 
     private async Task<CommandButton?> PickCommandButtonAsync(
@@ -651,8 +825,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 Log.Write(logLabel + ": reply has " + reply.Images.Count + " image(s)");
                 byte[]? imageBytes = null;
                 try {
-                    if (_web.Driver != null) {
-                        imageBytes = await _web.Driver.DownloadBestAssistantImageAsync(reply);
+                    if (Gen.Driver != null) {
+                        imageBytes = await Gen.Driver.DownloadBestAssistantImageAsync(reply);
                     }
                 } catch (Exception ex) {
                     Log.Write(logLabel + ": image download failed: " + ex.Message);
@@ -675,7 +849,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 Sounds.Error();
                 CopyTranscript(transcript);
                 ShowBalloon(
-                    _web.Site.DisplayName + " returned an empty reply. Transcript copied to clipboard.",
+                    Gen.Site.DisplayName + " returned an empty reply. Transcript copied to clipboard.",
                     OverlayKind.Error);
                 ResetToIdle();
                 return;
@@ -688,8 +862,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 return;
             }
             try {
-                if (_web.Driver != null) {
-                    await _web.Driver.ClearComposerAsync();
+                if (Gen.Driver != null) {
+                    await Gen.Driver.ClearComposerAsync();
                 }
             } catch { /* best effort */ }
             if (IsLive(session)) {
@@ -881,7 +1055,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return ModelReply.Empty;
         }
         Log.Write("command: retrying in a new chat");
-        ShowBalloon(_web.Site.DisplayName + " is slow — retrying in a new chat…", OverlayKind.Warning);
+        ShowBalloon(Gen.Site.DisplayName + " is slow — retrying in a new chat…", OverlayKind.Warning);
         try {
             ModelReply reply = await SendCommandOnceAsync(message, startNewChat: true, firstByteTimeout);
             if (!IsLive(session)) {
@@ -904,9 +1078,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (!IsLive(session)) {
             return ModelReply.Empty;
         }
-        Log.Write("command: refreshing " + _web.Site.DisplayName + " and retrying");
-        ShowBalloon("Still waiting — refreshing " + _web.Site.DisplayName + " and retrying…", OverlayKind.Warning);
-        var outcome = await _web.RefreshChatAsync();
+        Log.Write("command: refreshing " + Gen.Site.DisplayName + " and retrying");
+        ShowBalloon("Still waiting — refreshing " + Gen.Site.DisplayName + " and retrying…", OverlayKind.Warning);
+        var outcome = await Gen.RefreshChatAsync();
         if (!IsLive(session)) {
             return ModelReply.Empty;
         }
@@ -926,7 +1100,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         string message,
         bool startNewChat,
         TimeSpan firstByteTimeout) {
-        var driver = _web.Driver
+        var driver = Gen.Driver
             ?? throw new DriverException(DriverFailure.NotReady, "no driver");
         driver.InvalidateWaits();
         if (startNewChat) {
@@ -1000,7 +1174,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _chatgptForceNewThread = true;
     }
 
-    private bool IsChatGptSite => _web.Site.Id == ChatSite.ChatGpt.Id;
+    /// <summary>Window that generates replies (cleaning model).</summary>
+    private ChatGPTWebController Gen => _cleanWeb ?? _web;
+
+    private bool IsChatGptSite => Gen.Site.Id == ChatSite.ChatGpt.Id;
 
     private static bool IsCommandRetryable(DriverException ex) =>
         ex.Kind is DriverFailure.Timeout or DriverFailure.ButtonNotFound
@@ -1022,14 +1199,21 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _session++;
         _hotkey.EscSwallowActive = false;
         DismissActionPicker();
+        bool wasGenerating = _phase == AppPhase.Generating;
         try {
             _web.Driver?.InvalidateWaits();
+            _cleanWeb?.Driver?.InvalidateWaits();
         } catch { /* best effort */ }
         _engagementFailures = 0;
         // Cancel leaves ChatGPT/Gemini's mic UI wedged often enough that the next
         // recording does not start until a later self-heal reload. Reload now so
         // the next hotkey waits on a fresh page instead of clicking a stuck mic.
-        _web.ReloadAfterCancel();
+        if (_cleanWeb == null || !wasGenerating) {
+            _web.ReloadAfterCancel();
+        }
+        if (_cleanWeb != null && wasGenerating) {
+            _cleanWeb.ReloadAfterCancel();
+        }
         ResetToIdle();
         return Task.CompletedTask;
     }
@@ -1039,14 +1223,17 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     // ------------------------------------------------------------------
 
     private void HandleFailure(DriverException ex, string? transcriptToCopy = null) {
+        var web = _phase == AppPhase.Generating ? Gen : _web;
         string message;
         switch (ex.Kind) {
             case DriverFailure.LoggedOut:
                 message = "Logged out — open the EchoType menu to log in";
-                _loggedIn = false;
-                UpdateStatusIcon();
-                UpdateLoginMenuItem();
-                _web.ShowLoginWindow();
+                if (ReferenceEquals(web, _web)) {
+                    _loggedIn = false;
+                    UpdateStatusIcon();
+                    UpdateLoginMenuItem();
+                }
+                web.ShowLoginWindow();
                 break;
             case DriverFailure.Offline:
                 message = "No internet connection — check your network";
@@ -1055,16 +1242,16 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 UpdateLoginMenuItem();
                 break;
             case DriverFailure.Timeout:
-                message = _web.Site.DisplayName + " didn't respond in time";
+                message = web.Site.DisplayName + " didn't respond in time";
                 break;
             case DriverFailure.ButtonNotFound:
                 // The page wedges occasionally; only reload after two failures in a row.
                 _engagementFailures++;
                 if (_engagementFailures >= 2) {
-                    message = $"Dictation glitched ({ex.Message}) — reloading {_web.Site.DisplayName}, try again";
+                    message = $"Dictation glitched ({ex.Message}) — reloading {web.Site.DisplayName}, try again";
                     Log.Write($"dictation: {_engagementFailures} engagement failures, reloading webview to self-heal");
                     _engagementFailures = 0;
-                    _ = _web.ReloadInBackgroundAsync();
+                    _ = web.ReloadInBackgroundAsync();
                 } else {
                     message = ex.Message.Contains("send", StringComparison.OrdinalIgnoreCase)
                         ? "Couldn't send the prompt — try again"
@@ -1074,7 +1261,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 }
                 break;
             case DriverFailure.NotReady:
-                message = _web.Site.DisplayName + " isn't ready yet";
+                message = web.Site.DisplayName + " isn't ready yet";
                 break;
             default:
                 message = "Page error: " + Truncate(ex.Message, 60);
@@ -1427,6 +1614,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         UpdateStatusText();
         RebuildCommandsMenu();
         _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
+        ApplyCleanSite();
         Log.Write("settings: transcriptionProvider=" + _settings.TranscriptionProviderName);
         ShowBalloon("Switched to " + _web.Site.DisplayName + ".", OverlayKind.Success);
         _ = WarmupAsync();
@@ -1772,7 +1960,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
         _commandsUiOpen = true;
         try {
-            using var form = new CustomCommandsForm(_settings, _hotkey, _web.Site.DisplayName, () => {
+            using var form = new CustomCommandsForm(_settings, _hotkey, Gen.Site.DisplayName, () => {
                 _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
                 RebuildCommandsMenu();
             });
@@ -1835,6 +2023,12 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     bool IAppWindowHost.LoginWindowVisible => _web.IsLoginWindowVisible;
     float IAppWindowHost.MicLevel => _micMeter.Level;
     string IAppWindowHost.StatusText => StatusLine();
+
+    string IAppWindowHost.CleanModelName => Gen.Site.DisplayName;
+    bool IAppWindowHost.CleanWindowVisible => Gen.IsLoginWindowVisible;
+    void IAppWindowHost.SetAutoClean(bool value) => SetAutoClean(value);
+    void IAppWindowHost.SetCleanModel(TranscriptionProvider provider) => SetCleanModel(provider);
+    void IAppWindowHost.ToggleCleanWindow() => ToggleCleanWindow();
 
     void IAppWindowHost.SelectModel(TranscriptionProvider provider) => SelectModel(provider);
     void IAppWindowHost.SetToggleRecording(bool toggle) => SetToggleRecording(toggle);
@@ -1986,6 +2180,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         StatusOverlay.Shutdown();
         _hotkey.Dispose();
         _web.Dispose();
+        _cleanWeb?.Dispose();
         if (_window is { IsDisposed: false } window) {
             window.Hide();
             window.Dispose();

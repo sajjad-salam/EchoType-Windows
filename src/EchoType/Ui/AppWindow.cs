@@ -23,6 +23,11 @@ internal interface IAppWindowHost {
     bool Online { get; }
     bool PageReady { get; }
     string ModelName { get; }
+    string CleanModelName { get; }
+    bool CleanWindowVisible { get; }
+    void SetAutoClean(bool value);
+    void SetCleanModel(TranscriptionProvider provider);
+    void ToggleCleanWindow();
     bool LoginWindowVisible { get; }
     float MicLevel { get; }
     string StatusText { get; }
@@ -68,6 +73,9 @@ internal sealed class AppWindow : Form {
     private readonly HudHotkeyRow _enterKey;
     private readonly HudHotkeyRow _windowKey;
     private readonly HudToggleRow _muteToggle;
+    private readonly HudToggleRow _cleanToggle;
+    private readonly HudSegmented _cleanSeg;
+    private readonly HudButton _cleanWindowButton;
     private readonly HudToggleRow _enterToggle;
     private readonly HudToggleRow _clipboardToggle;
     private readonly HudToggleRow _startupToggle;
@@ -166,6 +174,27 @@ internal sealed class AppWindow : Form {
         _geminiKey = AddHotkey(modelCard, "Switch to Gemini", AppShortcut.Gemini);
         _claudeKey = AddHotkey(modelCard, "Switch to Claude (live transcript)", AppShortcut.Claude);
         FinishCard(modelCard);
+
+        var cleanCard = MakeCard();
+        AddCaption(cleanCard, "Auto Clean (cleaning model)");
+        _cleanToggle = AddToggle(cleanCard, "Auto Clean dictation",
+            toggle => _host.SetAutoClean(toggle.Checked));
+        _cleanSeg = new HudSegmented { Items = ["ChatGPT", "Gemini", "Claude"] };
+        _cleanSeg.SelectedIndexChanged += (_, _) => {
+            if (_syncing) {
+                return;
+            }
+            _host.SetCleanModel(_cleanSeg.SelectedIndex switch {
+                1 => TranscriptionProvider.Gemini,
+                2 => TranscriptionProvider.Claude,
+                _ => TranscriptionProvider.ChatGpt,
+            });
+        };
+        AddControl(cleanCard, _cleanSeg, 40);
+        _cleanWindowButton = MakeButton("Open cleaning window", HudButton.Kind.Ghost);
+        _cleanWindowButton.Click += (_, _) => _host.ToggleCleanWindow();
+        AddControl(cleanCard, _cleanWindowButton, 44);
+        FinishCard(cleanCard);
 
         var recordCard = MakeCard();
         AddCaption(recordCard, "Recording");
@@ -388,6 +417,13 @@ internal sealed class AppWindow : Form {
                 TranscriptionProvider.Claude => 2,
                 _ => 0,
             });
+            _cleanToggle.SetSilent(s.AutoClean);
+            _cleanSeg.SetSilent(s.CleanProvider switch {
+                TranscriptionProvider.Gemini => 1,
+                TranscriptionProvider.Claude => 2,
+                _ => 0,
+            });
+            _cleanWindowButton.Text = (_host.CleanWindowVisible ? "Close " : "Open ") + _host.CleanModelName + " window";
             _modeSeg.SetSilent(s.ToggleRecording ? 1 : 0);
             _muteToggle.SetSilent(s.MuteOtherAppsWhileDictating);
             _enterToggle.SetSilent(s.PressEnterAfterPaste);
