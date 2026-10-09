@@ -69,6 +69,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private readonly ToolStripMenuItem _claudeCleanItem;
     private int _cleanWarmupEpoch;
     private bool _cleanPromptUiOpen;
+    private bool _wordReplacementsUiOpen;
     private readonly HotkeyMonitor _hotkey;
     private readonly BackgroundAudioMuter _audioMuter = new();
     private readonly MicLevelMeter _micMeter = new();
@@ -181,6 +182,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         menu.Items.Add(_modelWindowShortcutItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_autoCleanItem);
+        menu.Items.Add("Word replacements…", null, (_, _) => EditWordReplacements());
         menu.Items.Add(cleanRoot);
         menu.Items.Add(_commandsRoot);
         menu.Items.Add(_askModelShortcutItem);
@@ -344,6 +346,42 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
         } finally {
             _cleanPromptUiOpen = false;
+        }
+    }
+
+    private string ApplyWordReplacements(string text) {
+        if (_settings.WordReplacements.Count == 0) {
+            return text;
+        }
+        string replaced = WordReplacement.Apply(text, _settings.WordReplacements).Trim();
+        if (replaced != text) {
+            Log.Write("word-replacements: applied (" + text.Length + " -> " + replaced.Length + " chars)");
+        }
+        return replaced;
+    }
+
+    private void EditWordReplacements() {
+        if (_wordReplacementsUiOpen) {
+            return;
+        }
+        _wordReplacementsUiOpen = true;
+        try {
+            using var form = new WordReplacementsForm(_settings.WordReplacements);
+            IWin32Window? owner = _window is { Visible: true, IsDisposed: false } ? _window : null;
+            if (form.ShowDialog(owner) != DialogResult.OK) {
+                return;
+            }
+            _settings.WordReplacements = form.Result;
+            _settings.Save();
+            Log.Write("settings: wordReplacements=" + form.Result.Count);
+            ShowBalloon("Word replacements saved (" + form.Result.Count + ").", OverlayKind.Success);
+            NotifyUi();
+        } catch (Exception ex) {
+            Log.Write("word replacements ui: " + ex);
+            MessageBox.Show("Could not open Word replacements: " + ex.Message, "EchoType",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        } finally {
+            _wordReplacementsUiOpen = false;
         }
     }
 
@@ -676,6 +714,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 + ": using selected " + _selectedText.Length + " chars");
         }
 
+        transcript = ApplyWordReplacements(transcript);
         if (transcript.Length == 0) {
             Log.Write("dictation: empty transcript");
             Sounds.Error();
@@ -801,6 +840,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             DeliverPaste(transcript, "dictation");
             return;
         }
+        // The cleaning model may turn dialect words back into standard spelling; re-apply the fixes.
+        cleaned = ApplyWordReplacements(cleaned);
         Log.Write("auto-clean: delivering " + cleaned.Length + " chars");
         DeliverGeneratedPaste(cleaned, "auto-clean", transcript);
     }
@@ -2088,6 +2129,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     void IAppWindowHost.SetCleanModel(TranscriptionProvider provider) => SetCleanModel(provider);
     void IAppWindowHost.ToggleCleanWindow() => ToggleCleanWindow();
     void IAppWindowHost.EditCleanPrompt() => EditCleanPrompt();
+    void IAppWindowHost.EditWordReplacements() => EditWordReplacements();
 
     void IAppWindowHost.SelectModel(TranscriptionProvider provider) => SelectModel(provider);
     void IAppWindowHost.SetToggleRecording(bool toggle) => SetToggleRecording(toggle);

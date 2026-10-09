@@ -142,6 +142,13 @@ internal sealed class Settings {
         };
     }
 
+    /// <summary>
+    /// Manual word fixes applied to every transcript (and to Auto Clean's reply) before it is
+    /// used, e.g. to keep dialect words. Empty = off.
+    /// </summary>
+    [JsonPropertyName("wordReplacements")]
+    public List<WordReplacement> WordReplacements { get; set; } = [];
+
     [JsonPropertyName("customCommands")]
     public List<CustomCommand> CustomCommands { get; set; } = [];
 
@@ -212,6 +219,7 @@ internal sealed class Settings {
             loaded.CustomCommands ??= [];
             loaded.GeminiCustomCommands ??= [];
             loaded.TranslateVks ??= [];
+            loaded.WordReplacements ??= [];
             if (string.IsNullOrWhiteSpace(loaded.TranslateTargetLanguage)) {
                 loaded.TranslateTargetLanguage = "en";
             }

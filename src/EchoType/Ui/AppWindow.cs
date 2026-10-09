@@ -30,6 +30,7 @@ internal interface IAppWindowHost {
     void SetCleanModel(TranscriptionProvider provider);
     void ToggleCleanWindow();
     void EditCleanPrompt();
+    void EditWordReplacements();
     bool LoginWindowVisible { get; }
     float MicLevel { get; }
     string StatusText { get; }
@@ -203,6 +204,13 @@ internal sealed class AppWindow : Form {
         _cleanPromptButton.Click += (_, _) => _host.EditCleanPrompt();
         AddControl(cleanCard, _cleanPromptButton, 44);
         FinishCard(cleanCard);
+
+        var wordsCard = MakeCard();
+        AddCaption(wordsCard, "Word replacements (dialect)");
+        var wordsButton = MakeButton("Edit word replacements…", HudButton.Kind.Ghost);
+        wordsButton.Click += (_, _) => _host.EditWordReplacements();
+        AddControl(wordsCard, wordsButton, 44);
+        FinishCard(wordsCard);
 
         var recordCard = MakeCard();
         AddCaption(recordCard, "Recording");
