@@ -37,8 +37,19 @@ internal readonly record struct CommandTurnSnapshot(
     ModelReply Reply,
     int UserTurns,
     int AssistantTurns,
-    string AssistantKey) {
+    string AssistantKey,
+    string User = "") {
     public static CommandTurnSnapshot Empty { get; } = new(ModelReply.Empty, 0, 0, "");
+
+    /// <summary>
+    /// True once the page shows the prompt we just sent: a new user bubble, or a last
+    /// user bubble that differs from the one before sending. Pages where no user
+    /// bubble is ever found keep the old behaviour.
+    /// </summary>
+    public bool UserAdvanced(int userTurns, string user) =>
+        userTurns > UserTurns
+        || (user.Length > 0 && user != User)
+        || (userTurns == 0 && UserTurns == 0);
 }
 
 /// <summary>Snapshot of the page state from window.__echotype.state().</summary>
@@ -816,6 +827,17 @@ internal sealed class DictationDriver {
           // not disable Send, so it is reported separately as imagePending.
           E.isGenerating = () => !!(E.button('stop') || E.findCss(S.generatingCss)
             || document.querySelector('.result-streaming, [data-testid="stop-button"]'));
+          // Is the last assistant reply below the last user bubble? False while the
+          // newest prompt has no answer yet (the reply found is the previous turn's).
+          E.replyAfterUser = () => {
+            const a = E.lastAssistantNode();
+            if (!a) return false;
+            const users = E.messageNodes(S.user);
+            if (!users.length) return true;
+            const u = users[users.length - 1];
+            if (u === a || u.contains(a) || a.contains(u)) return true; // ambiguous layout: don't block
+            return !!(u.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING);
+          };
           E.replyState = () => JSON.stringify({
             generating: E.isGenerating(),
             imagePending: !!E.imagePending(),
@@ -825,6 +847,7 @@ internal sealed class DictationDriver {
             userTurns: E.messageNodes(S.user).length,
             assistantTurns: E.messageNodes(S.assistant).length,
             assistantKey: E.assistantTurnKey(),
+            afterUser: E.replyAfterUser(),
             images: E.lastAssistantImages()
           });
           E.replyDiag = () => {
@@ -1865,7 +1888,7 @@ internal sealed class DictationDriver {
         var st = await ReadReplyStateAsync();
         return st == null
             ? CommandTurnSnapshot.Empty
-            : new CommandTurnSnapshot(st.Reply, st.UserTurns, st.AssistantTurns, st.AssistantKey);
+            : new CommandTurnSnapshot(st.Reply, st.UserTurns, st.AssistantTurns, st.AssistantKey, st.User);
     }
 
     /// <summary>
@@ -1878,7 +1901,9 @@ internal sealed class DictationDriver {
             if (st == null || st.Reply.IsEmpty) {
                 return ModelReply.Empty;
             }
-            if (ReplyMatchesUserBubble(st.Reply, st.User)) {
+            if (ReplyMatchesUserBubble(st.Reply, st.User)
+                || !previous.UserAdvanced(st.UserTurns, st.User)
+                || !st.AfterUser) {
                 return ModelReply.Empty;
             }
             bool newTurn = st.AssistantTurns > previous.AssistantTurns
@@ -1941,7 +1966,11 @@ internal sealed class DictationDriver {
 
             bool newAssistantTurn = st.AssistantTurns > previous.AssistantTurns
                 || (st.AssistantKey.Length > 0 && st.AssistantKey != previous.AssistantKey);
-            bool replyIsEcho = ReplyMatchesUserBubble(st.Reply, st.User);
+            // The reply must sit below the prompt we just sent. Until that prompt shows
+            // up, the last bubble on the page is the previous turn's reply, and ChatGPT's
+            // empty placeholder for the new answer can make it look like a new turn.
+            bool replyIsCurrent = previous.UserAdvanced(st.UserTurns, st.User) && st.AfterUser;
+            bool replyIsEcho = !replyIsCurrent || ReplyMatchesUserBubble(st.Reply, st.User);
 
             string key = Fingerprint(st.Reply);
             // Only the new turn can be an image job. The previous bubble often
@@ -1951,6 +1980,7 @@ internal sealed class DictationDriver {
                 && !replyIsEcho
                 && (st.ImagePending || LooksLikeImagePlaceholder(st.Reply.Text));
             bool imageLoading = newAssistantTurn
+                && !replyIsEcho
                 && st.Reply.Images.Count > 0
                 && !st.Reply.HasLoadedImage;
 
@@ -2269,7 +2299,8 @@ internal sealed class DictationDriver {
         string User,
         int UserTurns,
         int AssistantTurns,
-        string AssistantKey);
+        string AssistantKey,
+        bool AfterUser);
 
     private async Task<ReplyState?> ReadReplyStateAsync() {
         string json = await EvalAsync("__echotype.replyState()");
@@ -2290,7 +2321,8 @@ internal sealed class DictationDriver {
                 User: r.TryGetProperty("user", out var user) ? user.GetString() ?? "" : "",
                 UserTurns: r.TryGetProperty("userTurns", out var ut) && ut.TryGetInt32(out int uti) ? uti : 0,
                 AssistantTurns: r.TryGetProperty("assistantTurns", out var at) && at.TryGetInt32(out int ati) ? ati : 0,
-                AssistantKey: r.TryGetProperty("assistantKey", out var ak) ? ak.GetString() ?? "" : "");
+                AssistantKey: r.TryGetProperty("assistantKey", out var ak) ? ak.GetString() ?? "" : "",
+                AfterUser: !r.TryGetProperty("afterUser", out var au) || au.ValueKind != JsonValueKind.False);
         } catch (Exception ex) {
             throw new DriverException(DriverFailure.JavaScript, "bad reply JSON: " + ex.Message);
         }

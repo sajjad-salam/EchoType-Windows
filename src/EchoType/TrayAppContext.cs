@@ -67,6 +67,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private readonly ToolStripMenuItem _geminiCleanItem;
     private readonly ToolStripMenuItem _claudeCleanItem;
     private int _cleanWarmupEpoch;
+    private bool _cleanPromptUiOpen;
     private readonly HotkeyMonitor _hotkey;
     private readonly BackgroundAudioMuter _audioMuter = new();
     private readonly MicLevelMeter _micMeter = new();
@@ -133,6 +134,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         cleanRoot.DropDownItems.Add(_claudeCleanItem);
         cleanRoot.DropDownItems.Add(new ToolStripSeparator());
         cleanRoot.DropDownItems.Add("Open cleaning model window…", null, (_, _) => ToggleCleanWindow());
+        cleanRoot.DropDownItems.Add("Edit cleaning prompt…", null, (_, _) => EditCleanPrompt());
         _commandsRoot = new ToolStripMenuItem("Custom Commands");
         _pressEnterItem = new ToolStripMenuItem("Press Enter after paste") {
             CheckOnClick = true,
@@ -323,6 +325,31 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         ShowBalloon("Cleaning model: " + Gen.Site.DisplayName + ".", OverlayKind.Success);
     }
 
+    private void EditCleanPrompt() {
+        if (_cleanPromptUiOpen) {
+            return;
+        }
+        _cleanPromptUiOpen = true;
+        try {
+            using var form = new CleanPromptForm(_settings.AutoCleanPrompt, Gen.Site.DisplayName);
+            IWin32Window? owner = _window is { Visible: true, IsDisposed: false } ? _window : null;
+            if (form.ShowDialog(owner) != DialogResult.OK || form.Result == _settings.AutoCleanPrompt) {
+                return;
+            }
+            _settings.AutoCleanPrompt = form.Result;
+            _settings.Save();
+            Log.Write("settings: autoCleanPrompt updated (" + form.Result.Length + " chars)");
+            ShowBalloon("Auto Clean prompt saved.", OverlayKind.Success);
+            NotifyUi();
+        } catch (Exception ex) {
+            Log.Write("clean prompt ui: " + ex);
+            MessageBox.Show("Could not open the Auto Clean prompt: " + ex.Message, "EchoType",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        } finally {
+            _cleanPromptUiOpen = false;
+        }
+    }
+
     private void ToggleCleanWindow() {
         if (Gen.IsLoginWindowVisible) {
             Gen.HideLoginWindow();
@@ -458,6 +485,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
         if (_settings.PressEnterToggleVk != 0 && vk == (uint)_settings.PressEnterToggleVk) {
             ApplyPressEnterAfterPaste(!_settings.PressEnterAfterPaste, announce: true);
+            return;
+        }
+        if (_settings.AutoCleanToggleVk != 0 && vk == (uint)_settings.AutoCleanToggleVk) {
+            SetAutoClean(!_settings.AutoClean);
             return;
         }
         if (_settings.ChatGptSwitchVk != 0 && vk == (uint)_settings.ChatGptSwitchVk) {
@@ -2056,6 +2087,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     void IAppWindowHost.SetAutoClean(bool value) => SetAutoClean(value);
     void IAppWindowHost.SetCleanModel(TranscriptionProvider provider) => SetCleanModel(provider);
     void IAppWindowHost.ToggleCleanWindow() => ToggleCleanWindow();
+    void IAppWindowHost.EditCleanPrompt() => EditCleanPrompt();
 
     void IAppWindowHost.SelectModel(TranscriptionProvider provider) => SelectModel(provider);
     void IAppWindowHost.SetToggleRecording(bool toggle) => SetToggleRecording(toggle);
@@ -2131,6 +2163,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             AppShortcut.Dictation => _settings.HotkeyVk,
             AppShortcut.AskModel => _settings.AskModelVk,
             AppShortcut.PressEnter => _settings.PressEnterToggleVk,
+            AppShortcut.AutoClean => _settings.AutoCleanToggleVk,
             AppShortcut.ModelWindow => _settings.OpenModelWindowVk,
             AppShortcut.ChatGpt => _settings.ChatGptSwitchVk,
             AppShortcut.Gemini => _settings.GeminiSwitchVk,
@@ -2152,6 +2185,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 break;
             case AppShortcut.PressEnter:
                 _settings.PressEnterToggleVk = vk;
+                break;
+            case AppShortcut.AutoClean:
+                _settings.AutoCleanToggleVk = vk;
                 break;
             case AppShortcut.ModelWindow:
                 _settings.OpenModelWindowVk = vk;

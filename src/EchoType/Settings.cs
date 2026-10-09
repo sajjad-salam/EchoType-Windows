@@ -24,6 +24,10 @@ internal sealed class Settings {
     [JsonPropertyName("pressEnterToggleVk")]
     public int PressEnterToggleVk { get; set; }
 
+    /// <summary>Virtual-key that toggles <see cref="AutoClean"/>. 0 = none.</summary>
+    [JsonPropertyName("autoCleanToggleVk")]
+    public int AutoCleanToggleVk { get; set; }
+
     /// <summary>
     /// When dictation starts, pause other apps that expose play/pause (YouTube,
     /// Spotify, …) and mute remaining playback so it doesn't bleed into the
@@ -163,12 +167,15 @@ internal sealed class Settings {
     [JsonIgnore]
     public List<CustomCommand> ActiveCommands => CustomCommands;
 
-    /// <summary>Tap-style reserved keys (Auto Enter, model switch, model window). 0 is omitted.</summary>
+    /// <summary>Tap-style reserved keys (Auto Enter, Auto Clean, model switch, model window). 0 is omitted.</summary>
     [JsonIgnore]
     public IEnumerable<int> TapHotkeyVks {
         get {
             if (PressEnterToggleVk > 0) {
                 yield return PressEnterToggleVk;
+            }
+            if (AutoCleanToggleVk > 0) {
+                yield return AutoCleanToggleVk;
             }
             if (ChatGptSwitchVk > 0) {
                 yield return ChatGptSwitchVk;

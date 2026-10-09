@@ -33,6 +33,11 @@ internal static class HotkeyConflicts {
                 ? "That key is already the Auto Enter shortcut."
                 : "That shortcut uses the Auto Enter key.";
         }
+        if (ConflictsWithReserved(chord, settings.AutoCleanToggleVk, ignoreVks)) {
+            return chord.Count == 1
+                ? "That key is already the Auto Clean shortcut."
+                : "That shortcut uses the Auto Clean key.";
+        }
         if (ConflictsWithReserved(chord, settings.ChatGptSwitchVk, ignoreVks)) {
             return chord.Count == 1
                 ? "That key already switches to ChatGPT."

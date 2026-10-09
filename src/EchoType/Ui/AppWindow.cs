@@ -9,6 +9,7 @@ internal enum AppShortcut {
     AskModel,
     Translate,
     PressEnter,
+    AutoClean,
     ModelWindow,
     ChatGpt,
     Gemini,
@@ -28,6 +29,7 @@ internal interface IAppWindowHost {
     void SetAutoClean(bool value);
     void SetCleanModel(TranscriptionProvider provider);
     void ToggleCleanWindow();
+    void EditCleanPrompt();
     bool LoginWindowVisible { get; }
     float MicLevel { get; }
     string StatusText { get; }
@@ -76,6 +78,8 @@ internal sealed class AppWindow : Form {
     private readonly HudToggleRow _cleanToggle;
     private readonly HudSegmented _cleanSeg;
     private readonly HudButton _cleanWindowButton;
+    private readonly HudButton _cleanPromptButton;
+    private readonly HudHotkeyRow _cleanKey;
     private readonly HudToggleRow _enterToggle;
     private readonly HudToggleRow _clipboardToggle;
     private readonly HudToggleRow _startupToggle;
@@ -179,6 +183,7 @@ internal sealed class AppWindow : Form {
         AddCaption(cleanCard, "Auto Clean (cleaning model)");
         _cleanToggle = AddToggle(cleanCard, "Auto Clean dictation",
             toggle => _host.SetAutoClean(toggle.Checked));
+        _cleanKey = AddHotkey(cleanCard, "Auto Clean on/off shortcut", AppShortcut.AutoClean);
         _cleanSeg = new HudSegmented { Items = ["ChatGPT", "Gemini", "Claude"] };
         _cleanSeg.SelectedIndexChanged += (_, _) => {
             if (_syncing) {
@@ -194,6 +199,9 @@ internal sealed class AppWindow : Form {
         _cleanWindowButton = MakeButton("Open cleaning window", HudButton.Kind.Ghost);
         _cleanWindowButton.Click += (_, _) => _host.ToggleCleanWindow();
         AddControl(cleanCard, _cleanWindowButton, 44);
+        _cleanPromptButton = MakeButton("Edit cleaning prompt…", HudButton.Kind.Ghost);
+        _cleanPromptButton.Click += (_, _) => _host.EditCleanPrompt();
+        AddControl(cleanCard, _cleanPromptButton, 44);
         FinishCard(cleanCard);
 
         var recordCard = MakeCard();
@@ -439,6 +447,7 @@ internal sealed class AppWindow : Form {
             _geminiKey.Value = HotkeyLabel(s.GeminiSwitchVk);
             _claudeKey.Value = HotkeyLabel(s.ClaudeSwitchVk);
             _enterKey.Value = HotkeyLabel(s.PressEnterToggleVk);
+            _cleanKey.Value = HotkeyLabel(s.AutoCleanToggleVk);
             _windowKey.Value = HotkeyLabel(s.OpenModelWindowVk);
             _dictationKey.Invalidate();
             _askModelKey.Invalidate();
@@ -447,6 +456,7 @@ internal sealed class AppWindow : Form {
             _geminiKey.Invalidate();
             _claudeKey.Invalidate();
             _enterKey.Invalidate();
+            _cleanKey.Invalidate();
             _windowKey.Invalidate();
             _loginButton.Text = !_host.Online ? "Retry connection"
                 : _host.LoginWindowVisible ? "Close " + _host.ModelName + " window"
