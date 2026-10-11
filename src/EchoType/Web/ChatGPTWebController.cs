@@ -683,7 +683,9 @@ internal sealed class ChatGPTWebController : IDisposable {
     }
 
     private void OnHostFormClosing(object? sender, FormClosingEventArgs e) {
-        if (_disposed) {
+        // Only intercept the user's close button. Cancelling a WindowsShutDown /
+        // TaskManagerClosing close blocks Windows from shutting down or signing out.
+        if (_disposed || e.CloseReason != CloseReason.UserClosing) {
             return;
         }
         e.Cancel = true;
