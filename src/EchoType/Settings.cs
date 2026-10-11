@@ -149,6 +149,13 @@ internal sealed class Settings {
     [JsonPropertyName("wordReplacements")]
     public List<WordReplacement> WordReplacements { get; set; } = [];
 
+    /// <summary>
+    /// Spoken workspace switches: a short dictation such as "coding mode" presses the mode's
+    /// shortcut instead of pasting. Missing from older configs → the four default modes.
+    /// </summary>
+    [JsonPropertyName("workspaceModes")]
+    public List<WorkspaceMode> WorkspaceModes { get; set; } = WorkspaceMode.Defaults();
+
     [JsonPropertyName("customCommands")]
     public List<CustomCommand> CustomCommands { get; set; } = [];
 
@@ -220,6 +227,10 @@ internal sealed class Settings {
             loaded.GeminiCustomCommands ??= [];
             loaded.TranslateVks ??= [];
             loaded.WordReplacements ??= [];
+            loaded.WorkspaceModes ??= [];
+            foreach (var mode in loaded.WorkspaceModes) {
+                mode.Keywords ??= [];
+            }
             if (string.IsNullOrWhiteSpace(loaded.TranslateTargetLanguage)) {
                 loaded.TranslateTargetLanguage = "en";
             }

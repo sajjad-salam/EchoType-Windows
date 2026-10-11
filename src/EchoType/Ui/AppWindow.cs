@@ -31,6 +31,7 @@ internal interface IAppWindowHost {
     void ToggleCleanWindow();
     void EditCleanPrompt();
     void EditWordReplacements();
+    void EditWorkspaceModes();
     bool LoginWindowVisible { get; }
     float MicLevel { get; }
     string StatusText { get; }
@@ -211,6 +212,13 @@ internal sealed class AppWindow : Form {
         wordsButton.Click += (_, _) => _host.EditWordReplacements();
         AddControl(wordsCard, wordsButton, 44);
         FinishCard(wordsCard);
+
+        var modesCard = MakeCard();
+        AddCaption(modesCard, "Workspace modes (voice → shortcut)");
+        var modesButton = MakeButton("Edit workspace modes…", HudButton.Kind.Ghost);
+        modesButton.Click += (_, _) => _host.EditWorkspaceModes();
+        AddControl(modesCard, modesButton, 44);
+        FinishCard(modesCard);
 
         var recordCard = MakeCard();
         AddCaption(recordCard, "Recording");
