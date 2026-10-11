@@ -70,6 +70,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private int _cleanWarmupEpoch;
     private bool _cleanPromptUiOpen;
     private bool _wordReplacementsUiOpen;
+    private bool _workspaceModesUiOpen;
     private readonly HotkeyMonitor _hotkey;
     private readonly BackgroundAudioMuter _audioMuter = new();
     private readonly MicLevelMeter _micMeter = new();
@@ -183,6 +184,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_autoCleanItem);
         menu.Items.Add("Word replacements…", null, (_, _) => EditWordReplacements());
+        menu.Items.Add("Workspace modes…", null, (_, _) => EditWorkspaceModes());
         menu.Items.Add(cleanRoot);
         menu.Items.Add(_commandsRoot);
         menu.Items.Add(_askModelShortcutItem);
@@ -383,6 +385,57 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         } finally {
             _wordReplacementsUiOpen = false;
         }
+    }
+
+    private void EditWorkspaceModes() {
+        if (_workspaceModesUiOpen) {
+            return;
+        }
+        _workspaceModesUiOpen = true;
+        try {
+            using var form = new WorkspaceModesForm(_settings.WorkspaceModes);
+            IWin32Window? owner = _window is { Visible: true, IsDisposed: false } ? _window : null;
+            if (form.ShowDialog(owner) != DialogResult.OK) {
+                return;
+            }
+            _settings.WorkspaceModes = form.Result;
+            _settings.Save();
+            Log.Write("settings: workspaceModes=" + form.Result.Count);
+            ShowBalloon("Workspace modes saved (" + form.Result.Count + ").", OverlayKind.Success);
+            NotifyUi();
+        } catch (Exception ex) {
+            Log.Write("workspace modes ui: " + ex);
+            MessageBox.Show("Could not open Workspace modes: " + ex.Message, "EchoType",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        } finally {
+            _workspaceModesUiOpen = false;
+        }
+    }
+
+    /// <summary>
+    /// A short dictation like "coding mode" presses that mode's shortcut instead of pasting, so
+    /// the user's workspace app can switch. The transcript stays on the clipboard.
+    /// </summary>
+    private bool TryTriggerWorkspaceMode(string transcript) {
+        if (_settings.WorkspaceModes.Count == 0) {
+            return false;
+        }
+        var mode = WorkspaceMode.Match(transcript, _settings.WorkspaceModes);
+        if (mode == null) {
+            return false;
+        }
+        Log.Write("workspace-mode: \"" + mode.Name + "\" -> " + mode.Shortcut);
+        CopyTranscript(transcript);
+        if (WorkspaceMode.SendShortcut(mode.Shortcut)) {
+            Sounds.Pasted();
+            ShowBalloon(mode.Name + " — pressed " + mode.Shortcut + ".", OverlayKind.Success);
+        } else {
+            Log.Write("workspace-mode: SendInput failed");
+            Sounds.Error();
+            ShowBalloon("Could not press " + mode.Shortcut + " for " + mode.Name + ".", OverlayKind.Error);
+        }
+        ResetToIdle();
+        return true;
     }
 
     private void ToggleCleanWindow() {
@@ -781,6 +834,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 "selection-edit",
                 session,
                 transcript);
+            return;
+        }
+
+        if (TryTriggerWorkspaceMode(transcript)) {
             return;
         }
 
@@ -2129,6 +2186,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     void IAppWindowHost.ToggleCleanWindow() => ToggleCleanWindow();
     void IAppWindowHost.EditCleanPrompt() => EditCleanPrompt();
     void IAppWindowHost.EditWordReplacements() => EditWordReplacements();
+    void IAppWindowHost.EditWorkspaceModes() => EditWorkspaceModes();
 
     void IAppWindowHost.SelectModel(TranscriptionProvider provider) => SelectModel(provider);
     void IAppWindowHost.SetToggleRecording(bool toggle) => SetToggleRecording(toggle);
