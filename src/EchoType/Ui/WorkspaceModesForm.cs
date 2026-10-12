@@ -15,7 +15,7 @@ internal sealed class WorkspaceModesForm : Form {
     public WorkspaceModesForm(IEnumerable<WorkspaceMode> modes) {
         Result = modes.Select(Clone).ToList();
 
-        Text = "Workspace modes";
+        Text = Loc.T("Workspace modes");
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -31,16 +31,16 @@ internal sealed class WorkspaceModesForm : Form {
         var title = new Label {
             Dock = DockStyle.Top,
             AutoSize = true,
-            Text = "Say a mode (e.g. \"وضع البرمجة\", \"coding mode\", \"start coding\") and EchoType presses its shortcut instead of pasting",
+            Text = Loc.T("Say a mode (e.g. \"وضع البرمجة\", \"coding mode\", \"start coding\") and EchoType presses its shortcut instead of pasting"),
             Margin = new Padding(0, 0, 0, 4),
         };
         var hint = new Label {
             Dock = DockStyle.Bottom,
             AutoSize = true,
             ForeColor = SystemColors.GrayText,
-            Text = "Shortcut: e.g. Ctrl+Shift+F6. Keywords: words or short phrases, comma separated, any language — "
+            Text = Loc.T("Shortcut: e.g. Ctrl+Shift+F6. Keywords: words or short phrases, comma separated, any language — "
                 + "the mode name counts too. Only short dictations (up to 8 words) are treated as commands. "
-                + "Leave a row's name empty or use Remove to delete it.",
+                + "Leave a row's name empty or use Remove to delete it."),
             Padding = new Padding(0, 6, 0, 0),
         };
         _grid = new DataGridView {
@@ -53,12 +53,12 @@ internal sealed class WorkspaceModesForm : Form {
             BackgroundColor = SystemColors.Window,
             SelectionMode = DataGridViewSelectionMode.CellSelect,
         };
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "Mode", FillWeight = 22 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "shortcut", HeaderText = "Shortcut to press", FillWeight = 18 });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "keywords", HeaderText = "Keywords (comma separated)", FillWeight = 60 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = Loc.T("Mode"), FillWeight = 22 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "shortcut", HeaderText = Loc.T("Shortcut to press"), FillWeight = 18 });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "keywords", HeaderText = Loc.T("Keywords (comma separated)"), FillWeight = 60 });
         FillGrid(Result);
 
-        _testBox = new TextBox { Width = 320, PlaceholderText = "Try a phrase, e.g. ابدأ البرمجة" };
+        _testBox = new TextBox { Width = 320, PlaceholderText = Loc.T("Try a phrase, e.g. ابدأ البرمجة") };
         _testResult = new Label { AutoSize = true, Padding = new Padding(8, 6, 0, 0) };
         _testBox.TextChanged += (_, _) => UpdateTest();
         _grid.CellEndEdit += (_, _) => UpdateTest();
@@ -68,14 +68,14 @@ internal sealed class WorkspaceModesForm : Form {
             WrapContents = false,
             Padding = new Padding(0, 4, 0, 8),
         };
-        testRow.Controls.Add(new Label { Text = "Test:", AutoSize = true, Padding = new Padding(0, 6, 4, 0) });
+        testRow.Controls.Add(new Label { Text = Loc.T("Test:"), AutoSize = true, Padding = new Padding(0, 6, 4, 0) });
         testRow.Controls.Add(_testBox);
         testRow.Controls.Add(_testResult);
 
-        var save = new Button { Text = "Save", AutoSize = true };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true };
-        var remove = new Button { Text = "Remove selected", AutoSize = true };
-        var defaults = new Button { Text = "Restore defaults", AutoSize = true };
+        var save = new Button { Text = Loc.T("Save"), AutoSize = true };
+        var cancel = new Button { Text = Loc.T("Cancel"), DialogResult = DialogResult.Cancel, AutoSize = true };
+        var remove = new Button { Text = Loc.T("Remove selected"), AutoSize = true };
+        var defaults = new Button { Text = Loc.T("Restore defaults"), AutoSize = true };
         save.Click += (_, _) => Save();
         remove.Click += (_, _) => RemoveSelected();
         defaults.Click += (_, _) => {
@@ -101,6 +101,7 @@ internal sealed class WorkspaceModesForm : Form {
         Controls.Add(title);
         Controls.Add(hint);
         Controls.Add(buttons);
+        Loc.ApplyTo(this);
     }
 
     private static WorkspaceMode Clone(WorkspaceMode m) =>
@@ -150,7 +151,7 @@ internal sealed class WorkspaceModesForm : Form {
             }
             string formatted = WorkspaceMode.FormatShortcut(shortcut);
             if (formatted.Length == 0) {
-                error ??= "\"" + name + "\": shortcut \"" + shortcut + "\" is not valid. Use e.g. Ctrl+Shift+F6.";
+                error ??= Loc.F("\"{0}\": shortcut \"{1}\" is not valid. Use e.g. Ctrl+Shift+F6.", name, shortcut);
                 formatted = shortcut;
             }
             modes.Add(new WorkspaceMode {
@@ -173,7 +174,7 @@ internal sealed class WorkspaceModesForm : Form {
         var match = WorkspaceMode.Match(phrase, ReadGrid(out _));
         _testResult.ForeColor = match == null ? SystemColors.GrayText : Color.SeaGreen;
         _testResult.Text = match == null
-            ? "→ no mode (would paste as text)"
+            ? Loc.T("→ no mode (would paste as text)")
             : "→ " + match.Name + " (" + match.Shortcut + ")";
     }
 

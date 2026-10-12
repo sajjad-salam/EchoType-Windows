@@ -35,7 +35,12 @@ internal interface IAppWindowHost {
     void EditWorkspaceModes();
     bool LoginWindowVisible { get; }
     float MicLevel { get; }
+    /// <summary>Fills the live voice spectrum (0–1 per bar); false when none is available.</summary>
+    bool CopyMicSpectrum(float[] dest);
     string StatusText { get; }
+    /// <summary>Saves the interface language ("en" / "ar") and restarts EchoType to apply it.</summary>
+    void SetUiLanguage(string code);
+    void SetShowAskReplyWindow(bool value);
     event Action? UiChanged;
     void SelectModel(TranscriptionProvider provider);
     void SetToggleRecording(bool toggle);
@@ -86,6 +91,9 @@ internal sealed class AppWindow : Form {
     private readonly HudToggleRow _enterToggle;
     private readonly HudToggleRow _clipboardToggle;
     private readonly HudToggleRow _startupToggle;
+    private readonly HudToggleRow _askPopupToggle;
+    private readonly HudSegmented _languageSeg;
+    private readonly float[] _spectrum = new float[24];
     private readonly HudCommandList _commands;
     private readonly HudButton _editCommands;
     private readonly HudButton _openLog;
@@ -159,12 +167,12 @@ internal sealed class AppWindow : Form {
         _statusCard.Height = 168;
         _statusCard.Paint += OnStatusCardPaint;
 
-        _loginButton = MakeButton("Open window", HudButton.Kind.Primary);
+        _loginButton = MakeButton(Loc.T("Open window"), HudButton.Kind.Primary);
         _loginButton.Click += (_, _) => _host.ToggleLoginWindow();
         PlaceOnCard(_statusCard, _loginButton, 18);
 
         var modelCard = MakeCard();
-        AddCaption(modelCard, "Transcription model");
+        AddCaption(modelCard, Loc.T("Transcription model"));
         _modelSeg = new HudSegmented { Items = ["ChatGPT", "Gemini", "Claude"] };
         _modelSeg.SelectedIndexChanged += (_, _) => {
             if (_syncing) {
@@ -177,16 +185,16 @@ internal sealed class AppWindow : Form {
             });
         };
         AddControl(modelCard, _modelSeg, 40);
-        _chatgptKey = AddHotkey(modelCard, "Switch to ChatGPT", AppShortcut.ChatGpt);
-        _geminiKey = AddHotkey(modelCard, "Switch to Gemini", AppShortcut.Gemini);
-        _claudeKey = AddHotkey(modelCard, "Switch to Claude (live transcript)", AppShortcut.Claude);
+        _chatgptKey = AddHotkey(modelCard, Loc.T("Switch to ChatGPT"), AppShortcut.ChatGpt);
+        _geminiKey = AddHotkey(modelCard, Loc.T("Switch to Gemini"), AppShortcut.Gemini);
+        _claudeKey = AddHotkey(modelCard, Loc.T("Switch to Claude (live transcript)"), AppShortcut.Claude);
         FinishCard(modelCard);
 
         var cleanCard = MakeCard();
-        AddCaption(cleanCard, "Auto Clean (cleaning model)");
-        _cleanToggle = AddToggle(cleanCard, "Auto Clean dictation",
+        AddCaption(cleanCard, Loc.T("Auto Clean (cleaning model)"));
+        _cleanToggle = AddToggle(cleanCard, Loc.T("Auto Clean dictation"),
             toggle => _host.SetAutoClean(toggle.Checked));
-        _cleanKey = AddHotkey(cleanCard, "Auto Clean on/off shortcut", AppShortcut.AutoClean);
+        _cleanKey = AddHotkey(cleanCard, Loc.T("Auto Clean on/off shortcut"), AppShortcut.AutoClean);
         _cleanSeg = new HudSegmented { Items = ["ChatGPT", "Gemini", "Claude"] };
         _cleanSeg.SelectedIndexChanged += (_, _) => {
             if (_syncing) {
@@ -199,31 +207,31 @@ internal sealed class AppWindow : Form {
             });
         };
         AddControl(cleanCard, _cleanSeg, 40);
-        _cleanWindowButton = MakeButton("Open cleaning window", HudButton.Kind.Ghost);
+        _cleanWindowButton = MakeButton(Loc.T("Open cleaning window"), HudButton.Kind.Ghost);
         _cleanWindowButton.Click += (_, _) => _host.ToggleCleanWindow();
         AddControl(cleanCard, _cleanWindowButton, 44);
-        _cleanPromptButton = MakeButton("Edit cleaning prompt…", HudButton.Kind.Ghost);
+        _cleanPromptButton = MakeButton(Loc.T("Edit cleaning prompt…"), HudButton.Kind.Ghost);
         _cleanPromptButton.Click += (_, _) => _host.EditCleanPrompt();
         AddControl(cleanCard, _cleanPromptButton, 44);
         FinishCard(cleanCard);
 
         var wordsCard = MakeCard();
-        AddCaption(wordsCard, "Word replacements (dialect)");
-        var wordsButton = MakeButton("Edit word replacements…", HudButton.Kind.Ghost);
+        AddCaption(wordsCard, Loc.T("Word replacements (dialect)"));
+        var wordsButton = MakeButton(Loc.T("Edit word replacements…"), HudButton.Kind.Ghost);
         wordsButton.Click += (_, _) => _host.EditWordReplacements();
         AddControl(wordsCard, wordsButton, 44);
         FinishCard(wordsCard);
 
         var modesCard = MakeCard();
-        AddCaption(modesCard, "Workspace modes (voice → shortcut)");
-        var modesButton = MakeButton("Edit workspace modes…", HudButton.Kind.Ghost);
+        AddCaption(modesCard, Loc.T("Workspace modes (voice → shortcut)"));
+        var modesButton = MakeButton(Loc.T("Edit workspace modes…"), HudButton.Kind.Ghost);
         modesButton.Click += (_, _) => _host.EditWorkspaceModes();
         AddControl(modesCard, modesButton, 44);
         FinishCard(modesCard);
 
         var recordCard = MakeCard();
-        AddCaption(recordCard, "Recording");
-        _modeSeg = new HudSegmented { Items = ["Hold to talk", "Press to start/stop"] };
+        AddCaption(recordCard, Loc.T("Recording"));
+        _modeSeg = new HudSegmented { Items = [Loc.T("Hold to talk"), Loc.T("Press to start/stop")] };
         _modeSeg.SelectedIndexChanged += (_, _) => {
             if (_syncing) {
                 return;
@@ -231,15 +239,16 @@ internal sealed class AppWindow : Form {
             _host.SetToggleRecording(_modeSeg.SelectedIndex == 1);
         };
         AddControl(recordCard, _modeSeg, 40);
-        _dictationKey = AddHotkey(recordCard, "Dictation key", AppShortcut.Dictation, optional: false);
-        _askModelKey = AddHotkey(recordCard, "Ask model", AppShortcut.AskModel);
-        _translateKey = AddHotkey(recordCard, "Translate", AppShortcut.Translate);
+        _dictationKey = AddHotkey(recordCard, Loc.T("Dictation key"), AppShortcut.Dictation, optional: false);
+        _askModelKey = AddHotkey(recordCard, Loc.T("Ask model"), AppShortcut.AskModel);
+        _translateKey = AddHotkey(recordCard, Loc.T("Translate"), AppShortcut.Translate);
         _translateKey.MultiKey = true;
         _translateLanguage = new ComboBox {
             DropDownStyle = ComboBoxStyle.DropDownList,
             FlatStyle = FlatStyle.Flat,
             ForeColor = HudTheme.Body,
             Font = Font,
+            RightToLeft = Loc.Rtl ? RightToLeft.Yes : RightToLeft.No,
         };
         foreach (var (code, name) in GoogleTranslation.Languages) {
             _translateLanguage.Items.Add(new LanguageItem(code, name));
@@ -250,46 +259,62 @@ internal sealed class AppWindow : Form {
             }
         };
         AddControl(recordCard, _translateLanguage, 32);
-        var openAiKey = MakeButton("OpenAI API key…", HudButton.Kind.Ghost);
+        var openAiKey = MakeButton(Loc.T("OpenAI API key…"), HudButton.Kind.Ghost);
         openAiKey.Click += (_, _) => _host.EditOpenAiKey();
         AddControl(recordCard, openAiKey, 44);
         FinishCard(recordCard);
 
         var optionsCard = MakeCard();
-        AddCaption(optionsCard, "Options");
-        _muteToggle = AddToggle(optionsCard, "Pause or mute other apps while dictating",
+        AddCaption(optionsCard, Loc.T("Options"));
+        _muteToggle = AddToggle(optionsCard, Loc.T("Pause or mute other apps while dictating"),
             toggle => _host.SetMuteOthers(toggle.Checked));
-        _enterToggle = AddToggle(optionsCard, "Press Enter after paste",
+        _enterToggle = AddToggle(optionsCard, Loc.T("Press Enter after paste"),
             toggle => _host.SetPressEnterAfterPaste(toggle.Checked));
-        _enterKey = AddHotkey(optionsCard, "Auto Enter shortcut", AppShortcut.PressEnter);
-        _clipboardToggle = AddToggle(optionsCard, "Keep transcript on clipboard",
+        _enterKey = AddHotkey(optionsCard, Loc.T("Auto Enter shortcut"), AppShortcut.PressEnter);
+        _clipboardToggle = AddToggle(optionsCard, Loc.T("Keep transcript on clipboard"),
             toggle => _host.SetKeepTranscriptOnClipboard(toggle.Checked));
-        _startupToggle = AddToggle(optionsCard, "Start EchoType with Windows",
+        _askPopupToggle = AddToggle(optionsCard, Loc.T("Show Ask model replies in a popup"),
+            toggle => _host.SetShowAskReplyWindow(toggle.Checked));
+        _startupToggle = AddToggle(optionsCard, Loc.T("Start EchoType with Windows"),
             toggle => _host.SetStartWithWindows(toggle.Checked));
         FinishCard(optionsCard);
 
+        var languageCard = MakeCard();
+        AddCaption(languageCard, Loc.T("Language") + (Loc.Arabic ? "" : " · اللغة"));
+        // Each name in its own language so it can be found whatever the current UI is.
+        _languageSeg = new HudSegmented { Items = ["English", "العربية"] };
+        _languageSeg.SelectedIndexChanged += (_, _) => {
+            if (!_syncing) {
+                _host.SetUiLanguage(_languageSeg.SelectedIndex == 1 ? Loc.ArabicCode : Loc.English);
+            }
+        };
+        AddControl(languageCard, _languageSeg, 40);
+        FinishCard(languageCard);
+
         var commandsCard = MakeCard();
-        AddCaption(commandsCard, "Custom commands");
+        AddCaption(commandsCard, Loc.T("Custom commands"));
         _commands = new HudCommandList();
         AddControl(commandsCard, _commands, 48);
-        _editCommands = MakeButton("Add or edit…", HudButton.Kind.Ghost);
+        _editCommands = MakeButton(Loc.T("Add or edit…"), HudButton.Kind.Ghost);
         _editCommands.Click += (_, _) => _host.OpenCommands();
         AddControl(commandsCard, _editCommands, 38);
         FinishCard(commandsCard);
 
         var moreCard = MakeCard();
-        AddCaption(moreCard, "Model window");
-        _windowKey = AddHotkey(moreCard, "Open model window", AppShortcut.ModelWindow);
+        AddCaption(moreCard, Loc.T("Model window"));
+        _windowKey = AddHotkey(moreCard, Loc.T("Open model window"), AppShortcut.ModelWindow);
         var actions = new FlowLayoutPanel {
-            AutoSize = true,
+            // Full card width for Arabic so the buttons can line up from the right.
+            AutoSize = !Loc.Rtl,
             WrapContents = false,
             BackColor = HudTheme.Card,
             Margin = new Padding(0, 8, 0, 0),
+            FlowDirection = Loc.Rtl ? FlowDirection.RightToLeft : FlowDirection.LeftToRight,
         };
-        _openLog = MakeButton("Open log", HudButton.Kind.Ghost);
+        _openLog = MakeButton(Loc.T("Open log"), HudButton.Kind.Ghost);
         _openLog.Width = 120;
         _openLog.Click += (_, _) => _host.OpenLog();
-        _quit = MakeButton("Quit EchoType", HudButton.Kind.Danger);
+        _quit = MakeButton(Loc.T("Quit EchoType"), HudButton.Kind.Danger);
         _quit.Width = 140;
         _quit.Click += (_, _) => _host.Quit();
         actions.Controls.Add(_openLog);
@@ -358,7 +383,7 @@ internal sealed class AppWindow : Form {
             if (!_trayHintShown) {
                 _trayHintShown = true;
                 StatusOverlay.ShowNotice(
-                    "Still running in the tray. Double-click the icon to open EchoType again.");
+                    Loc.T("Still running in the tray. Double-click the icon to open EchoType again."));
             }
         }
         base.OnFormClosing(e);
@@ -451,12 +476,14 @@ internal sealed class AppWindow : Form {
                 TranscriptionProvider.Claude => 2,
                 _ => 0,
             });
-            _cleanWindowButton.Text = (_host.CleanWindowVisible ? "Close " : "Open ") + _host.CleanModelName + " window";
+            _cleanWindowButton.Text = Loc.F(_host.CleanWindowVisible ? "Close {0} window" : "Open {0} window", _host.CleanModelName);
             _modeSeg.SetSilent(s.ToggleRecording ? 1 : 0);
             _muteToggle.SetSilent(s.MuteOtherAppsWhileDictating);
             _enterToggle.SetSilent(s.PressEnterAfterPaste);
             _clipboardToggle.SetSilent(s.KeepTranscriptOnClipboard);
             _startupToggle.SetSilent(s.StartWithWindows);
+            _askPopupToggle.SetSilent(s.ShowAskReplyWindow);
+            _languageSeg.SetSilent(Loc.Arabic ? 1 : 0);
             _dictationKey.Value = HotkeyNames.For(s.HotkeyVk);
             _askModelKey.Value = HotkeyLabel(s.AskModelVk);
             if (_capturing != _translateKey) {
@@ -478,10 +505,10 @@ internal sealed class AppWindow : Form {
             _enterKey.Invalidate();
             _cleanKey.Invalidate();
             _windowKey.Invalidate();
-            _loginButton.Text = !_host.Online ? "Retry connection"
-                : _host.LoginWindowVisible ? "Close " + _host.ModelName + " window"
-                : _host.LoggedIn ? "Open " + _host.ModelName + " window"
-                : "Log in to " + _host.ModelName;
+            _loginButton.Text = !_host.Online ? Loc.T("Retry connection")
+                : _host.LoginWindowVisible ? Loc.F("Close {0} window", _host.ModelName)
+                : _host.LoggedIn ? Loc.F("Open {0} window", _host.ModelName)
+                : Loc.F("Log in to {0}", _host.ModelName);
             _commands.Reload(s.ActiveCommands.Select(c => {
                 c.Normalize();
                 return (c.DisplayName, HotkeyNames.For(c.Chord));
@@ -502,7 +529,11 @@ internal sealed class AppWindow : Form {
         }
         _time += 0.016f;
         if (_host.Phase == AppPhase.Listening) {
-            HudTheme.StepWave(_bars, ref _smoothed, _host.MicLevel, _time);
+            if (_host.CopyMicSpectrum(_spectrum)) {
+                HudTheme.StepSpectrum(_bars, ref _smoothed, _spectrum, _host.MicLevel);
+            } else {
+                HudTheme.StepWave(_bars, ref _smoothed, _host.MicLevel, _time);
+            }
             _statusCard.Invalidate();
             _caption.Invalidate();
         } else if (_smoothed > 0.01f) {
@@ -534,7 +565,11 @@ internal sealed class AppWindow : Form {
         float glow = HudTheme.DipF(this, 7)
             + HudTheme.DipF(this, 3) * (pulse - 0.55f)
             + HudTheme.DipF(this, 4) * _smoothed * pulse;
+        int w = _caption.Width;
         int cx = pad + HudTheme.Dip(this, 6);
+        if (Loc.Rtl) {
+            cx = w - cx;
+        }
         using (var glowBrush = new SolidBrush(Color.FromArgb((int)(36 + 40 * _smoothed), accent))) {
             e.Graphics.FillEllipse(glowBrush, cx - glow, cy - glow - 6, glow * 2, glow * 2);
         }
@@ -543,14 +578,17 @@ internal sealed class AppWindow : Form {
             e.Graphics.FillEllipse(dot, cx - d, cy - d - 6, d * 2, d * 2);
         }
 
+        // Caption buttons sit on the left for Arabic (PlaceCaptionButtons), so measure
+        // the free space from whichever side they are on.
         int textLeft = pad + HudTheme.Dip(this, 22);
-        int textRight = Math.Max(textLeft + 40, _min.Left - HudTheme.Dip(this, 8));
+        int buttonsEdge = Loc.Rtl ? w - _min.Right : _min.Left;
+        int textRight = Math.Max(textLeft + 40, buttonsEdge - HudTheme.Dip(this, 8));
         TextRenderer.DrawText(e.Graphics, "EchoType", HudTheme.Caption,
-            new Rectangle(textLeft, HudTheme.Dip(this, 10), textRight - textLeft, HudTheme.Dip(this, 24)),
-            HudTheme.Body, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            Loc.Mirror(new Rectangle(textLeft, HudTheme.Dip(this, 10), textRight - textLeft, HudTheme.Dip(this, 24)), w),
+            HudTheme.Body, Loc.Flags(TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
         TextRenderer.DrawText(e.Graphics, _host.StatusText, HudTheme.Small,
-            new Rectangle(textLeft, HudTheme.Dip(this, 34), textRight - textLeft, HudTheme.Dip(this, 20)),
-            HudTheme.Muted, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            Loc.Mirror(new Rectangle(textLeft, HudTheme.Dip(this, 34), textRight - textLeft, HudTheme.Dip(this, 20)), w),
+            HudTheme.Muted, Loc.Flags(TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
 
         using var hair = new Pen(HudTheme.Border, 1f);
         e.Graphics.DrawLine(hair, 0, _caption.Height - 1, _caption.Width, _caption.Height - 1);
@@ -563,24 +601,25 @@ internal sealed class AppWindow : Form {
         int left = pill.Left + HudTheme.Dip(this, 28);
         int top = pill.Top + HudTheme.Dip(this, 16);
         string phase = HudTheme.PhaseLabel(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
-        string body = _host.ModelName
-            + (!_host.Online ? " · No internet"
-                : !_host.LoggedIn ? " · Sign in to dictate"
-                : _host.PageReady ? " · Signed in"
-                : " · Waiting for page");
+        string body = _host.ModelName + " · " + Loc.T(
+            !_host.Online ? "No internet"
+                : !_host.LoggedIn ? "Sign in to dictate"
+                : _host.PageReady ? "Signed in"
+                : "Waiting for page");
+        int cw = _statusCard.Width;
         TextRenderer.DrawText(e.Graphics, phase, HudTheme.Display,
-            new Rectangle(left, top, pill.Width - HudTheme.Dip(this, 48), HudTheme.Dip(this, 32)),
-            HudTheme.Body, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            Loc.Mirror(new Rectangle(left, top, pill.Width - HudTheme.Dip(this, 48), HudTheme.Dip(this, 32)), cw),
+            HudTheme.Body, Loc.Flags(TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
         TextRenderer.DrawText(e.Graphics, body, HudTheme.Small,
-            new Rectangle(left, top + HudTheme.Dip(this, 32), pill.Width - HudTheme.Dip(this, 48), HudTheme.Dip(this, 20)),
-            HudTheme.Muted, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            Loc.Mirror(new Rectangle(left, top + HudTheme.Dip(this, 32), pill.Width - HudTheme.Dip(this, 48), HudTheme.Dip(this, 20)), cw),
+            HudTheme.Muted, Loc.Flags(TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
 
         if (_host.Phase == AppPhase.Listening) {
-            var wave = new Rectangle(
+            var wave = Loc.Mirror(new Rectangle(
                 pill.Right - HudTheme.Dip(this, 168),
                 pill.Top + HudTheme.Dip(this, 18),
                 HudTheme.Dip(this, 132),
-                HudTheme.Dip(this, 36));
+                HudTheme.Dip(this, 36)), cw);
             HudTheme.DrawWave(e.Graphics, wave, _bars, HudTheme.Teal, HudTheme.DipF(this, 18));
         }
     }
@@ -605,8 +644,14 @@ internal sealed class AppWindow : Form {
         int pad = HudTheme.Dip(this, 14);
         _close.Size = new Size(HudTheme.Dip(this, 36), HudTheme.Dip(this, 28));
         _min.Size = _close.Size;
-        _close.Location = new Point(_caption.Width - _close.Width - pad, (_caption.Height - _close.Height) / 2);
-        _min.Location = new Point(_close.Left - _min.Width - HudTheme.Dip(this, 6), _close.Top);
+        int top = (_caption.Height - _close.Height) / 2;
+        if (Loc.Rtl) {
+            _close.Location = new Point(pad, top);
+            _min.Location = new Point(_close.Right + HudTheme.Dip(this, 6), top);
+            return;
+        }
+        _close.Location = new Point(_caption.Width - _close.Width - pad, top);
+        _min.Location = new Point(_close.Left - _min.Width - HudTheme.Dip(this, 6), top);
     }
 
     private void Relayout() {
@@ -633,14 +678,22 @@ internal sealed class AppWindow : Form {
     }
 
     private static void AddCaption(HudCard card, string text) {
+        // Arabic: a full-width, right-aligned label (LayoutStacked sets the width).
         var label = new Label {
             Text = text,
-            AutoSize = true,
+            AutoSize = !Loc.Rtl,
             Font = HudTheme.Section,
             ForeColor = HudTheme.Title,
             BackColor = HudTheme.Card,
             Margin = new Padding(0, 0, 0, 10),
+            UseMnemonic = false,
         };
+        if (Loc.Rtl) {
+            // RightToLeft mirrors TextAlign, so MiddleLeft lands on the right edge.
+            label.RightToLeft = RightToLeft.Yes;
+            label.TextAlign = ContentAlignment.MiddleLeft;
+            label.Height = TextRenderer.MeasureText(text, label.Font).Height + 4;
+        }
         card.Controls.Add(label);
         LayoutStacked(card);
     }
@@ -803,8 +856,8 @@ internal sealed class AppWindow : Form {
     }
 
     private sealed record LanguageItem(string Code, string Name) {
-        public override string ToString() => "Translate to " + Name;
+        public override string ToString() => Loc.F("Translate to {0}", Name);
     }
 
-    private static string HotkeyLabel(int vk) => vk <= 0 ? "(none)" : HotkeyNames.For(vk);
+    private static string HotkeyLabel(int vk) => vk <= 0 ? Loc.T("(none)") : HotkeyNames.For(vk);
 }

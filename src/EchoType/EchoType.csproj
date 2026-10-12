@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Assets\Sounds\*.wav" LogicalName="EchoType.Sounds.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Assets\Fonts\*.ttf" LogicalName="EchoType.Fonts.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <!-- Single-file publish swallows the RID-native WebView2Loader.dll into the bundle.

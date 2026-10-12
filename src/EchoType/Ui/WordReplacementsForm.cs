@@ -13,7 +13,7 @@ internal sealed class WordReplacementsForm : Form {
     public WordReplacementsForm(IEnumerable<WordReplacement> rules) {
         Result = rules.Select(r => new WordReplacement { From = r.From, To = r.To }).ToList();
 
-        Text = "Word replacements";
+        Text = Loc.T("Word replacements");
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -29,15 +29,15 @@ internal sealed class WordReplacementsForm : Form {
         var title = new Label {
             Dock = DockStyle.Top,
             AutoSize = true,
-            Text = "Replace words in every transcript before it is pasted",
+            Text = Loc.T("Replace words in every transcript before it is pasted"),
             Margin = new Padding(0, 0, 0, 4),
         };
         var hint = new Label {
             Dock = DockStyle.Bottom,
             AutoSize = true,
             ForeColor = SystemColors.GrayText,
-            Text = "Whole words only, e.g. نقول → نكول. Applied to dictation, Auto Clean, Translate, "
-                + "Ask model and custom commands. Leave a row empty to remove it.",
+            Text = Loc.T("Whole words only, e.g. نقول → نكول. Applied to dictation, Auto Clean, Translate, "
+                + "Ask model and custom commands. Leave a row empty to remove it."),
             Padding = new Padding(0, 6, 0, 0),
         };
         _grid = new DataGridView {
@@ -50,15 +50,15 @@ internal sealed class WordReplacementsForm : Form {
             BackgroundColor = SystemColors.Window,
             SelectionMode = DataGridViewSelectionMode.CellSelect,
         };
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "from", HeaderText = "Model writes" });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "to", HeaderText = "Replace with" });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "from", HeaderText = Loc.T("Model writes") });
+        _grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "to", HeaderText = Loc.T("Replace with") });
         foreach (var rule in Result) {
             _grid.Rows.Add(rule.From, rule.To);
         }
 
-        var save = new Button { Text = "Save", AutoSize = true };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true };
-        var remove = new Button { Text = "Remove selected", AutoSize = true };
+        var save = new Button { Text = Loc.T("Save"), AutoSize = true };
+        var cancel = new Button { Text = Loc.T("Cancel"), DialogResult = DialogResult.Cancel, AutoSize = true };
+        var remove = new Button { Text = Loc.T("Remove selected"), AutoSize = true };
         save.Click += (_, _) => Save();
         remove.Click += (_, _) => RemoveSelected();
         CancelButton = cancel;
@@ -78,6 +78,7 @@ internal sealed class WordReplacementsForm : Form {
         Controls.Add(title);
         Controls.Add(hint);
         Controls.Add(buttons);
+        Loc.ApplyTo(this);
     }
 
     protected override void OnShown(EventArgs e) {

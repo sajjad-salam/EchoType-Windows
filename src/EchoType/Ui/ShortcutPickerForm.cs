@@ -62,7 +62,7 @@ internal sealed class ShortcutPickerForm : Form {
         _chord = currentChord;
         _ignoreChord = currentChord;
 
-        Text = title ?? "EchoType — Auto Enter shortcut";
+        Text = title ?? Loc.T("EchoType — Auto Enter shortcut");
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -87,7 +87,7 @@ internal sealed class ShortcutPickerForm : Form {
             }
             _hotkey.CaptureKeys = true;
             if (_chordMode ? _chord.IsEmpty : _hotkeyVk == 0) {
-                _hotkeyBox.Text = _chordMode ? "Press up to 3 keys…" : "Press a key…";
+                _hotkeyBox.Text = _chordMode ? Loc.T("Press up to 3 keys…") : Loc.T("Press a key…");
             }
         };
         _hotkeyBox.LostFocus += (_, _) => {
@@ -97,9 +97,9 @@ internal sealed class ShortcutPickerForm : Form {
             _hotkeyBox.Text = CurrentLabel();
         };
 
-        var save = new Button { Text = "Save", AutoSize = true };
-        var clear = new Button { Text = "Clear", AutoSize = true };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true };
+        var save = new Button { Text = Loc.T("Save"), AutoSize = true };
+        var clear = new Button { Text = Loc.T("Clear"), AutoSize = true };
+        var cancel = new Button { Text = Loc.T("Cancel"), DialogResult = DialogResult.Cancel, AutoSize = true };
         save.Click += (_, _) => TrySave();
         clear.Click += (_, _) => {
             _hotkeyVk = 0;
@@ -127,12 +127,13 @@ internal sealed class ShortcutPickerForm : Form {
         };
         body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         body.Controls.Add(Field(
-            fieldLabel ?? "Toggle key",
+            fieldLabel ?? Loc.T("Toggle key"),
             _hotkeyBox,
-            hint ?? "Click the box, then press the key that should turn Auto Enter on or off. EchoType reserves that key while it is running. Clear removes the shortcut."), 0, 0);
+            hint ?? Loc.T("Click the box, then press the key that should turn Auto Enter on or off. EchoType reserves that key while it is running. Clear removes the shortcut.")), 0, 0);
 
         Controls.Add(body);
         Controls.Add(buttons);
+        Loc.ApplyTo(this);
     }
 
     private static TableLayoutPanel Field(string title, Control field, string hint) {
@@ -212,8 +213,8 @@ internal sealed class ShortcutPickerForm : Form {
 
     private string CurrentLabel() {
         if (_chordMode) {
-            return _chord.IsEmpty ? "Click here, then press up to 3 keys (or Clear)" : HotkeyNames.For(_chord);
+            return _chord.IsEmpty ? Loc.T("Click here, then press up to 3 keys (or Clear)") : HotkeyNames.For(_chord);
         }
-        return _hotkeyVk <= 0 ? "Click here, then press a key (or Clear)" : HotkeyNames.For(_hotkeyVk);
+        return _hotkeyVk <= 0 ? Loc.T("Click here, then press a key (or Clear)") : HotkeyNames.For(_hotkeyVk);
     }
 }

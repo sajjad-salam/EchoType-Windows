@@ -16,7 +16,7 @@ internal sealed class OpenAiKeyForm : Form {
         Result = apiKey;
         _model = model;
 
-        Text = "OpenAI API key (translation)";
+        Text = Loc.T("OpenAI API key (translation)");
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -37,9 +37,9 @@ internal sealed class OpenAiKeyForm : Form {
         layout.Controls.Add(new Label {
             AutoSize = true,
             MaximumSize = new Size(520, 0),
-            Text = "With a key, the Translate shortcut uses OpenAI (" + (string.IsNullOrWhiteSpace(model) ? OpenAiTranslation.DefaultModel : model)
-                + "), which also translates the English terms inside Arabic speech (and the other way round). "
+            Text = Loc.F("With a key, the Translate shortcut uses OpenAI ({0}), which also translates the English terms inside Arabic speech (and the other way round). "
                 + "If the OpenAI call fails, Google Translate is used instead. Leave empty to use Google Translate only.",
+                string.IsNullOrWhiteSpace(model) ? OpenAiTranslation.DefaultModel : model),
             Margin = new Padding(0, 0, 0, 8),
         });
         _keyBox = new TextBox {
@@ -49,7 +49,7 @@ internal sealed class OpenAiKeyForm : Form {
             PlaceholderText = "sk-…",
         };
         layout.Controls.Add(_keyBox);
-        var show = new CheckBox { Text = "Show key", AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
+        var show = new CheckBox { Text = Loc.T("Show key"), AutoSize = true, Margin = new Padding(0, 6, 0, 0) };
         show.CheckedChanged += (_, _) => _keyBox.UseSystemPasswordChar = !show.Checked;
         layout.Controls.Add(show);
         _status = new Label {
@@ -60,10 +60,10 @@ internal sealed class OpenAiKeyForm : Form {
         };
         layout.Controls.Add(_status);
 
-        var save = new Button { Text = "Save", AutoSize = true };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true };
-        _test = new Button { Text = "Test", AutoSize = true };
-        var clear = new Button { Text = "Clear", AutoSize = true };
+        var save = new Button { Text = Loc.T("Save"), AutoSize = true };
+        var cancel = new Button { Text = Loc.T("Cancel"), DialogResult = DialogResult.Cancel, AutoSize = true };
+        _test = new Button { Text = Loc.T("Test"), AutoSize = true };
+        var clear = new Button { Text = Loc.T("Clear"), AutoSize = true };
         save.Click += (_, _) => {
             Result = _keyBox.Text.Trim();
             DialogResult = DialogResult.OK;
@@ -92,18 +92,19 @@ internal sealed class OpenAiKeyForm : Form {
         layout.Controls.Add(buttons);
 
         Controls.Add(layout);
+        Loc.ApplyTo(this);
     }
 
     private async Task TestAsync() {
         string key = _keyBox.Text.Trim();
         if (key.Length == 0) {
             _status.ForeColor = SystemColors.GrayText;
-            _status.Text = "Enter a key first.";
+            _status.Text = Loc.T("Enter a key first.");
             return;
         }
         _test.Enabled = false;
         _status.ForeColor = SystemColors.GrayText;
-        _status.Text = "Testing…";
+        _status.Text = Loc.T("Testing…");
         var started = DateTime.UtcNow;
         string? error = await OpenAiTranslation.TestKeyAsync(key, _model);
         if (IsDisposed) {
@@ -112,10 +113,10 @@ internal sealed class OpenAiKeyForm : Form {
         _test.Enabled = true;
         if (error == null) {
             _status.ForeColor = Color.ForestGreen;
-            _status.Text = "The key works (" + (int)(DateTime.UtcNow - started).TotalMilliseconds + " ms).";
+            _status.Text = Loc.F("The key works ({0} ms).", (int)(DateTime.UtcNow - started).TotalMilliseconds);
         } else {
             _status.ForeColor = Color.Firebrick;
-            _status.Text = "The key did not work: " + error;
+            _status.Text = Loc.T("The key did not work: ") + error;
         }
     }
 }

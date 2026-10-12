@@ -25,7 +25,7 @@ internal sealed class CommandEditorForm : Form {
         _chord = draft.Chord;
         draft.Normalize();
 
-        Text = string.IsNullOrWhiteSpace(draft.Name) ? "New custom command" : "Edit custom command";
+        Text = string.IsNullOrWhiteSpace(draft.Name) ? Loc.T("New custom command") : Loc.T("Edit custom command");
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -49,7 +49,7 @@ internal sealed class CommandEditorForm : Form {
             _hotkey.CaptureMaxKeys = HotkeyChord.MaxKeys;
             _hotkey.CaptureKeys = true;
             if (_chord.IsEmpty) {
-                _hotkeyBox.Text = "Press up to 3 keys…";
+                _hotkeyBox.Text = Loc.T("Press up to 3 keys…");
             }
         };
         _hotkeyBox.LostFocus += (_, _) => {
@@ -67,11 +67,11 @@ internal sealed class CommandEditorForm : Form {
             Padding = new Padding(0, 0, 8, 0),
         };
 
-        _addAction = new Button { Text = "Add button", AutoSize = true };
+        _addAction = new Button { Text = Loc.T("Add button"), AutoSize = true };
         _addAction.Click += (_, _) => AddAction(new CommandButton(), focus: true);
 
-        var save = new Button { Text = "Save", AutoSize = true };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true };
+        var save = new Button { Text = Loc.T("Save"), AutoSize = true };
+        var cancel = new Button { Text = Loc.T("Cancel"), DialogResult = DialogResult.Cancel, AutoSize = true };
         save.Click += (_, _) => TrySave();
         AcceptButton = save;
         CancelButton = cancel;
@@ -103,17 +103,17 @@ internal sealed class CommandEditorForm : Form {
         body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        body.Controls.Add(Field("Name", _nameBox), 0, 0);
+        body.Controls.Add(Field(Loc.T("Name"), _nameBox), 0, 0);
         body.Controls.Add(Field(
-            settings.ToggleRecording ? "Recording shortcut" : "Hold-to-talk shortcut",
+            settings.ToggleRecording ? Loc.T("Recording shortcut") : Loc.T("Hold-to-talk shortcut"),
             _hotkeyBox,
             settings.ToggleRecording
-                ? "Click the box, then press one, two, or three keys (for example F8, Ctrl+Space, or Ctrl+Shift+Space). That shortcut is reserved while EchoType runs."
-                : "Click the box, then hold one, two, or three keys (for example F8, Ctrl+Space, or Ctrl+Shift+Space). That shortcut is reserved while EchoType runs."), 0, 1);
+                ? Loc.T("Click the box, then press one, two, or three keys (for example F8, Ctrl+Space, or Ctrl+Shift+Space). That shortcut is reserved while EchoType runs.")
+                : Loc.T("Click the box, then hold one, two, or three keys (for example F8, Ctrl+Space, or Ctrl+Shift+Space). That shortcut is reserved while EchoType runs.")), 0, 1);
         body.Controls.Add(Field(
-            "Buttons",
+            Loc.T("Buttons"),
             _actions,
-            "A command can be one button or a group. After you dictate, EchoType runs a single button immediately, or shows the group so you can pick. The transcription is appended after each prompt. Put {transcript} anywhere to place it yourself. Highlighted text is included automatically (or use {selection}).",
+            Loc.T("A command can be one button or a group. After you dictate, EchoType runs a single button immediately, or shows the group so you can pick. The transcription is appended after each prompt. Put {transcript} anywhere to place it yourself. Highlighted text is included automatically (or use {selection})."),
             fill: true), 0, 2);
 
         Controls.Add(body);
@@ -125,6 +125,7 @@ internal sealed class CommandEditorForm : Form {
             AddAction(button, focus: false);
         }
         SyncAddEnabled();
+        Loc.ApplyTo(this);
     }
 
     private void AddAction(CommandButton button, bool focus) {
@@ -142,7 +143,7 @@ internal sealed class CommandEditorForm : Form {
 
     private void RemoveAction(ActionRow row) {
         if (_actions.Controls.Count <= 1) {
-            MessageBox.Show(this, "A command needs at least one button.", "EchoType",
+            MessageBox.Show(this, Loc.T("A command needs at least one button."), "EchoType",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
@@ -231,7 +232,7 @@ internal sealed class CommandEditorForm : Form {
 
     private void TrySave() {
         if (_chord.IsEmpty) {
-            MessageBox.Show(this, "Press a recording shortcut first (one to three keys).", "EchoType",
+            MessageBox.Show(this, Loc.T("Press a recording shortcut first (one to three keys)."), "EchoType",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             _hotkeyBox.Focus();
             return;
@@ -248,7 +249,7 @@ internal sealed class CommandEditorForm : Form {
             if (control is ActionRow row) {
                 var button = row.ToButton();
                 if (string.IsNullOrWhiteSpace(button.Prompt)) {
-                    MessageBox.Show(this, "Each button needs a prompt to send with the transcription.", "EchoType",
+                    MessageBox.Show(this, Loc.T("Each button needs a prompt to send with the transcription."), "EchoType",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
                     row.FocusPrompt();
                     return;
@@ -257,7 +258,7 @@ internal sealed class CommandEditorForm : Form {
             }
         }
         if (buttons.Count == 0) {
-            MessageBox.Show(this, "Add at least one button.", "EchoType",
+            MessageBox.Show(this, Loc.T("Add at least one button."), "EchoType",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
@@ -271,7 +272,7 @@ internal sealed class CommandEditorForm : Form {
     }
 
     private static string HotkeyLabel(HotkeyChord chord) =>
-        chord.IsEmpty ? "Click here, then press up to 3 keys" : HotkeyNames.For(chord);
+        chord.IsEmpty ? Loc.T("Click here, then press up to 3 keys") : HotkeyNames.For(chord);
 
     private sealed class ActionRow : Panel {
 
@@ -289,11 +290,11 @@ internal sealed class CommandEditorForm : Form {
 
             _title = new Label {
                 AutoSize = true,
-                Text = "Button",
+                Text = Loc.T("Button"),
                 Margin = new Padding(0),
             };
             var removeButton = new Button {
-                Text = "Remove",
+                Text = Loc.T("Remove"),
                 AutoSize = true,
                 Margin = new Padding(0),
             };
@@ -325,13 +326,13 @@ internal sealed class CommandEditorForm : Form {
             var nameLabel = new Label {
                 Dock = DockStyle.Top,
                 AutoSize = true,
-                Text = "Label",
+                Text = Loc.T("Label"),
                 Margin = new Padding(0, 0, 0, 2),
             };
             var promptLabel = new Label {
                 Dock = DockStyle.Top,
                 AutoSize = true,
-                Text = "Prompt",
+                Text = Loc.T("Prompt"),
                 Margin = new Padding(0, 6, 0, 2),
             };
 
@@ -342,7 +343,7 @@ internal sealed class CommandEditorForm : Form {
             Controls.Add(header);
         }
 
-        public void SetIndex(int index) => _title.Text = "Button " + index;
+        public void SetIndex(int index) => _title.Text = Loc.F("Button {0}", index);
 
         public void FocusName() => _nameBox.Select();
 

@@ -297,6 +297,8 @@ internal static partial class NativeMethods {
     public const int WM_NCHITTEST = 0x0084;
     public const int HTTRANSPARENT = -1;
     public const int HTCLIENT = 1;
+    public const int WM_MOUSEACTIVATE = 0x0021;
+    public const int MA_NOACTIVATE = 3;
     public const int HTCAPTION = 2;
     public const int HTLEFT = 10;
     public const int HTRIGHT = 11;

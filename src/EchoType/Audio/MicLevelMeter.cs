@@ -3,9 +3,9 @@ using System.Runtime.InteropServices;
 namespace EchoType.Audio;
 
 /// <summary>
-/// Live microphone level for the recording HUD. Opens the default capture device
-/// in WASAPI shared mode, computes RMS, and discards the samples — nothing is stored.
-/// Shared mode sits alongside ChatGPT/Gemini's own capture.
+/// Live microphone level and voice spectrum for the recording HUD. Opens the default
+/// capture device in WASAPI shared mode, computes RMS plus a short FFT, and discards the
+/// samples — nothing is stored. Shared mode sits alongside ChatGPT/Gemini's own capture.
 /// </summary>
 internal sealed class MicLevelMeter : IDisposable {
 
@@ -25,11 +25,31 @@ internal sealed class MicLevelMeter : IDisposable {
     private static readonly Guid SubtypeIeeeFloat = new("00000003-0000-0010-8000-00AA00389B71");
     private static readonly Guid SubtypePcm = new("00000001-0000-0010-8000-00AA00389B71");
 
+    /// <summary>Spectrum bands shown in the HUD, log-spaced across the voice range.</summary>
+    public const int SpectrumBands = 32;
+    private const int FftSize = 2048;
+    private const float LowHz = 90f;
+    private const float HighHz = 7000f;
+    private const long SpectrumEveryMs = 30;
+    private const long SpectrumStaleMs = 250;
+
     private readonly object _gate = new();
+    private readonly float[] _ring = new float[FftSize];
+    private readonly float[] _fftRe = new float[FftSize];
+    private readonly float[] _fftIm = new float[FftSize];
+    private readonly float[] _window = HannWindow(FftSize);
+    private readonly float[] _spectrum = new float[SpectrumBands];
     private CancellationTokenSource? _cts;
     private Thread? _thread;
     private float _level;
     private float _webLevel;
+    private int _ringPos;
+    private int _ringFilled;
+    private int _sampleRate = 48000;
+    private long _spectrumAt;
+    private float[]? _floatScratch;
+    private short[]? _shortScratch;
+    private int[]? _intScratch;
 
     /// <summary>Smoothed 0–1 microphone energy, safe to read from the UI thread.</summary>
     public float Level {
@@ -37,6 +57,30 @@ internal sealed class MicLevelMeter : IDisposable {
             lock (_gate) {
                 return Math.Max(_level, _webLevel);
             }
+        }
+    }
+
+    /// <summary>
+    /// Copies the current voice spectrum (0–1 per band, low to high frequency) into
+    /// <paramref name="dest"/>, resampled to its length. False when no fresh audio has been
+    /// analysed (meter not running, or only the endpoint-peak fallback is available).
+    /// </summary>
+    public bool CopySpectrum(float[] dest) {
+        if (dest.Length == 0) {
+            return false;
+        }
+        lock (_gate) {
+            if (_spectrumAt == 0 || Environment.TickCount64 - _spectrumAt > SpectrumStaleMs) {
+                return false;
+            }
+            for (int i = 0; i < dest.Length; i++) {
+                float pos = dest.Length == 1 ? 0 : i * (SpectrumBands - 1) / (float)(dest.Length - 1);
+                int a = (int)pos;
+                int b = Math.Min(SpectrumBands - 1, a + 1);
+                float t = pos - a;
+                dest[i] = _spectrum[a] + (_spectrum[b] - _spectrum[a]) * t;
+            }
+            return true;
         }
     }
 
@@ -76,6 +120,8 @@ internal sealed class MicLevelMeter : IDisposable {
             _thread = null;
             _level = 0;
             _webLevel = 0;
+            _spectrumAt = 0;
+            Array.Clear(_spectrum);
         }
         try {
             cts?.Cancel();
@@ -133,6 +179,10 @@ internal sealed class MicLevelMeter : IDisposable {
             if (!TryReadFormat(mixFormat, out int channels, out int bits, out bool ieeeFloat)) {
                 return false;
             }
+            int rate = Marshal.ReadInt32(mixFormat, 4);
+            _sampleRate = rate is >= 8000 and <= 384000 ? rate : 48000;
+            _ringPos = 0;
+            _ringFilled = 0;
 
             // 200 ms shared buffer — enough to poll without glitching other capturers.
             long bufferHns = 2_000_000;
@@ -181,6 +231,9 @@ internal sealed class MicLevelMeter : IDisposable {
             try {
                 if (got > 0 && (flags & BufferFlagSilent) == 0 && data != IntPtr.Zero) {
                     peak = Math.Max(peak, Rms(data, got, channels, bits, ieeeFloat));
+                    PushSamples(data, got, channels, bits, ieeeFloat);
+                } else if (got > 0) {
+                    PushSilence(got);
                 }
             } finally {
                 capture.ReleaseBuffer(got);
@@ -190,6 +243,154 @@ internal sealed class MicLevelMeter : IDisposable {
             }
         }
         SetLevel(Shape(peak));
+        UpdateSpectrum();
+    }
+
+    /// <summary>Mixes a capture packet to mono and appends it to the FFT ring buffer.</summary>
+    private void PushSamples(IntPtr data, int frames, int channels, int bits, bool ieeeFloat) {
+        int count = frames * channels;
+        if (ieeeFloat && bits == 32) {
+            EnsureScratch(ref _floatScratch, count);
+            Marshal.Copy(data, _floatScratch!, 0, count);
+        } else if (!ieeeFloat && bits == 16) {
+            EnsureScratch(ref _shortScratch, count);
+            Marshal.Copy(data, _shortScratch!, 0, count);
+        } else if (!ieeeFloat && bits == 32) {
+            EnsureScratch(ref _intScratch, count);
+            Marshal.Copy(data, _intScratch!, 0, count);
+        } else {
+            return;
+        }
+        for (int i = 0; i < frames; i++) {
+            float sum = 0;
+            for (int c = 0; c < channels; c++) {
+                int index = i * channels + c;
+                sum += ieeeFloat ? _floatScratch![index]
+                    : bits == 16 ? _shortScratch![index] / 32768f
+                    : _intScratch![index] / 2147483648f;
+            }
+            _ring[_ringPos] = sum / channels;
+            _ringPos = (_ringPos + 1) % FftSize;
+        }
+        _ringFilled = Math.Min(FftSize, _ringFilled + frames);
+    }
+
+    private static void EnsureScratch<T>(ref T[]? buffer, int count) {
+        if (buffer == null || buffer.Length < count) {
+            buffer = new T[Math.Max(count, 4096)];
+        }
+    }
+
+    private void PushSilence(int frames) {
+        for (int i = 0; i < Math.Min(frames, FftSize); i++) {
+            _ring[_ringPos] = 0;
+            _ringPos = (_ringPos + 1) % FftSize;
+        }
+        _ringFilled = Math.Min(FftSize, _ringFilled + frames);
+    }
+
+    /// <summary>
+    /// Hann-windowed FFT over the latest samples, folded into log-spaced bands so the HUD
+    /// bars follow the pitch and timbre of the voice instead of just its loudness.
+    /// Runs on the capture thread; only the finished bands are shared under the lock.
+    /// </summary>
+    private void UpdateSpectrum() {
+        long now = Environment.TickCount64;
+        long last;
+        float level;
+        lock (_gate) {
+            last = _spectrumAt;
+            level = _level;
+        }
+        if (_ringFilled < FftSize / 2 || now - last < SpectrumEveryMs) {
+            return;
+        }
+        for (int i = 0; i < FftSize; i++) {
+            _fftRe[i] = _ring[(_ringPos + i) % FftSize] * _window[i];
+            _fftIm[i] = 0;
+        }
+        Fft(_fftRe, _fftIm);
+
+        float binHz = _sampleRate / (float)FftSize;
+        float ratio = HighHz / LowHz;
+        Span<float> bands = stackalloc float[SpectrumBands];
+        for (int b = 0; b < SpectrumBands; b++) {
+            float lo = LowHz * MathF.Pow(ratio, b / (float)SpectrumBands);
+            float hi = LowHz * MathF.Pow(ratio, (b + 1) / (float)SpectrumBands);
+            int first = Math.Clamp((int)(lo / binHz), 1, FftSize / 2 - 1);
+            int end = Math.Clamp((int)MathF.Ceiling(hi / binHz), first + 1, FftSize / 2);
+            float power = 0;
+            for (int k = first; k < end; k++) {
+                power = Math.Max(power, _fftRe[k] * _fftRe[k] + _fftIm[k] * _fftIm[k]);
+            }
+            // Amplitude relative to a full-scale sine through the Hann window (gain 0.5).
+            float amplitude = MathF.Sqrt(power) / (FftSize * 0.25f);
+            float db = 20f * MathF.Log10(amplitude + 1e-9f);
+            // Speech loses energy toward the top; tilt so consonants still show.
+            db += 4.5f * MathF.Log2(MathF.Sqrt(lo * hi) / 250f);
+            float value = Math.Clamp((db + 72f) / 46f, 0f, 1f);
+            // Below the speech gate room noise should not dance.
+            bands[b] = level <= 0.001f ? 0 : MathF.Pow(value, 1.35f);
+        }
+
+        lock (_gate) {
+            if (_cts == null) {
+                return; // stopped while computing
+            }
+            for (int b = 0; b < SpectrumBands; b++) {
+                float v = bands[b];
+                float old = _spectrum[b];
+                _spectrum[b] = v > old ? old * 0.35f + v * 0.65f : old * 0.72f + v * 0.28f;
+            }
+            _spectrumAt = now;
+        }
+    }
+
+    /// <summary>In-place iterative radix-2 FFT; length must be a power of two.</summary>
+    private static void Fft(float[] re, float[] im) {
+        int n = re.Length;
+        for (int i = 1, j = 0; i < n; i++) {
+            int bit = n >> 1;
+            for (; (j & bit) != 0; bit >>= 1) {
+                j ^= bit;
+            }
+            j ^= bit;
+            if (i < j) {
+                (re[i], re[j]) = (re[j], re[i]);
+                (im[i], im[j]) = (im[j], im[i]);
+            }
+        }
+        for (int len = 2; len <= n; len <<= 1) {
+            float angle = -2f * MathF.PI / len;
+            float wRe = MathF.Cos(angle);
+            float wIm = MathF.Sin(angle);
+            int half = len >> 1;
+            for (int i = 0; i < n; i += len) {
+                float curRe = 1;
+                float curIm = 0;
+                for (int k = 0; k < half; k++) {
+                    int a = i + k;
+                    int b = a + half;
+                    float tRe = re[b] * curRe - im[b] * curIm;
+                    float tIm = re[b] * curIm + im[b] * curRe;
+                    re[b] = re[a] - tRe;
+                    im[b] = im[a] - tIm;
+                    re[a] += tRe;
+                    im[a] += tIm;
+                    float next = curRe * wRe - curIm * wIm;
+                    curIm = curRe * wIm + curIm * wRe;
+                    curRe = next;
+                }
+            }
+        }
+    }
+
+    private static float[] HannWindow(int n) {
+        var w = new float[n];
+        for (int i = 0; i < n; i++) {
+            w[i] = 0.5f - 0.5f * MathF.Cos(2f * MathF.PI * i / (n - 1));
+        }
+        return w;
     }
 
     private void MeterLoop(CancellationToken cancel) {

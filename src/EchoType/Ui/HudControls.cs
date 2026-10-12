@@ -38,7 +38,17 @@ internal sealed class HudCard : Panel {
             HudTheme.DrawShadow(e.Graphics, pill, radius);
             HudTheme.DrawCard(e.Graphics, pill, radius);
             if (_accent is { } accent) {
-                HudTheme.DrawAccentStripe(e.Graphics, pill, accent, HudTheme.Dip(this, 18));
+                if (Loc.Rtl) {
+                    // Stripe on the leading (right) edge for Arabic.
+                    var saved = e.Graphics.Transform;
+                    using (var flip = new Matrix(-1, 0, 0, 1, pill.Left * 2 + pill.Width, 0)) {
+                        e.Graphics.Transform = flip;
+                        HudTheme.DrawAccentStripe(e.Graphics, pill, accent, HudTheme.Dip(this, 18));
+                    }
+                    e.Graphics.Transform = saved;
+                } else {
+                    HudTheme.DrawAccentStripe(e.Graphics, pill, accent, HudTheme.Dip(this, 18));
+                }
             }
         }
         base.OnPaint(e);
@@ -180,7 +190,7 @@ internal sealed class HudButton : Control {
             _ => HudTheme.Body,
         };
         TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, text,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            Loc.Flags(TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis));
     }
 }
 
@@ -288,8 +298,11 @@ internal sealed class HudToggleRow : Control {
         int gap = HudTheme.Dip(this, 12);
         var track = new Rectangle(Width - trackW, (Height - trackH) / 2, trackW, trackH);
         var label = new Rectangle(0, 0, Math.Max(0, track.Left - gap), Height);
+        // Arabic: label on the right, switch on the left, "on" toward the left.
+        track = Loc.Mirror(track, Width);
+        label = Loc.Mirror(label, Width);
         TextRenderer.DrawText(e.Graphics, Text, Font, label, HudTheme.Body,
-            TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
 
         Color off = HudTheme.Track;
         Color on = Color.FromArgb(255, 28, 78, 72);
@@ -299,7 +312,9 @@ internal sealed class HudToggleRow : Control {
         }
         float pad = HudTheme.DipF(this, 3);
         float knob = trackH - pad * 2;
-        float x = HudTheme.Lerp(track.Left + pad, track.Right - pad - knob, HudTheme.EaseOutCubic(_knob));
+        float offX = Loc.Rtl ? track.Right - pad - knob : track.Left + pad;
+        float onX = Loc.Rtl ? track.Left + pad : track.Right - pad - knob;
+        float x = HudTheme.Lerp(offX, onX, HudTheme.EaseOutCubic(_knob));
         using (var knobBrush = new SolidBrush(HudTheme.Body)) {
             e.Graphics.FillEllipse(knobBrush, x, track.Top + pad, knob, knob);
         }
@@ -312,6 +327,9 @@ internal sealed class HudToggleRow : Control {
 }
 
 internal sealed class HudSegmented : Control {
+
+    private static Font? _arabicItemFont;
+    private static Font ArabicItemFont => _arabicItemFont ??= HudTheme.ContentFont(9.5f, "ع", FontStyle.Bold);
 
     private readonly System.Windows.Forms.Timer _tick;
     private string[] _items = [];
@@ -415,15 +433,20 @@ internal sealed class HudSegmented : Control {
     }
 
     protected override void OnKeyDown(KeyEventArgs e) {
+        // Arabic lays the items out right to left, so the arrows swap too.
+        int step = Loc.Rtl ? -1 : 1;
         if (e.KeyCode == Keys.Left) {
-            SelectedIndex = _index - 1;
+            SelectedIndex = _index - step;
             e.Handled = true;
         } else if (e.KeyCode == Keys.Right) {
-            SelectedIndex = _index + 1;
+            SelectedIndex = _index + step;
             e.Handled = true;
         }
         base.OnKeyDown(e);
     }
+
+    /// <summary>Visual slot of item <paramref name="i"/> (reversed for right-to-left).</summary>
+    private float Slot(float i) => Loc.Rtl ? _items.Length - 1 - i : i;
 
     private int Hit(int x) {
         if (_items.Length == 0 || Width <= 0) {
@@ -432,7 +455,10 @@ internal sealed class HudSegmented : Control {
         int pad = HudTheme.Dip(this, 4);
         float slot = (Width - pad * 2) / (float)_items.Length;
         int i = (int)((x - pad) / slot);
-        return i < 0 || i >= _items.Length ? -1 : i;
+        if (i < 0 || i >= _items.Length) {
+            return -1;
+        }
+        return (int)Slot(i);
     }
 
     protected override void OnPaint(PaintEventArgs e) {
@@ -452,7 +478,7 @@ internal sealed class HudSegmented : Control {
 
         int pad = HudTheme.Dip(this, 4);
         float slot = (Width - pad * 2) / (float)_items.Length;
-        float thumbX = pad + _slide * slot;
+        float thumbX = pad + Slot(_slide) * slot;
         var thumb = new RectangleF(thumbX, pad, slot, Height - pad * 2 - 1);
         using (var path = HudTheme.Rounded(thumb, radius - 2))
         using (var fill = new SolidBrush(Color.FromArgb(255, 28, 31, 36)))
@@ -462,10 +488,12 @@ internal sealed class HudSegmented : Control {
         }
 
         for (int i = 0; i < _items.Length; i++) {
-            var cell = new Rectangle((int)Math.Round(pad + i * slot), 0, (int)Math.Round(slot), Height);
+            var cell = new Rectangle((int)Math.Round(pad + Slot(i) * slot), 0, (int)Math.Round(slot), Height);
             Color color = i == _index ? HudTheme.Teal : i == _hover ? HudTheme.Body : HudTheme.Muted;
-            TextRenderer.DrawText(e.Graphics, _items[i], HudTheme.SmallBold, cell, color,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            // Items may be in either script (e.g. "English | العربية"); pick a font that fits each.
+            Font font = ArabicFont.HasArabic(_items[i]) && !Loc.Arabic ? ArabicItemFont : HudTheme.SmallBold;
+            TextRenderer.DrawText(e.Graphics, _items[i], font, cell, color,
+                Loc.Flags(TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis));
         }
         if (Focused) {
             using var path = HudTheme.Rounded(Rectangle.Inflate(bounds, -2, -2), Math.Max(4, radius - 2));
@@ -564,29 +592,36 @@ internal sealed class HudHotkeyRow : Control {
         Invalidate();
     }
 
+    // Chip (the key) on the trailing side: right for English, left for Arabic.
     private Rectangle ChipBounds() {
         int w = Math.Min(HudTheme.Dip(this, 168), Width / 2);
         int h = HudTheme.Dip(this, 32);
-        return new Rectangle(Width - w, (Height - h) / 2, w, h);
+        return Loc.Mirror(new Rectangle(Width - w, (Height - h) / 2, w, h), Width);
     }
 
     private Rectangle ClearBounds() {
         var chip = ChipBounds();
         int size = HudTheme.Dip(this, 18);
-        return new Rectangle(chip.Right - size - HudTheme.Dip(this, 8), chip.Top + (chip.Height - size) / 2, size, size);
+        int inset = HudTheme.Dip(this, 8);
+        int x = Loc.Rtl ? chip.Left + inset : chip.Right - size - inset;
+        return new Rectangle(x, chip.Top + (chip.Height - size) / 2, size, size);
     }
 
     protected override void OnPaint(PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
         e.Graphics.Clear(HudTheme.Card);
         var chip = ChipBounds();
-        var label = new Rectangle(0, 0, Math.Max(0, chip.Left - HudTheme.Dip(this, 12)), Height);
+        int gap = HudTheme.Dip(this, 12);
+        var label = Loc.Rtl
+            ? new Rectangle(chip.Right + gap, 0, Math.Max(0, Width - chip.Right - gap), Height)
+            : new Rectangle(0, 0, Math.Max(0, chip.Left - gap), Height);
         TextRenderer.DrawText(e.Graphics, Title, HudTheme.BodyBold,
             new Rectangle(label.X, label.Y + HudTheme.Dip(this, 8), label.Width, HudTheme.Dip(this, 20)),
-            HudTheme.Title, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-        TextRenderer.DrawText(e.Graphics, _capturing ? (MultiKey ? "Press up to 3 keys…" : "Press a key…") : "Click to change", HudTheme.Tiny,
+            HudTheme.Title, Loc.Flags(TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
+        TextRenderer.DrawText(e.Graphics,
+            Loc.T(_capturing ? (MultiKey ? "Press up to 3 keys…" : "Press a key…") : "Click to change"), HudTheme.Tiny,
             new Rectangle(label.X, label.Y + HudTheme.Dip(this, 28), label.Width, HudTheme.Dip(this, 18)),
-            HudTheme.Muted, TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            HudTheme.Muted, Loc.Flags(TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
 
         Color fill = _capturing
             ? Color.FromArgb(40, HudTheme.Teal)
@@ -600,11 +635,15 @@ internal sealed class HudHotkeyRow : Control {
         }
 
         string text = _capturing
-            ? CapturePreview ?? "Listening"
-            : (string.IsNullOrWhiteSpace(Value) ? "(none)" : Value);
+            ? CapturePreview ?? Loc.T("Listening")
+            : (string.IsNullOrWhiteSpace(Value) ? Loc.T("(none)") : Value);
         var textRect = chip;
         if (Optional && !_capturing) {
-            textRect.Width -= HudTheme.Dip(this, 22);
+            int clearRoom = HudTheme.Dip(this, 22);
+            textRect.Width -= clearRoom;
+            if (Loc.Rtl) {
+                textRect.X += clearRoom;
+            }
         }
         TextRenderer.DrawText(e.Graphics, text, Font, textRect,
             _capturing ? HudTheme.Teal : HudTheme.Body,
@@ -667,7 +706,8 @@ internal sealed class HudCaptionButton : Control {
 
     protected override void OnPaint(PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
-        e.Graphics.Clear(HudTheme.Window);
+        // Blend into whatever caption hosts it (main window or the Ask popup).
+        e.Graphics.Clear(Parent?.BackColor ?? HudTheme.Window);
         var rect = new Rectangle(0, 0, Width - 1, Height - 1);
         if (_hover || _pressed) {
             Color fill = Icon == Glyph.Close
@@ -717,8 +757,8 @@ internal sealed class HudCommandList : Control {
         HudTheme.Prepare(e.Graphics);
         e.Graphics.Clear(HudTheme.Card);
         if (Items.Count == 0) {
-            TextRenderer.DrawText(e.Graphics, "No custom commands yet.", HudTheme.Small, ClientRectangle,
-                HudTheme.Muted, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            TextRenderer.DrawText(e.Graphics, Loc.T("No custom commands yet."), HudTheme.Small, ClientRectangle,
+                HudTheme.Muted, Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding));
             return;
         }
         int row = HudTheme.Dip(this, 28);
@@ -726,16 +766,16 @@ internal sealed class HudCommandList : Control {
         for (int i = 0; i < shown; i++) {
             var (name, shortcut) = Items[i];
             if (i == 5 && Items.Count > 6) {
-                name = "+" + (Items.Count - 5) + " more";
+                name = Loc.F("+{0} more", Items.Count - 5);
                 shortcut = "";
             }
             var y = i * row;
             TextRenderer.DrawText(e.Graphics, name, HudTheme.BodyBold,
-                new Rectangle(0, y, Width / 2, row), HudTheme.Body,
-                TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+                Loc.Mirror(new Rectangle(0, y, Width / 2, row), Width), HudTheme.Body,
+                Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
             TextRenderer.DrawText(e.Graphics, shortcut, HudTheme.Small,
-                new Rectangle(Width / 2, y, Width / 2, row), HudTheme.Muted,
-                TextFormatFlags.VerticalCenter | TextFormatFlags.Right | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+                Loc.Mirror(new Rectangle(Width / 2, y, Width / 2, row), Width), HudTheme.Muted,
+                Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.Right | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
         }
     }
 }

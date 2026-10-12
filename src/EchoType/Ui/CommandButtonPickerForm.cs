@@ -37,14 +37,14 @@ internal sealed class CommandButtonPickerForm : Form {
             Dock = DockStyle.Top,
             AutoSize = true,
             Font = new Font(Font, FontStyle.Bold),
-            Text = string.IsNullOrWhiteSpace(commandName) ? "Choose an action" : commandName.Trim(),
+            Text = string.IsNullOrWhiteSpace(commandName) ? Loc.T("Choose an action") : commandName.Trim(),
             Padding = new Padding(0, 0, 0, 2),
         };
         var hint = new Label {
             Dock = DockStyle.Top,
             AutoSize = true,
             ForeColor = SystemColors.GrayText,
-            Text = "Choose a button. Esc cancels. Number keys 1–" + Math.Min(9, buttons.Count) + " also work.",
+            Text = Loc.F("Choose a button. Esc cancels. Number keys 1–{0} also work.", Math.Min(9, buttons.Count)),
             Padding = new Padding(0, 0, 0, 10),
         };
 
@@ -85,6 +85,7 @@ internal sealed class CommandButtonPickerForm : Form {
             _completed = true;
             _tcs.TrySetResult(null);
         };
+        Loc.ApplyTo(this);
     }
 
     public void PlaceNearCursor() {

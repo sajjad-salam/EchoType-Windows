@@ -24,13 +24,13 @@ internal sealed class CustomCommandsForm : Form {
             MultiSelect = false,
             HeaderStyle = ColumnHeaderStyle.Nonclickable,
         };
-        _list.Columns.Add("Name", 160);
-        _list.Columns.Add("Shortcut", 180);
-        _list.Columns.Add("Buttons", 320);
+        _list.Columns.Add(Loc.T("Name"), 160);
+        _list.Columns.Add(Loc.T("Shortcut"), 180);
+        _list.Columns.Add(Loc.T("Buttons"), 320);
         _list.DoubleClick += (_, _) => EditSelected();
         _list.KeyDown += OnListKeyDown;
 
-        Text = "EchoType — Custom Commands";
+        Text = Loc.T("EchoType — Custom Commands");
         FormBorderStyle = FormBorderStyle.Sizable;
         MinimizeBox = false;
         MaximizeBox = false;
@@ -43,10 +43,10 @@ internal sealed class CustomCommandsForm : Form {
         MinimumSize = new Size(520, 300);
         Padding = new Padding(14);
 
-        var add = new Button { Text = "Add…", AutoSize = true };
-        var edit = new Button { Text = "Edit…", AutoSize = true };
-        var delete = new Button { Text = "Delete", AutoSize = true };
-        var close = new Button { Text = "Close", DialogResult = DialogResult.OK, AutoSize = true };
+        var add = new Button { Text = Loc.T("Add…"), AutoSize = true };
+        var edit = new Button { Text = Loc.T("Edit…"), AutoSize = true };
+        var delete = new Button { Text = Loc.T("Delete"), AutoSize = true };
+        var close = new Button { Text = Loc.T("Close"), DialogResult = DialogResult.OK, AutoSize = true };
         add.Click += (_, _) => AddCommand();
         edit.Click += (_, _) => EditSelected();
         delete.Click += (_, _) => DeleteSelected();
@@ -70,12 +70,11 @@ internal sealed class CustomCommandsForm : Form {
             Dock = DockStyle.Bottom,
             AutoSize = true,
             ForeColor = SystemColors.GrayText,
-            Text = "Commands are shared by ChatGPT and Gemini. "
-                + (settings.ToggleRecording
-                    ? "Press a command’s shortcut to start, press it again to stop. "
-                    : "Hold a command’s shortcut to dictate. ")
-                + "A command can be one button or a group of buttons; after dictation EchoType runs a single button or lets you pick. Then it pastes "
-                + modelName + "’s reply.",
+            Text = Loc.T("Commands are shared by ChatGPT and Gemini.") + " "
+                + Loc.T(settings.ToggleRecording
+                    ? "Press a command’s shortcut to start, press it again to stop."
+                    : "Hold a command’s shortcut to dictate.") + " "
+                + Loc.F("A command can be one button or a group of buttons; after dictation EchoType runs a single button or lets you pick. Then it pastes {0}’s reply.", modelName),
             Padding = new Padding(0, 8, 0, 0),
         };
 
@@ -84,6 +83,7 @@ internal sealed class CustomCommandsForm : Form {
         Controls.Add(buttons);
 
         Reload();
+        Loc.ApplyTo(this);
     }
 
     protected override void OnShown(EventArgs e) {
@@ -174,7 +174,7 @@ internal sealed class CustomCommandsForm : Form {
             return;
         }
         var result = MessageBox.Show(this,
-            $"Delete “{cmd.DisplayName}”?",
+            Loc.F("Delete “{0}”?", cmd.DisplayName),
             "EchoType", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
         if (result != DialogResult.Yes) {
             return;
@@ -212,7 +212,7 @@ internal sealed class CustomCommandsForm : Form {
             return PreviewPrompt(buttons[0].Prompt);
         }
         string names = string.Join(", ", buttons.Select(b => b.DisplayName));
-        return buttons.Count + " buttons — " + names;
+        return Loc.F("{0} buttons — {1}", buttons.Count, names);
     }
 
     private static string PreviewPrompt(string prompt) {

@@ -105,24 +105,26 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
     public TrayAppContext() {
         _settings = Settings.Load();
+        // Before any font or window exists: HudTheme builds its fonts from the language.
+        Loc.Apply(_settings.UiLanguage);
         _web = new ChatGPTWebController(ChatSite.For(_settings.TranscriptionProvider));
         _hotkey = new HotkeyMonitor();
 
         _statusItem = new ToolStripMenuItem { Enabled = false };
-        _loginItem = new ToolStripMenuItem("Open login…", null, (_, _) => _web.ShowLoginWindow());
-        var closeLoginItem = new ToolStripMenuItem("Close login window", null, (_, _) => _web.HideLoginWindow());
+        _loginItem = new ToolStripMenuItem(Loc.T("Open login…"), null, (_, _) => _web.ShowLoginWindow());
+        var closeLoginItem = new ToolStripMenuItem(Loc.T("Close login window"), null, (_, _) => _web.HideLoginWindow());
         _chatgptModelItem = new ToolStripMenuItem("ChatGPT", null, (_, _) => SelectModel(TranscriptionProvider.ChatGpt));
         _geminiModelItem = new ToolStripMenuItem("Gemini", null, (_, _) => SelectModel(TranscriptionProvider.Gemini));
         _claudeModelItem = new ToolStripMenuItem("Claude", null, (_, _) => SelectModel(TranscriptionProvider.Claude));
         _modelShortcutsItem = new ToolStripMenuItem();
         _modelShortcutsItem.Click += (_, _) => OpenModelShortcutsUi();
-        var modelRoot = new ToolStripMenuItem("Transcription model");
+        var modelRoot = new ToolStripMenuItem(Loc.T("Transcription model"));
         modelRoot.DropDownItems.Add(_chatgptModelItem);
         modelRoot.DropDownItems.Add(_geminiModelItem);
         modelRoot.DropDownItems.Add(_claudeModelItem);
         modelRoot.DropDownItems.Add(new ToolStripSeparator());
         modelRoot.DropDownItems.Add(_modelShortcutsItem);
-        _autoCleanItem = new ToolStripMenuItem("Auto Clean dictation") {
+        _autoCleanItem = new ToolStripMenuItem(Loc.T("Auto Clean dictation")) {
             CheckOnClick = true,
             Checked = _settings.AutoClean,
         };
@@ -130,15 +132,15 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _chatgptCleanItem = new ToolStripMenuItem("ChatGPT", null, (_, _) => SetCleanModel(TranscriptionProvider.ChatGpt));
         _geminiCleanItem = new ToolStripMenuItem("Gemini", null, (_, _) => SetCleanModel(TranscriptionProvider.Gemini));
         _claudeCleanItem = new ToolStripMenuItem("Claude", null, (_, _) => SetCleanModel(TranscriptionProvider.Claude));
-        var cleanRoot = new ToolStripMenuItem("Cleaning model (Auto Clean + commands)");
+        var cleanRoot = new ToolStripMenuItem(Loc.T("Cleaning model (Auto Clean + commands)"));
         cleanRoot.DropDownItems.Add(_chatgptCleanItem);
         cleanRoot.DropDownItems.Add(_geminiCleanItem);
         cleanRoot.DropDownItems.Add(_claudeCleanItem);
         cleanRoot.DropDownItems.Add(new ToolStripSeparator());
-        cleanRoot.DropDownItems.Add("Open cleaning model window…", null, (_, _) => ToggleCleanWindow());
-        cleanRoot.DropDownItems.Add("Edit cleaning prompt…", null, (_, _) => EditCleanPrompt());
-        _commandsRoot = new ToolStripMenuItem("Custom Commands");
-        _pressEnterItem = new ToolStripMenuItem("Press Enter after paste") {
+        cleanRoot.DropDownItems.Add(Loc.T("Open cleaning model window…"), null, (_, _) => ToggleCleanWindow());
+        cleanRoot.DropDownItems.Add(Loc.T("Edit cleaning prompt…"), null, (_, _) => EditCleanPrompt());
+        _commandsRoot = new ToolStripMenuItem(Loc.T("Custom Commands"));
+        _pressEnterItem = new ToolStripMenuItem(Loc.T("Press Enter after paste")) {
             CheckOnClick = true,
             Checked = _settings.PressEnterAfterPaste,
         };
@@ -162,21 +164,21 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _modelWindowShortcutItem = new ToolStripMenuItem();
         _modelWindowShortcutItem.Click += (_, _) => OpenModelWindowShortcutUi();
         UpdateModelWindowShortcutMenu();
-        _muteOthersItem = new ToolStripMenuItem("Pause or mute other apps while dictating") {
+        _muteOthersItem = new ToolStripMenuItem(Loc.T("Pause or mute other apps while dictating")) {
             CheckOnClick = true,
             Checked = _settings.MuteOtherAppsWhileDictating,
         };
         _muteOthersItem.CheckedChanged += OnMuteOthersChanged;
-        _holdModeItem = new ToolStripMenuItem("Hold to talk", null, (_, _) => SetToggleRecording(false));
-        _toggleModeItem = new ToolStripMenuItem("Press to start/stop", null, (_, _) => SetToggleRecording(true));
-        _recordingModeRoot = new ToolStripMenuItem("Recording mode");
+        _holdModeItem = new ToolStripMenuItem(Loc.T("Hold to talk"), null, (_, _) => SetToggleRecording(false));
+        _toggleModeItem = new ToolStripMenuItem(Loc.T("Press to start/stop"), null, (_, _) => SetToggleRecording(true));
+        _recordingModeRoot = new ToolStripMenuItem(Loc.T("Recording mode"));
         _recordingModeRoot.DropDownItems.Add(_holdModeItem);
         _recordingModeRoot.DropDownItems.Add(_toggleModeItem);
         SyncRecordingModeMenu();
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusItem);
-        menu.Items.Add("Open EchoType", null, (_, _) => ShowAppWindow());
+        menu.Items.Add(Loc.T("Open EchoType"), null, (_, _) => ShowAppWindow());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(modelRoot);
         menu.Items.Add(_loginItem);
@@ -184,14 +186,14 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         menu.Items.Add(_modelWindowShortcutItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_autoCleanItem);
-        menu.Items.Add("Word replacements…", null, (_, _) => EditWordReplacements());
-        menu.Items.Add("Workspace modes…", null, (_, _) => EditWorkspaceModes());
+        menu.Items.Add(Loc.T("Word replacements…"), null, (_, _) => EditWordReplacements());
+        menu.Items.Add(Loc.T("Workspace modes…"), null, (_, _) => EditWorkspaceModes());
         menu.Items.Add(cleanRoot);
         menu.Items.Add(_commandsRoot);
         menu.Items.Add(_askModelShortcutItem);
         menu.Items.Add(_translateShortcutItem);
         menu.Items.Add(_translateLanguageRoot);
-        menu.Items.Add("OpenAI API key (translation)…", null, (_, _) => EditOpenAiKey());
+        menu.Items.Add(Loc.T("OpenAI API key (translation)…"), null, (_, _) => EditOpenAiKey());
         menu.Items.Add(_recordingModeRoot);
         menu.Items.Add(_pressEnterItem);
         menu.Items.Add(_pressEnterShortcutItem);
@@ -200,9 +202,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         menu.Items.Add(new ToolStripMenuItem("Start dictation (debug)", null, (_, _) => DebugStart()));
 #endif
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Open log", null, (_, _) => OpenLog());
+        menu.Items.Add(Loc.T("Open log"), null, (_, _) => OpenLog());
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Quit EchoType", null, (_, _) => ExitThread());
+        menu.Items.Add(Loc.T("Quit EchoType"), null, (_, _) => ExitThread());
+        Loc.ApplyTo(menu);
         RebuildCommandsMenu();
         SyncModelMenu();
         SyncCleanMenu();
@@ -228,13 +231,14 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _ = _marshal.Handle;
 
         if (!_hotkey.Start(CollectHotkeys(), CollectTapHotkeys(), _marshal)) {
-            MessageBox.Show("EchoType could not install its global keyboard hook.", "EchoType",
+            MessageBox.Show(Loc.T("EchoType could not install its global keyboard hook."), "EchoType",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         _hotkey.HoldStart += OnHoldStart;
         _hotkey.HoldEnd += OnHoldEnd;
         _hotkey.TapPressed += OnTapPressed;
         _hotkey.CancelRequested += OnCancelRequested;
+        StatusOverlay.CancelClicked += OnHudCancelClicked;
 
         Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey VK=0x{_settings.HotkeyVk:X2}, askModelVk=0x{_settings.AskModelVk:X2}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateTo={_settings.TranslateTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating})");
         StartupRegistration.Apply(_settings.StartWithWindows);
@@ -291,7 +295,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             if (outcome == ReadyOutcome.RuntimeMissing) {
                 ChatGPTWebController.ShowRuntimeMissingDialog();
             } else if (outcome == ReadyOutcome.LoggedOut) {
-                ShowBalloon("Log in to " + web.Site.DisplayName + " (cleaning model) from the tray menu.", OverlayKind.Warning);
+                ShowBalloon(Loc.F("Log in to {0} (cleaning model) from the tray menu.", web.Site.DisplayName), OverlayKind.Warning);
             }
         } catch (Exception ex) {
             Log.Write("launch: clean warmup failed: " + ex.Message);
@@ -306,7 +310,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _settings.Save();
         SyncCleanMenu();
         Log.Write("settings: autoClean=" + value);
-        ShowBalloon(value ? "Auto Clean on (" + Gen.Site.DisplayName + ")." : "Auto Clean off.", OverlayKind.Info);
+        ShowBalloon(value ? Loc.F("Auto Clean on ({0}).", Gen.Site.DisplayName) : Loc.T("Auto Clean off."), OverlayKind.Info);
         NotifyUi();
     }
 
@@ -316,7 +320,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return;
         }
         if (_phase != AppPhase.Idle) {
-            ShowBalloon("Wait until dictation finishes before switching models.", OverlayKind.Warning);
+            ShowBalloon(Loc.T("Wait until dictation finishes before switching models."), OverlayKind.Warning);
             SyncCleanMenu();
             return;
         }
@@ -325,7 +329,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         Log.Write("settings: cleanProvider=" + _settings.CleanProviderName);
         ApplyCleanSite();
         RebuildCommandsMenu();
-        ShowBalloon("Cleaning model: " + Gen.Site.DisplayName + ".", OverlayKind.Success);
+        ShowBalloon(Loc.F("Cleaning model: {0}.", Gen.Site.DisplayName), OverlayKind.Success);
     }
 
     private void EditOpenAiKey() {
@@ -370,7 +374,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             _settings.AutoCleanPrompt = form.Result;
             _settings.Save();
             Log.Write("settings: autoCleanPrompt updated (" + form.Result.Length + " chars)");
-            ShowBalloon("Auto Clean prompt saved.", OverlayKind.Success);
+            ShowBalloon(Loc.T("Auto Clean prompt saved."), OverlayKind.Success);
             NotifyUi();
         } catch (Exception ex) {
             Log.Write("clean prompt ui: " + ex);
@@ -406,7 +410,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             _settings.WordReplacements = form.Result;
             _settings.Save();
             Log.Write("settings: wordReplacements=" + form.Result.Count);
-            ShowBalloon("Word replacements saved (" + form.Result.Count + ").", OverlayKind.Success);
+            ShowBalloon(Loc.F("Word replacements saved ({0}).", form.Result.Count), OverlayKind.Success);
             NotifyUi();
         } catch (Exception ex) {
             Log.Write("word replacements ui: " + ex);
@@ -431,7 +435,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             _settings.WorkspaceModes = form.Result;
             _settings.Save();
             Log.Write("settings: workspaceModes=" + form.Result.Count);
-            ShowBalloon("Workspace modes saved (" + form.Result.Count + ").", OverlayKind.Success);
+            ShowBalloon(Loc.F("Workspace modes saved ({0}).", form.Result.Count), OverlayKind.Success);
             NotifyUi();
         } catch (Exception ex) {
             Log.Write("workspace modes ui: " + ex);
@@ -458,11 +462,11 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         CopyTranscript(transcript);
         if (WorkspaceMode.SendShortcut(mode.Shortcut)) {
             Sounds.Pasted();
-            ShowBalloon(mode.Name + " — pressed " + mode.Shortcut + ".", OverlayKind.Success);
+            ShowBalloon(Loc.F("{0} — pressed {1}.", mode.Name, mode.Shortcut), OverlayKind.Success);
         } else {
             Log.Write("workspace-mode: SendInput failed");
             Sounds.Error();
-            ShowBalloon("Could not press " + mode.Shortcut + " for " + mode.Name + ".", OverlayKind.Error);
+            ShowBalloon(Loc.F("Could not press {0} for {1}.", mode.Shortcut, mode.Name), OverlayKind.Error);
         }
         ResetToIdle();
         return true;
@@ -587,6 +591,13 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             _ = FinishListeningAsync(_session);
         } else {
             _ = CancelAndResetAsync("toggle tap too short, cancelled");
+        }
+    }
+
+    /// <summary>The ✕ on the listening or progress pill: abort, nothing is pasted.</summary>
+    private void OnHudCancelClicked() {
+        if (_phase != AppPhase.Idle) {
+            _ = CancelAndResetAsync("cancelled with the HUD ✕");
         }
     }
 
@@ -802,8 +813,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             Log.Write("dictation: empty transcript");
             Sounds.Error();
             ShowBalloon(_settings.ToggleRecording
-                ? "Nothing transcribed — try speaking longer before pressing the key again."
-                : "Nothing transcribed — try holding the key longer.", OverlayKind.Error);
+                ? Loc.T("Nothing transcribed — try speaking longer before pressing the key again.")
+                : Loc.T("Nothing transcribed — try holding the key longer."), OverlayKind.Error);
             ResetToIdle();
             return;
         }
@@ -820,7 +831,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 if (chosen == null) {
                     Log.Write("command: action picker cancelled");
                     CopyTranscript(transcript);
-                    ShowBalloon("Cancelled. Transcript copied to clipboard.", OverlayKind.Info);
+                    ShowBalloon(Loc.T("Cancelled. Transcript copied to clipboard."), OverlayKind.Info);
                     ResetToIdle();
                     return;
                 }
@@ -828,7 +839,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             if (chosen == null) {
                 Log.Write("command: no action buttons");
                 Sounds.Error();
-                ShowBalloon("This command has no buttons. Edit it from Custom Commands.", OverlayKind.Error);
+                ShowBalloon(Loc.T("This command has no buttons. Edit it from Custom Commands."), OverlayKind.Error);
                 ResetToIdle();
                 return;
             }
@@ -890,6 +901,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return;
         }
         SetPhase(AppPhase.Generating);
+        ShowProgress(WorkStage.Cleaning, Gen.Site.DisplayName);
         CopyTranscript(transcript);
         string message = _settings.AutoCleanPrompt.Trim() + "\n\n" + transcript;
         Log.Write("auto-clean: sending " + message.Length + " chars to " + Gen.Site.DisplayName);
@@ -923,7 +935,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
         if (cleaned == null) {
             Log.Write("auto-clean: no usable reply, pasting raw transcript");
-            ShowBalloon("Auto Clean failed — pasted the raw transcript.", OverlayKind.Warning);
+            ShowBalloon(Loc.T("Auto Clean failed — pasted the raw transcript."), OverlayKind.Warning);
             DeliverPaste(transcript, "dictation");
             return;
         }
@@ -977,12 +989,17 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return;
         }
         SetPhase(AppPhase.Generating);
+        ShowProgress(WorkStage.Thinking, ReplyWeb.Site.DisplayName);
         CopyTranscript(transcript);
         Log.Write(logLabel + ": sending " + message.Length + " chars");
 
         try {
             ModelReply reply = await RequestCommandReplyAsync(message, session);
             if (!IsLive(session)) {
+                return;
+            }
+            if (_askModel) {
+                await DeliverAskReplyAsync(reply, message, transcript, session);
                 return;
             }
             if (reply.Images.Count > 0) {
@@ -1013,7 +1030,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 Sounds.Error();
                 CopyTranscript(transcript);
                 ShowBalloon(
-                    ReplyWeb.Site.DisplayName + " returned an empty reply. Transcript copied to clipboard.",
+                    Loc.F("{0} returned an empty reply. Transcript copied to clipboard.", ReplyWeb.Site.DisplayName),
                     OverlayKind.Error);
                 ResetToIdle();
                 return;
@@ -1045,6 +1062,98 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     }
 
     /// <summary>
+    /// Ask model: the complete reply (the wait already covered generated images and videos)
+    /// is pasted into the field you started in — the image if there is one, otherwise the
+    /// text — or left on the clipboard when no field was focused. It also opens in a popup
+    /// with Copy buttons for the text and the image.
+    /// </summary>
+    private async Task DeliverAskReplyAsync(ModelReply reply, string message, string transcript, int session) {
+        const string label = "ask-model";
+        var web = ReplyWeb;
+        string modelName = web.Site.DisplayName;
+        string text = AskReplyForm.CleanText(reply.Text);
+        if (text.Length > 0 && ReplyIsPromptEcho(text, message, transcript)) {
+            Log.Write(label + ": reply matched the prompt/transcript, ignoring its text");
+            text = "";
+        }
+
+        Image? image = null;
+        if (reply.Images.Count > 0) {
+            Log.Write(label + ": reply has " + reply.Images.Count + " image(s)");
+            try {
+                if (web.Driver != null) {
+                    byte[]? bytes = await web.Driver.DownloadBestAssistantImageAsync(reply);
+                    image = bytes is { Length: > 0 } ? DecodeImage(bytes, label) : null;
+                }
+            } catch (Exception ex) {
+                Log.Write(label + ": image download failed: " + ex.Message);
+            }
+            if (!IsLive(session)) {
+                image?.Dispose();
+                return;
+            }
+        }
+        if (reply.Videos.Count > 0) {
+            Log.Write(label + ": reply has " + reply.Videos.Count + " video(s)");
+        }
+
+        string? videoUrl = reply.Videos.FirstOrDefault(v => v.StartsWith("http", StringComparison.OrdinalIgnoreCase));
+        string pasteText = text.Length > 0 ? text : videoUrl ?? "";
+        if (image == null && pasteText.Length == 0 && reply.Videos.Count == 0) {
+            Log.Write(label + ": empty reply after retries");
+            Sounds.Error();
+            CopyTranscript(transcript);
+            ShowBalloon(Loc.F("{0} returned an empty reply. Transcript copied to clipboard.", modelName), OverlayKind.Error);
+            ResetToIdle();
+            return;
+        }
+
+        // Paste: the image when there is one (that is what was asked for), else the text.
+        Paster.Outcome? outcome = null;
+        if (image != null) {
+            var result = Paster.DeliverImage(image, _settings.PressEnterAfterPaste, _pasteTarget);
+            if (result.Outcome is Paster.Outcome.Pasted or Paster.Outcome.CopiedToClipboard) {
+                outcome = result.Outcome;
+            }
+        }
+        if (outcome == null && pasteText.Length > 0) {
+            outcome = Paster.Deliver(pasteText, keepTranscriptOnClipboard: true, _settings.PressEnterAfterPaste, _pasteTarget).Outcome;
+        }
+        Log.Write(label + ": delivered (" + (outcome?.ToString() ?? "popup only") + ", text "
+            + text.Length + " chars, image " + (image != null) + ")");
+        Sounds.Pasted();
+
+        string note = outcome switch {
+            Paster.Outcome.Pasted => Loc.T("Pasted into the field you started in. It is also on the clipboard."),
+            Paster.Outcome.CopiedToClipboard => Loc.T("No text field was focused — the reply is on the clipboard (Ctrl+V)."),
+            _ => Loc.T("Nothing to paste — open the video from the model window."),
+        };
+        if (_settings.ShowAskReplyWindow) {
+            AskReplyForm.ShowReply(
+                new AskReplyContent(modelName, transcript, text, image, reply.Images.Count, reply.Videos, note),
+                () => {
+                    web.ShowLoginWindow();
+                    NotifyUi();
+                });
+        } else {
+            image?.Dispose();
+            ShowBalloon(outcome == Paster.Outcome.Pasted ? Loc.T("Pasted the reply.") : note, OverlayKind.Success);
+        }
+        ResetToIdle();
+    }
+
+    private static Image? DecodeImage(byte[] bytes, string logLabel) {
+        try {
+            using var ms = new MemoryStream(bytes);
+            using var temp = Image.FromStream(ms);
+            return new Bitmap(temp);
+        } catch (Exception ex) {
+            Log.Write(logLabel + ": image decode failed: " + ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Translate shortcut: the model page only transcribed; the translation runs over plain
     /// HTTP, so there is no wait for a model reply. With an OpenAI API key it goes through
     /// OpenAI (handles mixed Arabic/English text); otherwise, or if that call fails, through
@@ -1055,6 +1164,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return;
         }
         SetPhase(AppPhase.Generating);
+        ShowProgress(WorkStage.Translating,
+            OpenAiTranslation.ResolveKey(_settings).Length > 0 ? "OpenAI" : "Google Translate");
         CopyTranscript(transcript);
         string target = _settings.TranslateTargetLanguage;
 
@@ -1067,7 +1178,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             }
             Log.Write("translate: failed: " + ex.Message);
             Sounds.Error();
-            ShowBalloon("Translation failed — transcript copied to clipboard.", OverlayKind.Error);
+            ShowBalloon(Loc.T("Translation failed — transcript copied to clipboard."), OverlayKind.Error);
             ResetToIdle();
             return;
         }
@@ -1077,7 +1188,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (translated.Length == 0) {
             Log.Write("translate: empty translation");
             Sounds.Error();
-            ShowBalloon("The translation came back empty. Transcript copied to clipboard.", OverlayKind.Error);
+            ShowBalloon(Loc.T("The translation came back empty. Transcript copied to clipboard."), OverlayKind.Error);
             ResetToIdle();
             return;
         }
@@ -1094,7 +1205,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             case Paster.Outcome.CopiedToClipboard:
                 Log.Write("translate: no editable field focused, left translation on clipboard");
                 Sounds.Pasted();
-                ShowBalloon("Copied the translation — press Ctrl+V to paste.", OverlayKind.Success);
+                ShowBalloon(Loc.T("Copied the translation — press Ctrl+V to paste."), OverlayKind.Success);
                 break;
         }
         ResetToIdle();
@@ -1128,14 +1239,14 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             case Paster.Outcome.Pasted:
                 Sounds.Pasted();
                 if (result.KeptUserFocus) {
-                    ShowBalloon("Pasted into the original field.", OverlayKind.Success);
+                    ShowBalloon(Loc.T("Pasted into the original field."), OverlayKind.Success);
                 }
                 ResetToIdle();
                 break;
             case Paster.Outcome.CopiedToClipboard:
                 Log.Write(logLabel + ": no editable field focused, left on clipboard");
                 Sounds.Pasted();
-                ShowBalloon("Copied to clipboard — press Ctrl+V to paste.", OverlayKind.Success);
+                ShowBalloon(Loc.T("Copied to clipboard — press Ctrl+V to paste."), OverlayKind.Success);
                 ResetToIdle();
                 break;
         }
@@ -1154,13 +1265,13 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             case Paster.Outcome.Pasted:
                 Sounds.Pasted();
                 Paster.CopyLater(transcript);
-                ShowBalloon("Pasted the reply. Transcript copied to clipboard.", OverlayKind.Success);
+                ShowBalloon(Loc.T("Pasted the reply. Transcript copied to clipboard."), OverlayKind.Success);
                 ResetToIdle();
                 break;
             case Paster.Outcome.CopiedToClipboard:
                 Log.Write(logLabel + ": no editable field focused, left reply on clipboard");
                 Sounds.Pasted();
-                ShowBalloon("Copied the reply — press Ctrl+V to paste.", OverlayKind.Success);
+                ShowBalloon(Loc.T("Copied the reply — press Ctrl+V to paste."), OverlayKind.Success);
                 ResetToIdle();
                 break;
         }
@@ -1197,13 +1308,13 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             switch (result.Outcome) {
                 case Paster.Outcome.Pasted:
                     Sounds.Pasted();
-                    ShowBalloon("Pasted image. Transcript copied to clipboard.", OverlayKind.Success);
+                    ShowBalloon(Loc.T("Pasted image. Transcript copied to clipboard."), OverlayKind.Success);
                     ResetToIdle();
                     return true;
                 case Paster.Outcome.CopiedToClipboard:
                     Log.Write(logLabel + ": no editable field focused, left image on clipboard");
                     Sounds.Pasted();
-                    ShowBalloon("Copied image. Transcript copied to clipboard.", OverlayKind.Success);
+                    ShowBalloon(Loc.T("Copied image. Transcript copied to clipboard."), OverlayKind.Success);
                     ResetToIdle();
                     return true;
                 default:
@@ -1258,7 +1369,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return ModelReply.Empty;
         }
         Log.Write("command: retrying in a new chat");
-        ShowBalloon(ReplyWeb.Site.DisplayName + " is slow — retrying in a new chat…", OverlayKind.Warning);
+        ShowBalloon(Loc.F("{0} is slow — retrying in a new chat…", ReplyWeb.Site.DisplayName), OverlayKind.Warning);
         try {
             ModelReply reply = await SendCommandOnceAsync(message, startNewChat: true, firstByteTimeout);
             if (!IsLive(session)) {
@@ -1282,7 +1393,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return ModelReply.Empty;
         }
         Log.Write("command: refreshing " + ReplyWeb.Site.DisplayName + " and retrying");
-        ShowBalloon("Still waiting — refreshing " + ReplyWeb.Site.DisplayName + " and retrying…", OverlayKind.Warning);
+        ShowBalloon(Loc.F("Still waiting — refreshing {0} and retrying…", ReplyWeb.Site.DisplayName), OverlayKind.Warning);
         var outcome = await ReplyWeb.RefreshChatAsync();
         if (!IsLive(session)) {
             return ModelReply.Empty;
@@ -1318,7 +1429,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         await driver.SendPromptAsync();
         ModelReply reply;
         try {
-            reply = await driver.AwaitAssistantReplyAsync(previous, firstByteTimeout);
+            // Ask model waits for the complete reply (generated images and videos included).
+            reply = await driver.AwaitAssistantReplyAsync(previous, firstByteTimeout, waitForMedia: _askModel);
         } catch (DriverException ex) when (ex.Kind == DriverFailure.Timeout) {
             reply = await driver.TryRecoverAssistantReplyAsync(previous);
             if (reply.IsEmpty) {
@@ -1420,6 +1532,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         // recording does not start until a later self-heal reload. Reload now so
         // the next hotkey waits on a fresh page instead of clicking a stuck mic.
         (wasGenerating ? ReplyWeb : _web).ReloadAfterCancel();
+        StatusOverlay.HideWorking();
         ResetToIdle();
         return Task.CompletedTask;
     }
@@ -1433,7 +1546,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         string message;
         switch (ex.Kind) {
             case DriverFailure.LoggedOut:
-                message = "Logged out — open the EchoType menu to log in";
+                message = Loc.T("Logged out — open the EchoType menu to log in");
                 if (ReferenceEquals(web, _web)) {
                     _loggedIn = false;
                     UpdateStatusIcon();
@@ -1442,42 +1555,42 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 web.ShowLoginWindow();
                 break;
             case DriverFailure.Offline:
-                message = "No internet connection — check your network";
+                message = Loc.T("No internet connection — check your network");
                 _online = false;
                 UpdateStatusIcon();
                 UpdateLoginMenuItem();
                 break;
             case DriverFailure.Timeout:
-                message = web.Site.DisplayName + " didn't respond in time";
+                message = Loc.F("{0} didn't respond in time", web.Site.DisplayName);
                 break;
             case DriverFailure.ButtonNotFound:
                 // The page wedges occasionally; only reload after two failures in a row.
                 _engagementFailures++;
                 if (_engagementFailures >= 2) {
-                    message = $"Dictation glitched ({ex.Message}) — reloading {web.Site.DisplayName}, try again";
+                    message = Loc.F("Dictation glitched ({0}) — reloading {1}, try again", ex.Message, web.Site.DisplayName);
                     Log.Write($"dictation: {_engagementFailures} engagement failures, reloading webview to self-heal");
                     _engagementFailures = 0;
                     _ = web.ReloadInBackgroundAsync();
                 } else {
                     message = ex.Message.Contains("send", StringComparison.OrdinalIgnoreCase)
-                        ? "Couldn't send the prompt — try again"
+                        ? Loc.T("Couldn't send the prompt — try again")
                         : ex.Message.Contains("new chat", StringComparison.OrdinalIgnoreCase)
-                            ? "Couldn't start a new chat — try again"
-                            : "Dictation didn't start — try again";
+                            ? Loc.T("Couldn't start a new chat — try again")
+                            : Loc.T("Dictation didn't start — try again");
                 }
                 break;
             case DriverFailure.NotReady:
-                message = web.Site.DisplayName + " isn't ready yet";
+                message = Loc.F("{0} isn't ready yet", web.Site.DisplayName);
                 break;
             default:
-                message = "Page error: " + Truncate(ex.Message, 60);
+                message = Loc.T("Page error: ") + Truncate(ex.Message, 60);
                 break;
         }
 
         Log.Write("dictation: failed — " + message);
         Sounds.Error();
         if (!string.IsNullOrEmpty(transcriptToCopy) && CopyTranscript(transcriptToCopy)) {
-            message += " Transcript copied to clipboard.";
+            message += Loc.T(" Transcript copied to clipboard.");
         }
         ShowBalloon(message, OverlayKind.Error);
         ResetToIdle();
@@ -1546,9 +1659,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         var cts = new CancellationTokenSource();
         _micLevelCts = cts;
         _ = PumpWebMicLevelAsync(cts.Token);
-        if (_web.Driver is { SupportsLiveTranscript: true }) {
-            _ = PumpLiveTranscriptAsync(cts.Token);
-        }
+        // Every model gets the live pump: any site that writes words into its composer
+        // while you speak (Claude does) shows them under the wave; a site that only fills
+        // the composer after you stop (ChatGPT) leaves the pill compact.
+        _ = PumpLiveTranscriptAsync(cts.Token);
     }
 
     private void StopMicLevelPump() {
@@ -1588,7 +1702,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     }
 
     /// <summary>
-    /// Claude writes words into its composer while you speak. Mirror them in the
+    /// Live models write words into their composer while you speak. Mirror them in the
     /// Listening HUD so the transcript is visible live; the final text is still
     /// taken from the composer after recording stops.
     /// </summary>
@@ -1636,9 +1750,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         Log.Write("dictation: recording cut off (" + reason + ")");
         Sounds.RecordingStopped();
         ShowBalloon(
-            _web.Site.DisplayName + " ended the audio. Only what you already said will be transcribed.",
+            Loc.F("{0} ended the audio. Only what you already said will be transcribed.", _web.Site.DisplayName),
             OverlayKind.Warning,
-            "Recording stopped");
+            Loc.T("Recording stopped"));
         _hotkeyHeld = false;
         _releasedAt = DateTime.UtcNow;
         await FinishListeningAsync(session);
@@ -1697,7 +1811,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return;
         }
         if (_phase != AppPhase.Idle) {
-            ShowBalloon("Wait until dictation finishes before switching recording mode.", OverlayKind.Warning);
+            ShowBalloon(Loc.T("Wait until dictation finishes before switching recording mode."), OverlayKind.Warning);
             SyncRecordingModeMenu();
             return;
         }
@@ -1708,8 +1822,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         RebuildCommandsMenu();
         Log.Write("settings: toggleRecording=" + toggle);
         ShowBalloon(toggle
-            ? "Press a shortcut to start recording, press again to stop."
-            : "Hold a shortcut to record, release to stop.");
+            ? Loc.T("Press a shortcut to start recording, press again to stop.")
+            : Loc.T("Hold a shortcut to record, release to stop."));
     }
 
     private void SyncRecordingModeMenu() {
@@ -1729,7 +1843,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             try {
                 _micMeter.Start();
                 StartMicLevelPump();
-                StatusOverlay.ShowListening(_web.Site.DisplayName, () => _micMeter.Level);
+                StatusOverlay.ShowListening(_web.Site.DisplayName, () => _micMeter.Level, _micMeter.CopySpectrum);
             } catch (Exception ex) {
                 Log.Write("hud: listening overlay failed: " + ex.Message);
             }
@@ -1740,9 +1854,37 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             } catch (Exception ex) {
                 Log.Write("audio: mic meter stop failed: " + ex.Message);
             }
-            StatusOverlay.HideListening();
+            if (phase != AppPhase.Transcribing) {
+                StatusOverlay.HideListening();
+            }
+        }
+
+        // Progress pill: the listening HUD reshapes into it when recording stops, the
+        // Generating call sites advance it (ShowProgress), and it fills up on success.
+        // Failures and success notices replace it in place.
+        switch (phase) {
+            case AppPhase.Transcribing:
+                // Leave room on the bar when a model or translation step follows.
+                StatusOverlay.ShowWorking(
+                    WorkStage.Transcribing, _web.Site.DisplayName,
+                    cap: ExpectsReplyStep() ? 0.45f : 0.9f, restart: true);
+                break;
+            case AppPhase.ChoosingAction:
+                StatusOverlay.HideWorking();
+                break;
+            case AppPhase.Idle when previous is AppPhase.Transcribing or AppPhase.Generating:
+                StatusOverlay.CompleteWorking();
+                break;
         }
     }
+
+    private static void ShowProgress(WorkStage stage, string detail) =>
+        StatusOverlay.ShowWorking(stage, detail, cap: 0.94f, restart: false);
+
+    private bool ExpectsReplyStep() =>
+        _activeCommand != null || _translate || _askModel
+        || (_settings.AutoClean && !string.IsNullOrWhiteSpace(_settings.AutoCleanPrompt))
+        || (_selectionTask.IsCompletedSuccessfully && !string.IsNullOrEmpty(_selectionTask.Result));
 
     private void UpdateStatusIcon() {
         _tray.Icon = TrayIcons.For(_phase, _loggedIn, _online, _web.IsInteractive);
@@ -1768,17 +1910,16 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
     private void UpdateLoginMenuItem() {
         string name = _web.Site.DisplayName;
-        _loginItem.Text = !_online ? "No internet connection — retry"
-            : _loggedIn ? name + ": Logged In ✓ (open window)"
-            : "Log in to " + name + "…";
+        _loginItem.Text = !_online ? Loc.T("No internet connection — retry")
+            : _loggedIn ? Loc.F("{0}: Logged In ✓ (open window)", name)
+            : Loc.F("Log in to {0}…", name);
     }
 
     private string StatusLine() =>
         !_web.IsInteractive && _online && _loggedIn && _phase == AppPhase.Idle
-            ? "Loading " + _web.Site.DisplayName + "…"
-            : _settings.RecordingVerb + " " + HotkeyNames.For(_settings.HotkeyVk)
-                + (_settings.ToggleRecording ? " to start/stop · " : " to dictate · ")
-                + _web.Site.DisplayName;
+            ? Loc.F("Loading {0}…", _web.Site.DisplayName)
+            : Loc.F(_settings.ToggleRecording ? "Press {0} to start/stop · {1}" : "Hold {0} to dictate · {1}",
+                HotkeyNames.For(_settings.HotkeyVk), _web.Site.DisplayName);
 
     private void UpdateStatusText() {
         _statusItem.Text = StatusLine();
@@ -1804,7 +1945,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return;
         }
         if (_phase != AppPhase.Idle) {
-            ShowBalloon("Wait until dictation finishes before switching models.", OverlayKind.Warning);
+            ShowBalloon(Loc.T("Wait until dictation finishes before switching models."), OverlayKind.Warning);
             SyncModelMenu();
             return;
         }
@@ -1822,7 +1963,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
         ApplyCleanSite();
         Log.Write("settings: transcriptionProvider=" + _settings.TranscriptionProviderName);
-        ShowBalloon("Switched to " + _web.Site.DisplayName + ".", OverlayKind.Success);
+        ShowBalloon(Loc.F("Switched to {0}.", _web.Site.DisplayName), OverlayKind.Success);
         _ = WarmupAsync();
     }
 
@@ -1843,15 +1984,15 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
         Log.Write("settings: pressEnterAfterPaste=" + enabled);
         if (announce) {
-            ShowBalloon(enabled ? "Auto Enter on" : "Auto Enter off");
+            ShowBalloon(enabled ? Loc.T("Auto Enter on") : Loc.T("Auto Enter off"));
         }
         NotifyUi();
     }
 
     private void UpdatePressEnterShortcutMenu() {
         _pressEnterShortcutItem.Text = _settings.PressEnterToggleVk <= 0
-            ? "Set Auto Enter shortcut…"
-            : "Auto Enter shortcut: " + HotkeyNames.For(_settings.PressEnterToggleVk);
+            ? Loc.T("Set Auto Enter shortcut…")
+            : Loc.T("Auto Enter shortcut: ") + HotkeyNames.For(_settings.PressEnterToggleVk);
     }
 
     private void OpenPressEnterShortcutUi() {
@@ -1880,17 +2021,17 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
     private void UpdateAskModelShortcutMenu() {
         _askModelShortcutItem.Text = _settings.AskModelVk <= 0
-            ? "Set Ask model shortcut…"
-            : "Ask model shortcut: " + HotkeyNames.For(_settings.AskModelVk);
+            ? Loc.T("Set Ask model shortcut…")
+            : Loc.T("Ask model shortcut: ") + HotkeyNames.For(_settings.AskModelVk);
     }
 
     private void UpdateTranslateMenu() {
         string language = GoogleTranslation.NameFor(_settings.TranslateTargetLanguage);
         var chord = _settings.TranslateChord;
         _translateShortcutItem.Text = chord.IsEmpty
-            ? "Set Translate shortcut…"
-            : "Translate shortcut: " + HotkeyNames.For(chord) + " → " + language;
-        _translateLanguageRoot.Text = "Translate to: " + language;
+            ? Loc.T("Set Translate shortcut…")
+            : Loc.T("Translate shortcut: ") + HotkeyNames.For(chord) + " → " + language;
+        _translateLanguageRoot.Text = Loc.T("Translate to: ") + language;
         foreach (ToolStripItem item in _translateLanguageRoot.DropDownItems) {
             if (item is ToolStripMenuItem mi) {
                 mi.Checked = string.Equals(mi.Tag as string, _settings.TranslateTargetLanguage,
@@ -1931,13 +2072,13 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 _settings.TranslateChord,
                 _hotkey,
                 _settings,
-                "EchoType — Translate shortcut",
-                _settings.ToggleRecording ? "Recording shortcut (1–3 keys)" : "Hold-to-talk shortcut (1–3 keys)",
+                Loc.T("EchoType — Translate shortcut"),
+                _settings.ToggleRecording ? Loc.T("Recording shortcut (1–3 keys)") : Loc.T("Hold-to-talk shortcut (1–3 keys)"),
                 (_settings.ToggleRecording
-                    ? "Click the box, then press one to three keys together (for example Ctrl+Shift+T). Press the shortcut to start, speak, and press it again to stop."
-                    : "Click the box, then press one to three keys together (for example Ctrl+Shift+T). Hold them and speak.")
-                    + " EchoType transcribes with the selected model, translates the text to " + language
-                    + " with " + (OpenAiTranslation.ResolveKey(_settings).Length > 0 ? "OpenAI" : "Google Translate") + ", and pastes it. Change the language from Translate to. Clear removes the shortcut.");
+                    ? Loc.T("Click the box, then press one to three keys together (for example Ctrl+Shift+T). Press the shortcut to start, speak, and press it again to stop.")
+                    : Loc.T("Click the box, then press one to three keys together (for example Ctrl+Shift+T). Hold them and speak."))
+                    + " " + Loc.F("EchoType transcribes with the selected model, translates the text to {0} with {1}, and pastes it. Change the language from Translate to. Clear removes the shortcut.",
+                        language, OpenAiTranslation.ResolveKey(_settings).Length > 0 ? "OpenAI" : "Google Translate"));
             if (form.ShowDialog() == DialogResult.OK) {
                 ApplyTranslateChord(form.Chord);
             }
@@ -1965,8 +2106,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
     private void UpdateModelWindowShortcutMenu() {
         _modelWindowShortcutItem.Text = _settings.OpenModelWindowVk <= 0
-            ? "Set model window shortcut…"
-            : "Model window shortcut: " + HotkeyNames.For(_settings.OpenModelWindowVk);
+            ? Loc.T("Set model window shortcut…")
+            : Loc.T("Model window shortcut: ") + HotkeyNames.For(_settings.OpenModelWindowVk);
     }
 
     private void OpenModelWindowShortcutUi() {
@@ -1980,9 +2121,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 _hotkey,
                 _settings,
                 _settings.OpenModelWindowVk,
-                "EchoType — Model window shortcut",
-                "Open window key",
-                "Click the box, then press the key. A tap opens the ChatGPT or Gemini window — the same window as Login in the tray. Tap again to close it. Clear removes the shortcut.");
+                Loc.T("EchoType — Model window shortcut"),
+                Loc.T("Open window key"),
+                Loc.T("Click the box, then press the key. A tap opens the ChatGPT or Gemini window — the same window as Login in the tray. Tap again to close it. Clear removes the shortcut."));
             if (form.ShowDialog() == DialogResult.OK) {
                 _settings.OpenModelWindowVk = form.HotkeyVk;
                 _settings.Save();
@@ -2011,11 +2152,11 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 _hotkey,
                 _settings,
                 _settings.AskModelVk,
-                "EchoType — Ask model shortcut",
-                _settings.ToggleRecording ? "Recording key" : "Hold-to-talk key",
+                Loc.T("EchoType — Ask model shortcut"),
+                _settings.ToggleRecording ? Loc.T("Recording key") : Loc.T("Hold-to-talk key"),
                 _settings.ToggleRecording
-                    ? "Click the box, then press the key. Press it to start, speak, and press it again to stop. EchoType sends your words to the selected model and pastes the reply — text or image — into the field you started in. Selected text is included when you have a selection. Clear removes the shortcut."
-                    : "Click the box, then press the key. Hold it, speak, and EchoType sends your words to the selected model and pastes the reply — text or image — into the field you started in. Selected text is included when you have a selection. Clear removes the shortcut.");
+                    ? Loc.T("Click the box, then press the key. Press it to start, speak, and press it again to stop. EchoType sends your words to the selected model and pastes the reply — text or image — into the field you started in. Selected text is included when you have a selection. Clear removes the shortcut.")
+                    : Loc.T("Click the box, then press the key. Hold it, speak, and EchoType sends your words to the selected model and pastes the reply — text or image — into the field you started in. Selected text is included when you have a selection. Clear removes the shortcut."));
             if (form.ShowDialog() == DialogResult.OK) {
                 _settings.AskModelVk = form.HotkeyVk;
                 _settings.Save();
@@ -2035,7 +2176,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
     private void UpdateModelShortcutsMenu() {
         bool any = _settings.ChatGptSwitchVk > 0 || _settings.GeminiSwitchVk > 0;
-        _modelShortcutsItem.Text = any ? "Model shortcuts…" : "Set model shortcuts…";
+        _modelShortcutsItem.Text = any ? Loc.T("Model shortcuts…") : Loc.T("Set model shortcuts…");
     }
 
     private void OpenModelShortcutsUi() {
@@ -2081,7 +2222,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 _loggedIn = false;
                 UpdateStatusIcon();
                 UpdateLoginMenuItem();
-                ShowBalloon("Log in to " + _web.Site.DisplayName + " before dictating.", OverlayKind.Warning);
+                ShowBalloon(Loc.F("Log in to {0} before dictating.", _web.Site.DisplayName), OverlayKind.Warning);
             } else if (outcome == ReadyOutcome.Offline) {
                 _online = false;
                 UpdateStatusIcon();
@@ -2148,15 +2289,15 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         foreach (var cmd in _settings.ActiveCommands) {
             cmd.Normalize();
             string extra = cmd.ResolvedButtons.Count > 1
-                ? " (" + cmd.ResolvedButtons.Count + " buttons)"
+                ? Loc.F(" ({0} buttons)", cmd.ResolvedButtons.Count)
                 : "";
-            string label = $"{_settings.RecordingVerb} {HotkeyNames.For(cmd.Chord)} — {cmd.DisplayName}{extra}";
+            string label = Loc.T(_settings.RecordingVerb) + $" {HotkeyNames.For(cmd.Chord)} — {cmd.DisplayName}{extra}";
             _commandsRoot.DropDownItems.Add(new ToolStripMenuItem(label) { Enabled = false });
         }
         if (_settings.ActiveCommands.Count > 0) {
             _commandsRoot.DropDownItems.Add(new ToolStripSeparator());
         }
-        _commandsRoot.DropDownItems.Add("Add or edit…", null, (_, _) => OpenCommandsUi());
+        _commandsRoot.DropDownItems.Add(Loc.T("Add or edit…"), null, (_, _) => OpenCommandsUi());
         NotifyUi();
     }
 
@@ -2228,7 +2369,47 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     string IAppWindowHost.ModelName => _web.Site.DisplayName;
     bool IAppWindowHost.LoginWindowVisible => _web.IsLoginWindowVisible;
     float IAppWindowHost.MicLevel => _micMeter.Level;
+    bool IAppWindowHost.CopyMicSpectrum(float[] dest) => _micMeter.CopySpectrum(dest);
     string IAppWindowHost.StatusText => StatusLine();
+
+    void IAppWindowHost.SetShowAskReplyWindow(bool value) {
+        if (_settings.ShowAskReplyWindow == value) {
+            return;
+        }
+        _settings.ShowAskReplyWindow = value;
+        _settings.Save();
+        Log.Write("settings: showAskReplyWindow=" + value);
+        NotifyUi();
+    }
+
+    /// <summary>
+    /// Saves the interface language and restarts EchoType: every window, menu and HUD
+    /// font is built once at startup, so a restart is what switches all of them cleanly.
+    /// </summary>
+    void IAppWindowHost.SetUiLanguage(string code) {
+        code = Loc.Resolve(code);
+        if (code == (Loc.Arabic ? Loc.ArabicCode : Loc.English)) {
+            // Already showing this language; just remember the explicit choice.
+            if (_settings.UiLanguage != code) {
+                _settings.UiLanguage = code;
+                _settings.Save();
+            }
+            return;
+        }
+        if (_phase != AppPhase.Idle) {
+            ShowBalloon(Loc.T("Wait until dictation finishes before switching the language."), OverlayKind.Warning);
+            NotifyUi();
+            return;
+        }
+        _settings.UiLanguage = code;
+        _settings.Save();
+        Log.Write("settings: uiLanguage=" + code + ", restarting");
+        if (Program.Restart()) {
+            ExitThread();
+        } else {
+            ShowBalloon(Loc.T("Language saved. Restart EchoType to apply it."), OverlayKind.Info);
+        }
+    }
 
     string IAppWindowHost.CleanModelName => Gen.Site.DisplayName;
     bool IAppWindowHost.CleanWindowVisible => Gen.IsLoginWindowVisible;
@@ -2289,24 +2470,24 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return ((IAppWindowHost)this).TrySetTranslateChord(HotkeyChord.Single(vk));
         }
         if (shortcut == AppShortcut.Dictation && vk <= 0) {
-            ShowBalloon("Pick a dictation key — EchoType needs one to record.", OverlayKind.Warning);
+            ShowBalloon(Loc.T("Pick a dictation key — EchoType needs one to record."), OverlayKind.Warning);
             return false;
         }
         if (shortcut == AppShortcut.ChatGpt && vk != 0 && vk == _settings.GeminiSwitchVk) {
-            ShowBalloon("ChatGPT and Gemini cannot share the same shortcut.", OverlayKind.Warning);
+            ShowBalloon(Loc.T("ChatGPT and Gemini cannot share the same shortcut."), OverlayKind.Warning);
             return false;
         }
         if (shortcut == AppShortcut.Gemini && vk != 0 && vk == _settings.ChatGptSwitchVk) {
-            ShowBalloon("ChatGPT and Gemini cannot share the same shortcut.", OverlayKind.Warning);
+            ShowBalloon(Loc.T("ChatGPT and Gemini cannot share the same shortcut."), OverlayKind.Warning);
             return false;
         }
         if ((shortcut is AppShortcut.ChatGpt or AppShortcut.Gemini) && vk != 0 && vk == _settings.ClaudeSwitchVk) {
-            ShowBalloon("That key already switches to Claude.", OverlayKind.Warning);
+            ShowBalloon(Loc.T("That key already switches to Claude."), OverlayKind.Warning);
             return false;
         }
         if (shortcut == AppShortcut.Claude && vk != 0
             && (vk == _settings.ChatGptSwitchVk || vk == _settings.GeminiSwitchVk)) {
-            ShowBalloon("Each model needs its own switch shortcut.", OverlayKind.Warning);
+            ShowBalloon(Loc.T("Each model needs its own switch shortcut."), OverlayKind.Warning);
             return false;
         }
 
@@ -2391,6 +2572,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         StopMicLevelPump();
         RestoreOtherApps();
         _micMeter.Dispose();
+        AskReplyForm.CloseCurrent();
         StatusOverlay.Shutdown();
         _hotkey.Dispose();
         _web.Dispose();

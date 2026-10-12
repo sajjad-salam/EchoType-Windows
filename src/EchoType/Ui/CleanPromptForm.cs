@@ -10,7 +10,7 @@ internal sealed class CleanPromptForm : Form {
     public CleanPromptForm(string prompt, string modelName) {
         Result = prompt;
 
-        Text = "Auto Clean prompt";
+        Text = Loc.T("Auto Clean prompt");
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -26,15 +26,15 @@ internal sealed class CleanPromptForm : Form {
         var title = new Label {
             Dock = DockStyle.Top,
             AutoSize = true,
-            Text = "Prompt sent to " + modelName,
+            Text = Loc.F("Prompt sent to {0}", modelName),
             Margin = new Padding(0, 0, 0, 4),
         };
         var hint = new Label {
             Dock = DockStyle.Bottom,
             AutoSize = true,
             ForeColor = SystemColors.GrayText,
-            Text = "The transcription is appended after this prompt, and the model's reply is pasted "
-                + "instead of the raw transcript. Any language works.",
+            Text = Loc.T("The transcription is appended after this prompt, and the model's reply is pasted "
+                + "instead of the raw transcript. Any language works."),
             Padding = new Padding(0, 6, 0, 0),
         };
         _promptBox = new TextBox {
@@ -45,9 +45,9 @@ internal sealed class CleanPromptForm : Form {
             Text = prompt.Replace("\r\n", "\n").Replace("\n", "\r\n"),
         };
 
-        var save = new Button { Text = "Save", AutoSize = true };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true };
-        var reset = new Button { Text = "Reset to default", AutoSize = true };
+        var save = new Button { Text = Loc.T("Save"), AutoSize = true };
+        var cancel = new Button { Text = Loc.T("Cancel"), DialogResult = DialogResult.Cancel, AutoSize = true };
+        var reset = new Button { Text = Loc.T("Reset to default"), AutoSize = true };
         save.Click += (_, _) => TrySave();
         reset.Click += (_, _) => {
             _promptBox.Text = Settings.DefaultAutoCleanPrompt;
@@ -70,6 +70,7 @@ internal sealed class CleanPromptForm : Form {
         Controls.Add(title);
         Controls.Add(hint);
         Controls.Add(buttons);
+        Loc.ApplyTo(this);
     }
 
     protected override void OnShown(EventArgs e) {
@@ -81,7 +82,7 @@ internal sealed class CleanPromptForm : Form {
     private void TrySave() {
         string prompt = _promptBox.Text.Trim();
         if (prompt.Length == 0) {
-            MessageBox.Show(this, "The prompt can't be empty. Use Reset to default to restore it.", "EchoType",
+            MessageBox.Show(this, Loc.T("The prompt can't be empty. Use Reset to default to restore it."), "EchoType",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             _promptBox.Select();
             return;

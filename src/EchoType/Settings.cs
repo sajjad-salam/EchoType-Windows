@@ -111,6 +111,20 @@ internal sealed class Settings {
     public string OpenAiTranslationModel { get; set; } = "";
 
     /// <summary>
+    /// Interface language: "en", "ar", or empty to follow the Windows display language.
+    /// Applied at startup; changing it from the window restarts EchoType.
+    /// </summary>
+    [JsonPropertyName("uiLanguage")]
+    public string UiLanguage { get; set; } = "";
+
+    /// <summary>
+    /// When true (default), Ask model replies also open in a popup with Copy buttons
+    /// (text and images), in addition to being pasted or copied.
+    /// </summary>
+    [JsonPropertyName("showAskReplyWindow")]
+    public bool ShowAskReplyWindow { get; set; } = true;
+
+    /// <summary>
     /// Tap key that opens the ChatGPT/Gemini window (same as tray Login). 0 = none.
     /// </summary>
     [JsonPropertyName("openModelWindowVk")]

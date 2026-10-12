@@ -18,7 +18,7 @@ internal sealed class ModelShortcutsForm : Form {
         _chatgptVk = settings.ChatGptSwitchVk;
         _geminiVk = settings.GeminiSwitchVk;
 
-        Text = "EchoType — Model shortcuts";
+        Text = Loc.T("EchoType — Model shortcuts");
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -41,8 +41,8 @@ internal sealed class ModelShortcutsForm : Form {
             _geminiBox.Text = HotkeyLabel(vk);
         });
 
-        var save = new Button { Text = "Save", AutoSize = true };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true };
+        var save = new Button { Text = Loc.T("Save"), AutoSize = true };
+        var cancel = new Button { Text = Loc.T("Cancel"), DialogResult = DialogResult.Cancel, AutoSize = true };
         save.Click += (_, _) => TrySave();
         AcceptButton = save;
         CancelButton = cancel;
@@ -65,24 +65,25 @@ internal sealed class ModelShortcutsForm : Form {
         body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         body.Controls.Add(Field(
-            "Switch to ChatGPT",
+            Loc.T("Switch to ChatGPT"),
             _chatgptBox,
             () => {
                 _chatgptVk = 0;
                 _chatgptBox.Text = HotkeyLabel(0);
             },
-            "Click the box, then press the key. A tap switches to ChatGPT. Clear removes the shortcut."), 0, 0);
+            Loc.T("Click the box, then press the key. A tap switches to ChatGPT. Clear removes the shortcut.")), 0, 0);
         body.Controls.Add(Field(
-            "Switch to Gemini",
+            Loc.T("Switch to Gemini"),
             _geminiBox,
             () => {
                 _geminiVk = 0;
                 _geminiBox.Text = HotkeyLabel(0);
             },
-            "Click the box, then press the key. A tap switches to Gemini. Custom commands keep using whichever model is selected."), 0, 1);
+            Loc.T("Click the box, then press the key. A tap switches to Gemini. Custom commands keep using whichever model is selected.")), 0, 1);
 
         Controls.Add(body);
         Controls.Add(buttons);
+        Loc.ApplyTo(this);
     }
 
     private TextBox CaptureBox(Func<int> current) => new() {
@@ -96,7 +97,7 @@ internal sealed class ModelShortcutsForm : Form {
             box.BackColor = Color.FromArgb(232, 242, 255);
             _hotkey.CaptureKeys = true;
             if ((box == _chatgptBox ? _chatgptVk : _geminiVk) == 0) {
-                box.Text = "Press a key…";
+                box.Text = Loc.T("Press a key…");
             }
         };
         box.LostFocus += (_, _) => {
@@ -119,7 +120,7 @@ internal sealed class ModelShortcutsForm : Form {
         row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         field.Margin = new Padding(0, 0, 8, 0);
         row.Controls.Add(field, 0, 0);
-        var clearButton = new Button { Text = "Clear", AutoSize = true, Margin = new Padding(0) };
+        var clearButton = new Button { Text = Loc.T("Clear"), AutoSize = true, Margin = new Padding(0) };
         clearButton.Click += (_, _) => clear();
         row.Controls.Add(clearButton, 1, 0);
 
@@ -174,7 +175,7 @@ internal sealed class ModelShortcutsForm : Form {
 
     private void TrySave() {
         if (_chatgptVk != 0 && _chatgptVk == _geminiVk) {
-            MessageBox.Show(this, "ChatGPT and Gemini cannot share the same shortcut.",
+            MessageBox.Show(this, Loc.T("ChatGPT and Gemini cannot share the same shortcut."),
                 "EchoType", MessageBoxButtons.OK, MessageBoxIcon.Information);
             _chatgptBox.Focus();
             return;
@@ -203,5 +204,5 @@ internal sealed class ModelShortcutsForm : Form {
     }
 
     private static string HotkeyLabel(int vk) =>
-        vk <= 0 ? "Click here, then press a key (or Clear)" : HotkeyNames.For(vk);
+        vk <= 0 ? Loc.T("Click here, then press a key (or Clear)") : HotkeyNames.For(vk);
 }

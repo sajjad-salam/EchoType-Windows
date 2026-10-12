@@ -23,9 +23,10 @@ internal sealed class DriverException : Exception {
 
 internal sealed record AssistantImage(string Src, int Width, int Height, bool Loaded);
 
-internal sealed record ModelReply(string Text, IReadOnlyList<AssistantImage> Images) {
+internal sealed record ModelReply(string Text, IReadOnlyList<AssistantImage> Images, IReadOnlyList<string>? VideoSources = null) {
     public static ModelReply Empty { get; } = new("", []);
-    public bool IsEmpty => Text.Length == 0 && Images.Count == 0;
+    public IReadOnlyList<string> Videos => VideoSources ?? [];
+    public bool IsEmpty => Text.Length == 0 && Images.Count == 0 && Videos.Count == 0;
     public bool HasLoadedImage => Images.Any(i => i.Loaded || (i.Width >= 96 && i.Height >= 96));
 }
 
@@ -705,6 +706,70 @@ internal sealed class DictationDriver {
             if (t.length > 160) return false;
             return /^(generating.{0,40}image|creating.{0,40}image|working on.{0,24}image|image.{0,24}(generat|creat)|جار[يٍ]?\s*إنشاء.{0,20}صور|توليد.{0,20}صور|إنشاء صور|generando.{0,24}imagen|g[eé]n[eé]ration.{0,24}image|正在生成.{0,12}图)/i.test(t);
           };
+          // Looser status-line match for Ask mode only: Gemini puts "Show thinking" or a
+          // short lead-in before the status line, and uses video / "Nano Banana" /
+          // "this may take a few minutes" wording. Too loose for rewrite commands, whose
+          // replies may legitimately be a short sentence about making a video.
+          E.isMediaStatus = (t) => {
+            t = E.cleanText(t);
+            if (!t || t.length > 220) return false;
+            if (E.isImagePlaceholder(t)) return true;
+            return /(generating|creating|rendering|making|loading|preparing|working on)\b.{0,40}\b(image|picture|photo|video|clip|animation)s?\b|\b(image|video)s?\b.{0,24}\b(is|are)\s+(being\s+)?(generat|creat|render|process)|loading nano banana|nano banana.{0,20}(is\s+)?(generat|creat|work)|\b(this|it) (may|might|could|can) take (a few|a couple of|several|up to) (seconds|minutes)|(جار[يٍ]?|يتم|يجري|سيتم|أقوم ب)\s*(إنشاء|توليد|تحميل|رسم|تصميم|معالجة|إعداد).{0,30}(صور|فيديو|مقطع|رسم)|(قد|ربما) (يستغرق|تستغرق)/i.test(t);
+          };
+          // Media still on its way inside the last reply: infinite CSS animations (Gemini's
+          // shimmer / spinner cards), a video that has not loaded, or an image still
+          // downloading. Weak signal: only Ask mode waits on it, and only for a while.
+          E.mediaBusy = () => {
+            const node = E.lastAssistantNode();
+            if (!node) return '';
+            try {
+              const t = E.messageText(node) || E.elementText(node);
+              const hasImage = E.collectImages(node).some(function (i) { return i.loaded; });
+              if (!hasImage && E.isMediaStatus(t)) return 'status';
+            } catch (e) {}
+            const visible = (el) => { try { return !!(el && el.getClientRects && el.getClientRects().length); } catch (e) { return false; } };
+            try {
+              if (node.getAnimations) {
+                for (const a of node.getAnimations({ subtree: true })) {
+                  try {
+                    if (a.playState !== 'running' || !a.effect || !a.effect.getComputedTiming) continue;
+                    if (a.effect.getComputedTiming().iterations !== Infinity) continue;
+                    const el = a.effect.target;
+                    if (!visible(el)) continue;
+                    const cls = el.getAttribute ? (el.getAttribute('class') || '') : '';
+                    return 'anim:' + ((el.tagName || '') + '.' + cls).toLowerCase().slice(0, 60);
+                  } catch (e) {}
+                }
+              }
+            } catch (e) {}
+            try {
+              for (const v of node.querySelectorAll('video')) {
+                if (!v.error && v.readyState < 2 && visible(v)) return 'video';
+              }
+              for (const img of node.querySelectorAll('img')) {
+                if (img.complete || !visible(img)) continue;
+                const w = img.width || 0;
+                if (!w || w >= 96) return 'img';
+              }
+            } catch (e) {}
+            return '';
+          };
+          E.lastAssistantVideos = () => {
+            const node = E.lastAssistantNode();
+            const out = [];
+            if (!node) return out;
+            try {
+              for (const v of node.querySelectorAll('video')) {
+                let src = v.currentSrc || v.getAttribute('src') || '';
+                if (!src) {
+                  const s = v.querySelector('source[src]');
+                  if (s) src = s.getAttribute('src') || '';
+                }
+                if (src && out.indexOf(src) < 0) out.push(src);
+              }
+            } catch (e) {}
+            return out;
+          };
           E.nodeLooksBusy = (node) => {
             if (!node) return false;
             try {
@@ -848,7 +913,9 @@ internal sealed class DictationDriver {
             assistantTurns: E.messageNodes(S.assistant).length,
             assistantKey: E.assistantTurnKey(),
             afterUser: E.replyAfterUser(),
-            images: E.lastAssistantImages()
+            images: E.lastAssistantImages(),
+            videos: E.lastAssistantVideos(),
+            mediaBusy: E.mediaBusy()
           });
           E.replyDiag = () => {
             const per = (sels) => (sels || []).map(function (q) {
@@ -1919,15 +1986,29 @@ internal sealed class DictationDriver {
         }
     }
 
+    /// <param name="waitForMedia">
+    /// Ask mode: the reply goes to a popup, so take longer to be sure it is complete —
+    /// a longer settle window, wait while Gemini/ChatGPT still show a media status line,
+    /// a loading animation or an unloaded video, and give a short reply that mentions an
+    /// image or video extra time for the media to land.
+    /// </param>
     public async Task<ModelReply> AwaitAssistantReplyAsync(
         CommandTurnSnapshot previous,
-        TimeSpan firstByteTimeout) {
+        TimeSpan firstByteTimeout,
+        bool waitForMedia = false) {
         if (firstByteTimeout < TimeSpan.FromSeconds(5)) {
             firstByteTimeout = TimeSpan.FromSeconds(5);
         }
         int epoch = _waitEpoch;
         TimeSpan inactivity = TimeSpan.FromSeconds(90);
         TimeSpan imageLoadGrace = TimeSpan.FromSeconds(25);
+        // ~0.9 s of unchanged text normally; ~2.7 s for Ask, ~18 s if it only talks about media.
+        int settlePolls = waitForMedia ? 9 : 3;
+        const int MediaMentionSettlePolls = 60;
+        // Video jobs (Veo) can take several minutes; the HUD ✕ cancels sooner if wanted.
+        TimeSpan mediaBusyMax = TimeSpan.FromMinutes(6);
+        DateTime? mediaBusySince = null;
+        bool loggedMediaBusyGiveUp = false;
         DateTime firstByteDeadline = DateTime.UtcNow + firstByteTimeout;
         DateTime deadline = DateTime.UtcNow + inactivity;
         DateTime? imageHardDeadline = null;
@@ -1993,7 +2074,7 @@ internal sealed class DictationDriver {
             if (placeholderPending) {
                 if (!sawImagePending) {
                     sawImagePending = true;
-                    imageHardDeadline = DateTime.UtcNow + TimeSpan.FromMinutes(4);
+                    imageHardDeadline = DateTime.UtcNow + TimeSpan.FromMinutes(waitForMedia ? 6 : 4);
                     Log.Write("driver: waiting for generated image (placeholder; send stays active)");
                 }
                 sawGenerating = true;
@@ -2025,6 +2106,38 @@ internal sealed class DictationDriver {
                 imageLoadDeadline = null;
             }
 
+            // Ask mode: a status line ("Creating your video…"), a shimmer/spinner card, an
+            // unloaded video or image means the media is still on its way. Capped so a page
+            // that animates forever cannot hold the reply hostage.
+            bool mediaBusy = waitForMedia
+                && !replyIsEcho
+                && (newAssistantTurn || key != prevKey)
+                && st.MediaBusy.Length > 0;
+            if (mediaBusy) {
+                if (mediaBusySince == null) {
+                    mediaBusySince = DateTime.UtcNow;
+                    Log.Write("driver: reply still loading media (" + st.MediaBusy + "), waiting");
+                }
+                if (DateTime.UtcNow - mediaBusySince.Value < mediaBusyMax) {
+                    sawGenerating = true;
+                    sawNewContent = true;
+                    stableCount = 0;
+                    deadline = DateTime.UtcNow + inactivity;
+                    lastKey = key;
+                    lastReply = st.Reply;
+                    await Task.Delay(400);
+                    continue;
+                }
+                if (!loggedMediaBusyGiveUp) {
+                    loggedMediaBusyGiveUp = true;
+                    Log.Write("driver: media still loading after " + (int)mediaBusyMax.TotalSeconds
+                        + "s (" + st.MediaBusy + "), settling on what is there");
+                }
+            } else if (mediaBusySince != null && !loggedMediaBusyGiveUp) {
+                Log.Write("driver: reply media finished loading");
+                mediaBusySince = null;
+            }
+
             if (st.Generating) {
                 sawGenerating = true;
                 stableCount = 0;
@@ -2033,7 +2146,13 @@ internal sealed class DictationDriver {
                 sawNewContent = true;
                 if (key == lastKey) {
                     stableCount++;
-                    if (stableCount >= 3) {
+                    int needed = waitForMedia && ShortReplyMentionsMedia(st.Reply)
+                        ? MediaMentionSettlePolls
+                        : settlePolls;
+                    if (stableCount == settlePolls && needed > settlePolls) {
+                        Log.Write("driver: short reply mentions media, giving it longer to arrive");
+                    }
+                    if (stableCount >= needed) {
                         return st.Reply;
                     }
                 } else {
@@ -2270,7 +2389,8 @@ internal sealed class DictationDriver {
 
     private static string Fingerprint(ModelReply reply) =>
         reply.Text + "\n" + string.Join("\0", reply.Images.Select(i =>
-            i.Src + ":" + i.Width + "x" + i.Height + (i.Loaded ? ":L" : ":U")));
+            i.Src + ":" + i.Width + "x" + i.Height + (i.Loaded ? ":L" : ":U")))
+        + "\n" + string.Join("\0", reply.Videos);
 
     /// <summary>
     /// ChatGPT/Gemini image jobs emit a short status line first and leave Send
@@ -2291,6 +2411,21 @@ internal sealed class DictationDriver {
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
+    /// <summary>
+    /// A short reply with no media yet that talks about an image or video ("Sure, here's
+    /// a picture of…"): Ask mode gives it longer to settle in case the media is still coming.
+    /// </summary>
+    private static bool ShortReplyMentionsMedia(ModelReply reply) {
+        if (reply.Images.Count > 0 || reply.Videos.Count > 0) {
+            return false;
+        }
+        string t = reply.Text.Trim();
+        return t.Length is > 0 and <= 280
+            && Regex.IsMatch(t,
+                @"\b(image|picture|photo|illustration|video|clip|animation)s?\b|صور|فيديو|مقطع|رسم",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
     private sealed record ReplyState(
         bool Generating,
         bool ImagePending,
@@ -2300,7 +2435,8 @@ internal sealed class DictationDriver {
         int UserTurns,
         int AssistantTurns,
         string AssistantKey,
-        bool AfterUser);
+        bool AfterUser,
+        string MediaBusy);
 
     private async Task<ReplyState?> ReadReplyStateAsync() {
         string json = await EvalAsync("__echotype.replyState()");
@@ -2317,15 +2453,29 @@ internal sealed class DictationDriver {
                 Composer: r.GetProperty("composer").GetString() ?? "",
                 Reply: new ModelReply(
                     r.GetProperty("last").GetString() ?? "",
-                    ParseImages(r)),
+                    ParseImages(r),
+                    ParseVideos(r)),
                 User: r.TryGetProperty("user", out var user) ? user.GetString() ?? "" : "",
                 UserTurns: r.TryGetProperty("userTurns", out var ut) && ut.TryGetInt32(out int uti) ? uti : 0,
                 AssistantTurns: r.TryGetProperty("assistantTurns", out var at) && at.TryGetInt32(out int ati) ? ati : 0,
                 AssistantKey: r.TryGetProperty("assistantKey", out var ak) ? ak.GetString() ?? "" : "",
-                AfterUser: !r.TryGetProperty("afterUser", out var au) || au.ValueKind != JsonValueKind.False);
+                AfterUser: !r.TryGetProperty("afterUser", out var au) || au.ValueKind != JsonValueKind.False,
+                MediaBusy: r.TryGetProperty("mediaBusy", out var mb) && mb.ValueKind == JsonValueKind.String
+                    ? mb.GetString() ?? "" : "");
         } catch (Exception ex) {
             throw new DriverException(DriverFailure.JavaScript, "bad reply JSON: " + ex.Message);
         }
+    }
+
+    private static IReadOnlyList<string> ParseVideos(JsonElement root) {
+        if (!root.TryGetProperty("videos", out var arr) || arr.ValueKind != JsonValueKind.Array) {
+            return [];
+        }
+        return arr.EnumerateArray()
+            .Where(v => v.ValueKind == JsonValueKind.String)
+            .Select(v => v.GetString() ?? "")
+            .Where(s => s.Length > 0)
+            .ToList();
     }
 
     private static IReadOnlyList<AssistantImage> ParseImages(JsonElement root) {
@@ -2654,7 +2804,11 @@ internal sealed class DictationDriver {
             || t.Equals("Think", StringComparison.OrdinalIgnoreCase)
             || t.Equals("New chat", StringComparison.OrdinalIgnoreCase)
             || t.StartsWith("What's on the agenda", StringComparison.OrdinalIgnoreCase)
-            || t.StartsWith("How can I help", StringComparison.OrdinalIgnoreCase);
+            || t.StartsWith("How can I help", StringComparison.OrdinalIgnoreCase)
+            // Arabic UI placeholders — exact strings only, so a dictation that starts with
+            // "اسأل" is never mistaken for one.
+            || t is "اسأل Gemini" or "اسأل عن أي شيء" or "اسأل ChatGPT" or "أدخِل طلبًا لـ Gemini"
+                or "أدخل طلبًا لـ Gemini" or "اكتب رسالة" or "مراسلة ChatGPT";
     }
 
     private async Task<string> TryUserTranscriptFallbackAsync(int epoch = 0) {

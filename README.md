@@ -19,7 +19,13 @@ If you **select text first**, then record an instruction, EchoType sends the sel
 
 Pick **ChatGPT**, **Gemini** or **Claude** from the window or the tray menu, or assign tap shortcuts to switch between them. Each model has its own login session. Custom-command prompts are shared by all of them and always use whichever model is selected.
 
-**Claude shows a live transcript.** claude.ai writes your words into its prompt box while you are still speaking, so with Claude selected the Listening HUD grows to show the latest few lines as they arrive. When you stop recording, EchoType waits for Claude's final text and pastes that.
+**Listening HUD.** While you speak, the pill at the bottom of the screen shows a live wave of your voice's frequencies (a short FFT of the microphone, low pitches on the left, high on the right), not just its loudness. Its **✕** button cancels the recording: nothing is pasted, and clicking it doesn't take focus from the app you're typing in. The same ✕ is on the progress pill while EchoType transcribes or waits for a reply.
+
+**Live transcript.** If the selected model writes your words into its prompt box while you are still speaking (claude.ai does), the Listening HUD grows to show the latest few lines right under the wave. When you stop recording, EchoType waits for the final text and pastes that. ChatGPT only fills its box after you stop, so the pill stays compact there.
+
+**Ask model reply window.** Ask model (F5 if that's your shortcut) waits for the model's *complete* reply, then pastes it into the field you started in, or leaves it on the clipboard if no text field was focused. It also opens a small popup with the reply and **Copy text**, **Copy image** and **Save image…** buttons (click the image to copy it too). If the reply holds a video, the popup says so and **Open in …** shows it in the model's window. Turn the popup off under **Options → Show Ask model replies in a popup**. Image and video jobs are waited out: a status line such as "Generating image…", "Loading Nano Banana…" or "Your video is being generated" (English or Arabic), a loading animation inside the reply, or a video or image that hasn't loaded yet all count as "not done". A short reply that mentions an image or video also gets extra time for the media to arrive. Each of these waits has a cap (a few minutes) so a stuck page can't hang EchoType.
+
+**Arabic interface.** Pick **Options → Language → العربية** in the window (or set `uiLanguage` in `config.json`). EchoType restarts in Arabic: the window, tray menu, HUD, popups and dialogs are translated and laid out right to left, using the IBM Plex Arabic font that ships inside the exe (`src/EchoType/Assets/Fonts`). Arabic transcripts and replies use the same font even when the interface is in English.
 
 Add extra recording shortcuts that send the transcript to the selected model with your own prompt and paste the model's reply instead. A command can be one button or a group of buttons. Custom commands are shared across ChatGPT and Gemini, and they follow the same hold vs press-to-start/stop mode as dictation.
 
@@ -77,7 +83,8 @@ Hold to talk is the default. Switch to press-to-start/stop from the EchoType win
 | **Hold to talk:** tap the hold key (< 0.35 s) | Cancel (after dictation started) |
 | **Press to start/stop:** press the same key again while the mic is opening | Cancel the start |
 | **Double-tap Right Ctrl** | Cancel the current task — listening (hold mode), transcribing, choosing a command button, or waiting for a reply. In press-to-start/stop mode a second press *while listening* stops and transcribes instead. Nothing is pasted when a cancel applies. |
-| **Esc while listening or choosing a button** | Cancel — this is the MVP's substitute for the macOS HUD's ✕ button. Esc is swallowed system-wide *only while you're actively dictating or picking a command button*; at all other times it behaves normally |
+| **Click ✕ on the HUD pill** | Cancel while listening, transcribing or waiting for a reply. Nothing is pasted |
+| **Esc while listening or choosing a button** | Cancel. Esc is swallowed system-wide *only while you're actively dictating or picking a command button*; at all other times it behaves normally |
 
 ### Custom commands
 
@@ -150,6 +157,8 @@ The command’s key is reserved (swallowed) while EchoType is running, same as t
 - `chatgptSwitchVk` / `geminiSwitchVk` — tap keys that switch to that model. `0` (default) = none. `112` = F1, `113` = F2. Set from the window or tray menu → **Transcription model → Set model shortcuts…**. Reserved while EchoType is running, same as other shortcuts.
 - `openModelWindowVk` — tap key that opens the ChatGPT/Gemini window (same as Login). `0` (default) = none. Set from the window or tray menu → **Set model window shortcut…**. Tap again to close the window. Reserved while EchoType is running.
 - **Custom sounds** — put your own `start.wav` (recording starts) and/or `done.wav` (text pasted) in `%APPDATA%\EchoType\Sounds\` and restart EchoType; missing files fall back to the built-in stopwatch clicks. Use standard PCM `.wav` files.
+- `uiLanguage` — `"en"`, `"ar"`, or `""` (default) to follow the Windows display language. Set from the window → **Options → Language**, which restarts EchoType to apply it.
+- `showAskReplyWindow` — `true` (default): Ask model replies also open in a popup with Copy buttons. `false`: they are only pasted / copied.
 - `muteOtherAppsWhileDictating` — `true` (default): other apps that are playing sound are paused when they support it, or muted otherwise, then restored when you stop. Also toggled from the window or tray menu.
 - `customCommands` — global recording-key commands, managed from the window or tray menu. Used with whichever model is selected. `hotkeyVk` `165` = Right Alt. They follow `toggleRecording`. Each command has a `buttons` list (1–8). A single button is sent right after dictation; two or more show a chooser. The top-level `prompt` is kept in sync with the first button so older builds still load the file.
 
@@ -196,3 +205,5 @@ EchoType records nothing itself. Audio goes from your microphone directly to cha
 ## License
 
 MIT — see [LICENSE](LICENSE). Port of [DevWizardHQ/EchoType](https://github.com/DevWizardHQ/EchoType).
+
+The bundled IBM Plex Arabic font is © IBM Corp., licensed under the SIL Open Font License 1.1.

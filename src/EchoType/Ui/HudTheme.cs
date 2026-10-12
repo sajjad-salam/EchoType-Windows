@@ -66,12 +66,12 @@ internal static class HudTheme {
 
     public static string PhaseLabel(AppPhase phase, bool loggedIn, bool online, bool pageReady) {
         if (!online) {
-            return "Offline";
+            return Loc.T("Offline");
         }
         if (!loggedIn) {
-            return "Logged out";
+            return Loc.T("Logged out");
         }
-        return phase switch {
+        return Loc.T(phase switch {
             AppPhase.Listening => "Listening",
             AppPhase.Transcribing => "Transcribing",
             AppPhase.ChoosingAction => "Choose an action",
@@ -79,10 +79,31 @@ internal static class HudTheme {
             AppPhase.Waking => "Waking up",
             AppPhase.Engaging => "Starting",
             _ => pageReady ? "Ready" : "Loading",
-        };
+        });
     }
 
+    /// <summary>
+    /// The HUD typeface: Segoe UI Variable, or IBM Plex Arabic when the interface is Arabic.
+    /// </summary>
     public static Font Font(float size, FontStyle style = FontStyle.Regular) {
+        if (Loc.Arabic && ArabicFont.Create(size, style) is { } arabic) {
+            return arabic;
+        }
+        return LatinFont(size, style);
+    }
+
+    /// <summary>
+    /// Font for user content (transcripts, model replies): IBM Plex Arabic when the text
+    /// contains Arabic, otherwise the HUD font.
+    /// </summary>
+    public static Font ContentFont(float size, string? text, FontStyle style = FontStyle.Regular) {
+        if (ArabicFont.HasArabic(text) && ArabicFont.Create(size, style) is { } arabic) {
+            return arabic;
+        }
+        return Font(size, style);
+    }
+
+    private static Font LatinFont(float size, FontStyle style) {
         try {
             return new Font("Segoe UI Variable Text", size, style, GraphicsUnit.Point);
         } catch (ArgumentException) {
@@ -181,6 +202,20 @@ internal static class HudTheme {
             float target = envelope * smoothed * flicker;
             float lerp = incoming > 0.04f ? 0.5f : 0.2f;
             bars[i] += (Math.Clamp(target, 0f, 1f) - bars[i]) * lerp;
+        }
+    }
+
+    /// <summary>
+    /// Drives the bars from a real voice spectrum (one value per bar, low to high
+    /// frequency). <paramref name="smoothed"/> tracks overall loudness for the glow.
+    /// </summary>
+    public static void StepSpectrum(float[] bars, ref float smoothed, float[] spectrum, float level) {
+        level = Math.Clamp(level, 0, 1);
+        smoothed += (level - smoothed) * (level > smoothed ? 0.55f : 0.22f);
+        int n = Math.Min(bars.Length, spectrum.Length);
+        for (int i = 0; i < n; i++) {
+            float target = Math.Clamp(spectrum[i], 0f, 1f);
+            bars[i] += (target - bars[i]) * (target > bars[i] ? 0.6f : 0.24f);
         }
     }
 
