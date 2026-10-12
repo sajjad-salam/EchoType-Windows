@@ -153,7 +153,7 @@ internal sealed class MicLevelMeter : IDisposable {
     }
 
     private bool TryCaptureLoop(CancellationToken cancel) {
-        var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+        var enumerator = (IMMDeviceEnumerator)CoreAudio.CreateDeviceEnumerator();
         IMMDevice? device = null;
         IAudioClient? client = null;
         IAudioCaptureClient? capture = null;
@@ -394,7 +394,7 @@ internal sealed class MicLevelMeter : IDisposable {
     }
 
     private void MeterLoop(CancellationToken cancel) {
-        var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+        var enumerator = (IMMDeviceEnumerator)CoreAudio.CreateDeviceEnumerator();
         IMMDevice? device = null;
         IAudioMeterInformation? meter = null;
         try {
@@ -512,10 +512,6 @@ internal sealed class MicLevelMeter : IDisposable {
 
     [DllImport("ole32.dll")]
     private static extern void CoUninitialize();
-
-    [ComImport]
-    [Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
-    private class MMDeviceEnumerator { }
 
     [ComImport]
     [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6")]

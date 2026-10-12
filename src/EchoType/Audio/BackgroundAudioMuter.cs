@@ -34,18 +34,14 @@ internal sealed class BackgroundAudioMuter {
             _held = true;
         }
 
-        List<PausedMedia> paused = [];
+        // Pausing and muting are independent: if muting fails, still remember
+        // what was paused so Restore() resumes it when listening ends.
+        List<PausedMedia> paused = PausePlaying();
         List<ISimpleAudioVolume> muted = [];
         try {
-            paused = PausePlaying();
             MuteAllRenderDevices(muted, paused);
         } catch (Exception ex) {
-            Log.Write("audio: silence others failed: " + ex.Message);
-            RestoreAll(paused, muted);
-            lock (_gate) {
-                _held = false;
-            }
-            return;
+            Log.Write("audio: mute others failed: " + ex.Message);
         }
 
         lock (_gate) {
@@ -134,14 +130,16 @@ internal sealed class BackgroundAudioMuter {
         foreach (var item in paused) {
             try {
                 var info = item.Session.GetPlaybackInfo();
-                if (info.PlaybackStatus != GlobalSystemMediaTransportControlsSessionPlaybackStatus.Paused) {
+                var status = info.PlaybackStatus;
+                if (status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing) {
                     continue;
                 }
                 var controls = info.Controls;
                 bool ok = false;
                 if (controls.IsPlayEnabled) {
                     ok = await item.Session.TryPlayAsync();
-                } else if (controls.IsPlayPauseToggleEnabled) {
+                } else if (controls.IsPlayPauseToggleEnabled
+                    && status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Paused) {
                     ok = await item.Session.TryTogglePlayPauseAsync();
                 }
                 Log.Write(ok
@@ -154,7 +152,7 @@ internal sealed class BackgroundAudioMuter {
     }
 
     private static void MuteAllRenderDevices(List<ISimpleAudioVolume> muted, List<PausedMedia> paused) {
-        var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+        var enumerator = (IMMDeviceEnumerator)CoreAudio.CreateDeviceEnumerator();
         try {
             MuteDefaultEndpoint(enumerator, RoleMultimedia, muted, paused);
             MuteDefaultEndpoint(enumerator, RoleCommunications, muted, paused);
@@ -336,10 +334,6 @@ internal sealed class BackgroundAudioMuter {
     }
 
     // ---- Core Audio COM ----
-
-    [ComImport]
-    [Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
-    private class MMDeviceEnumerator { }
 
     [ComImport]
     [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6")]

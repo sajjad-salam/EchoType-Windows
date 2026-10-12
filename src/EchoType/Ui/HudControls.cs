@@ -19,24 +19,38 @@ internal sealed class HudCard : Panel {
         }
     }
 
+    /// <summary>Hairlines in the gaps between stacked rows.</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool Dividers { get; set; } = true;
+
     public HudCard() {
         SetStyle(ControlStyles.AllPaintingInWmPaint
             | ControlStyles.OptimizedDoubleBuffer
             | ControlStyles.ResizeRedraw
             | ControlStyles.UserPaint, true);
         BackColor = Color.Transparent;
-        Padding = new Padding(28, 26, 28, 24);
     }
 
     protected override void OnPaint(PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
         e.Graphics.Clear(HudTheme.Window);
-        int shadow = HudTheme.Dip(this, 7);
-        int radius = HudTheme.Dip(this, HudTheme.PillRadiusDip);
-        var pill = Rectangle.Inflate(ClientRectangle, -shadow, -shadow);
+        int radius = HudTheme.Dip(this, 14);
+        var pill = new Rectangle(0, 0, Width - 1, Height - 1);
         if (pill.Width >= 8 && pill.Height >= 8) {
-            HudTheme.DrawShadow(e.Graphics, pill, radius);
             HudTheme.DrawCard(e.Graphics, pill, radius);
+            if (Dividers) {
+                using var line = new SolidBrush(HudTheme.Divider);
+                Control? previous = null;
+                foreach (Control child in Controls) {
+                    if (!child.Visible) {
+                        continue;
+                    }
+                    if (previous != null && child.Top > previous.Bottom) {
+                        e.Graphics.FillRectangle(line, child.Left, previous.Bottom, child.Width, child.Top - previous.Bottom);
+                    }
+                    previous = child;
+                }
+            }
             if (_accent is { } accent) {
                 if (Loc.Rtl) {
                     // Stripe on the leading (right) edge for Arabic.
@@ -204,6 +218,9 @@ internal sealed class HudToggleRow : Control {
     public event EventHandler? CheckedChanged;
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string? Description { get; set; }
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public bool Checked {
         get => _checked;
         set => SetChecked(value, notify: true);
@@ -301,8 +318,7 @@ internal sealed class HudToggleRow : Control {
         // Arabic: label on the right, switch on the left, "on" toward the left.
         track = Loc.Mirror(track, Width);
         label = Loc.Mirror(label, Width);
-        TextRenderer.DrawText(e.Graphics, Text, Font, label, HudTheme.Body,
-            Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
+        HudTheme.DrawRowText(e.Graphics, label, Text, Description);
 
         Color off = HudTheme.Track;
         Color on = Color.FromArgb(255, 28, 78, 72);
@@ -615,13 +631,9 @@ internal sealed class HudHotkeyRow : Control {
         var label = Loc.Rtl
             ? new Rectangle(chip.Right + gap, 0, Math.Max(0, Width - chip.Right - gap), Height)
             : new Rectangle(0, 0, Math.Max(0, chip.Left - gap), Height);
-        TextRenderer.DrawText(e.Graphics, Title, HudTheme.BodyBold,
-            new Rectangle(label.X, label.Y + HudTheme.Dip(this, 8), label.Width, HudTheme.Dip(this, 20)),
-            HudTheme.Title, Loc.Flags(TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
-        TextRenderer.DrawText(e.Graphics,
-            Loc.T(_capturing ? (MultiKey ? "Press up to 3 keys…" : "Press a key…") : "Click to change"), HudTheme.Tiny,
-            new Rectangle(label.X, label.Y + HudTheme.Dip(this, 28), label.Width, HudTheme.Dip(this, 18)),
-            HudTheme.Muted, Loc.Flags(TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
+        HudTheme.DrawRowText(e.Graphics, label, Title,
+            Loc.T(_capturing ? (MultiKey ? "Press up to 3 keys…" : "Press a key…") : "Click to change"),
+            _capturing ? HudTheme.Teal : null);
 
         Color fill = _capturing
             ? Color.FromArgb(40, HudTheme.Teal)
@@ -777,5 +789,201 @@ internal sealed class HudCommandList : Control {
                 Loc.Mirror(new Rectangle(Width / 2, y, Width / 2, row), Width), HudTheme.Muted,
                 Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.Right | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
         }
+    }
+}
+
+/// <summary>
+/// A settings row: title and optional description on the leading side, one control
+/// (segmented, button, combo box) on the trailing side.
+/// </summary>
+internal sealed class HudSettingRow : Control {
+
+    private Control? _trailing;
+    private int _trailingWidthDip;
+    private int _trailingHeightDip;
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string Title { get; set; } = "";
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string? Description { get; set; }
+
+    public HudSettingRow() {
+        SetStyle(ControlStyles.AllPaintingInWmPaint
+            | ControlStyles.OptimizedDoubleBuffer
+            | ControlStyles.ResizeRedraw
+            | ControlStyles.UserPaint, true);
+        Height = 56;
+    }
+
+    /// <summary>
+    /// Puts <paramref name="control"/> on the trailing side. A height of 0 keeps the
+    /// control's own height (combo boxes size themselves to their font).
+    /// </summary>
+    public void SetTrailing(Control control, int widthDip, int heightDip = 36) {
+        _trailing = control;
+        _trailingWidthDip = widthDip;
+        _trailingHeightDip = heightDip;
+        Controls.Add(control);
+        PerformLayout();
+    }
+
+    private int TrailingWidth() =>
+        _trailing == null ? 0 : Math.Min(HudTheme.Dip(this, _trailingWidthDip), Width * 3 / 5);
+
+    protected override void OnLayout(LayoutEventArgs levent) {
+        base.OnLayout(levent);
+        if (_trailing == null) {
+            return;
+        }
+        int w = TrailingWidth();
+        int h = _trailingHeightDip > 0 ? HudTheme.Dip(this, _trailingHeightDip) : _trailing.Height;
+        _trailing.Bounds = Loc.Mirror(new Rectangle(Width - w, (Height - h) / 2, w, h), Width);
+    }
+
+    protected override void OnPaint(PaintEventArgs e) {
+        HudTheme.Prepare(e.Graphics);
+        e.Graphics.Clear(HudTheme.Card);
+        int w = TrailingWidth();
+        int gap = w > 0 ? HudTheme.Dip(this, 16) : 0;
+        var label = Loc.Mirror(new Rectangle(0, 0, Math.Max(0, Width - w - gap), Height), Width);
+        HudTheme.DrawRowText(e.Graphics, label, Title, Description);
+    }
+}
+
+/// <summary>Small heading above a group of cards.</summary>
+internal sealed class HudSectionLabel : Control {
+
+    public HudSectionLabel() {
+        SetStyle(ControlStyles.AllPaintingInWmPaint
+            | ControlStyles.OptimizedDoubleBuffer
+            | ControlStyles.ResizeRedraw
+            | ControlStyles.UserPaint, true);
+        Height = 30;
+    }
+
+    protected override void OnPaint(PaintEventArgs e) {
+        HudTheme.Prepare(e.Graphics);
+        e.Graphics.Clear(HudTheme.Window);
+        var text = new Rectangle(HudTheme.Dip(this, 4), 0, Math.Max(0, Width - HudTheme.Dip(this, 8)), Height - HudTheme.Dip(this, 8));
+        TextRenderer.DrawText(e.Graphics, Text, HudTheme.SmallBold, Loc.Mirror(text, Width), HudTheme.Title,
+            Loc.Flags(TextFormatFlags.Bottom | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix));
+    }
+}
+
+/// <summary>One page link in the main window's sidebar: an icon glyph and a label.</summary>
+internal sealed class HudNavItem : Control {
+
+    private readonly System.Windows.Forms.Timer _tick;
+    private bool _selected;
+    private float _hover;
+    private float _hoverTo;
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string Glyph { get; set; } = "";
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool Selected {
+        get => _selected;
+        set {
+            _selected = value;
+            Invalidate();
+        }
+    }
+
+    public HudNavItem() {
+        SetStyle(ControlStyles.AllPaintingInWmPaint
+            | ControlStyles.OptimizedDoubleBuffer
+            | ControlStyles.ResizeRedraw
+            | ControlStyles.Selectable
+            | ControlStyles.UserPaint, true);
+        TabStop = true;
+        Cursor = Cursors.Hand;
+        Height = 40;
+        _tick = new System.Windows.Forms.Timer { Interval = 16 };
+        _tick.Tick += (_, _) => {
+            float next = HudTheme.Lerp(_hover, _hoverTo, 0.3f);
+            if (Math.Abs(next - _hoverTo) < 0.01f) {
+                next = _hoverTo;
+                _tick.Stop();
+            }
+            _hover = next;
+            Invalidate();
+        };
+    }
+
+    protected override void Dispose(bool disposing) {
+        if (disposing) {
+            _tick.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+
+    protected override void OnMouseEnter(EventArgs e) {
+        base.OnMouseEnter(e);
+        _hoverTo = 1;
+        _tick.Start();
+    }
+
+    protected override void OnMouseLeave(EventArgs e) {
+        base.OnMouseLeave(e);
+        _hoverTo = 0;
+        _tick.Start();
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e) {
+        if (e.KeyCode is Keys.Enter or Keys.Space) {
+            OnClick(EventArgs.Empty);
+            e.Handled = true;
+        }
+        base.OnKeyDown(e);
+    }
+
+    protected override void OnGotFocus(EventArgs e) {
+        base.OnGotFocus(e);
+        Invalidate();
+    }
+
+    protected override void OnLostFocus(EventArgs e) {
+        base.OnLostFocus(e);
+        Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e) {
+        HudTheme.Prepare(e.Graphics);
+        e.Graphics.Clear(Parent?.BackColor ?? HudTheme.Sidebar);
+        var rect = new Rectangle(0, 0, Width - 1, Height - 1);
+        int radius = HudTheme.Dip(this, 9);
+        int alpha = _selected ? 20 : (int)(11 * _hover);
+        if (alpha > 0) {
+            using var path = HudTheme.Rounded(rect, radius);
+            using var fill = new SolidBrush(Color.FromArgb(alpha, 255, 255, 255));
+            e.Graphics.FillPath(fill, path);
+        }
+        if (_selected) {
+            int barH = HudTheme.Dip(this, 18);
+            var bar = Loc.Mirror(new RectangleF(0, (Height - barH) / 2f, HudTheme.DipF(this, 3), barH), Width);
+            using var path = HudTheme.Rounded(bar, HudTheme.DipF(this, 1.5f));
+            using var fill = new SolidBrush(HudTheme.Teal);
+            e.Graphics.FillPath(fill, path);
+        }
+        if (Focused && ShowFocusCues && !_selected) {
+            using var path = HudTheme.Rounded(Rectangle.Inflate(rect, -1, -1), radius);
+            using var pen = new Pen(Color.FromArgb(120, HudTheme.Teal), 1.5f);
+            e.Graphics.DrawPath(pen, path);
+        }
+
+        int textLeft = HudTheme.Dip(this, 16);
+        if (HudTheme.Icons is { } icons && Glyph.Length > 0) {
+            var icon = new Rectangle(HudTheme.Dip(this, 14), 0, HudTheme.Dip(this, 22), Height);
+            Color iconColor = _selected ? HudTheme.Teal : HudTheme.Lerp(HudTheme.Muted, HudTheme.Body, _hover);
+            TextRenderer.DrawText(e.Graphics, Glyph, icons, Loc.Mirror(icon, Width), iconColor,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            textLeft = HudTheme.Dip(this, 46);
+        }
+        var label = new Rectangle(textLeft, 0, Math.Max(0, Width - textLeft - HudTheme.Dip(this, 8)), Height);
+        Color textColor = _selected ? HudTheme.Body : HudTheme.Lerp(HudTheme.Muted, HudTheme.Body, _hover);
+        TextRenderer.DrawText(e.Graphics, Text, _selected ? HudTheme.BodyBold : HudTheme.BodyText, Loc.Mirror(label, Width), textColor,
+            Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix));
     }
 }

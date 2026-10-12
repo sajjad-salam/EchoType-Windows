@@ -62,219 +62,207 @@ internal interface IAppWindowHost {
 }
 
 /// <summary>
-/// Main EchoType window — the same dark pill language as the HUD, with every
-/// setting that used to live only in the tray.
+/// Main EchoType window — the same dark language as the HUD, with every setting that
+/// used to live only in the tray. A sidebar switches between short pages so each group
+/// of settings fits without scrolling.
 /// </summary>
 internal sealed class AppWindow : Form {
 
+    private const int SidebarWidthDip = 224;
+    private const int HeaderHeightDip = 92;
+    private const int NavTopDip = 92;
+    private const int PagePadDip = 28;
+
+    // Segoe Fluent Icons / MDL2 Assets code points.
+    private const string GlyphHome = "";
+    private const string GlyphChat = "";
+    private const string GlyphGlobe = "";
+    private const string GlyphKeyboard = "";
+    private const string GlyphCommand = "";
+    private const string GlyphSettings = "";
+
+    private static int _lastPage;
+
     private readonly IAppWindowHost _host;
-    private readonly Panel _caption;
+    private readonly Panel _sidebar;
+    private readonly Panel _header;
     private readonly Panel _scrollHost;
-    private readonly FlowLayoutPanel _flow;
     private readonly HudCaptionButton _min;
     private readonly HudCaptionButton _close;
+    private readonly List<Page> _pages = [];
+    private readonly Dictionary<Control, int> _rowHeights = [];
     private readonly HudCard _statusCard;
+    private readonly HudButton _loginButton;
     private readonly HudSegmented _modelSeg;
     private readonly HudSegmented _modeSeg;
-    private readonly HudButton _loginButton;
     private readonly HudHotkeyRow _dictationKey;
+    private readonly HudToggleRow _cleanToggle;
+    private readonly HudSegmented _cleanSeg;
+    private readonly HudHotkeyRow _cleanKey;
+    private readonly HudButton _cleanWindowButton;
+    private readonly HudSegmented _askSeg;
     private readonly HudHotkeyRow _askModelKey;
+    private readonly HudToggleRow _askPopupToggle;
+    private readonly HudButton _askWindowButton;
     private readonly HudHotkeyRow _translateKey;
     private readonly ComboBox _translateLanguage;
+    private readonly HudSettingRow _openAiRow;
+    private readonly HudButton _openAiButton;
     private readonly HudHotkeyRow _chatgptKey;
     private readonly HudHotkeyRow _geminiKey;
     private readonly HudHotkeyRow _claudeKey;
     private readonly HudHotkeyRow _enterKey;
     private readonly HudHotkeyRow _windowKey;
+    private readonly HudCommandList _commands;
     private readonly HudToggleRow _muteToggle;
-    private readonly HudToggleRow _cleanToggle;
-    private readonly HudSegmented _cleanSeg;
-    private readonly HudButton _cleanWindowButton;
-    private readonly HudButton _cleanPromptButton;
-    private readonly HudHotkeyRow _cleanKey;
-    private readonly HudSegmented _askSeg;
-    private readonly HudButton _askWindowButton;
     private readonly HudToggleRow _enterToggle;
     private readonly HudToggleRow _clipboardToggle;
     private readonly HudToggleRow _startupToggle;
-    private readonly HudToggleRow _askPopupToggle;
     private readonly HudSegmented _languageSeg;
+    private readonly string _version;
     private readonly float[] _spectrum = new float[24];
-    private readonly HudCommandList _commands;
-    private readonly HudButton _editCommands;
-    private readonly HudButton _openLog;
-    private readonly HudButton _quit;
     private readonly System.Windows.Forms.Timer _tick;
     private readonly System.Windows.Forms.Timer _intro;
     private readonly float[] _bars = new float[24];
 
     private HudHotkeyRow? _capturing;
+    private int _page;
     private float _time;
     private float _smoothed;
     private float _introProgress;
     private bool _syncing;
+    private bool _layingOut;
     private bool _trayHintShown;
     private int _dragX;
     private int _dragY;
     private bool _dragging;
 
+    private sealed class Page {
+        public required HudNavItem Nav { get; init; }
+        public required Panel Body { get; init; }
+        public required string Title { get; init; }
+        public required string Subtitle { get; init; }
+        public List<Control> Blocks { get; } = [];
+    }
+
     public AppWindow(IAppWindowHost host) {
         _host = host;
+        _version = typeof(AppWindow).Assembly.GetName().Version?.ToString(3) ?? "";
 
         Text = "EchoType";
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
         ShowInTaskbar = true;
-        MinimumSize = new Size(480, 560);
-        Size = new Size(540, 760);
+        MinimumSize = new Size(760, 520);
+        Size = new Size(920, 680);
         BackColor = HudTheme.Window;
         ForeColor = HudTheme.Body;
         DoubleBuffered = true;
         KeyPreview = true;
         Font = HudTheme.BodyText;
 
-        _caption = new Panel {
-            Dock = DockStyle.Top,
-            Height = HudTheme.CaptionHeightDip,
-            BackColor = HudTheme.Window,
+        _sidebar = new Panel {
+            Dock = Loc.Rtl ? DockStyle.Right : DockStyle.Left,
+            Width = SidebarWidthDip,
+            BackColor = HudTheme.Sidebar,
+            TabIndex = 0,
         };
-        _caption.Paint += OnCaptionPaint;
-        _caption.MouseDown += OnCaptionMouseDown;
-        _caption.MouseMove += OnCaptionMouseMove;
-        _caption.MouseUp += (_, _) => _dragging = false;
+        _sidebar.Paint += OnSidebarPaint;
+        HookDrag(_sidebar);
 
-        _close = new HudCaptionButton { Icon = HudCaptionButton.Glyph.Close, Anchor = AnchorStyles.Top | AnchorStyles.Right };
-        _min = new HudCaptionButton { Icon = HudCaptionButton.Glyph.Minimize, Anchor = AnchorStyles.Top | AnchorStyles.Right };
+        _header = new Panel {
+            Dock = DockStyle.Top,
+            Height = HeaderHeightDip,
+            BackColor = HudTheme.Window,
+            TabIndex = 2,
+        };
+        _header.Paint += OnHeaderPaint;
+        HookDrag(_header);
+
+        _close = new HudCaptionButton { Icon = HudCaptionButton.Glyph.Close };
+        _min = new HudCaptionButton { Icon = HudCaptionButton.Glyph.Minimize };
         _close.Click += (_, _) => Close();
         _min.Click += (_, _) => WindowState = FormWindowState.Minimized;
-        _caption.Controls.Add(_close);
-        _caption.Controls.Add(_min);
-
-        _flow = new FlowLayoutPanel {
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-            BackColor = HudTheme.Window,
-            Padding = new Padding(10, 6, 10, 18),
-            Location = Point.Empty,
-        };
+        _header.Controls.Add(_close);
+        _header.Controls.Add(_min);
 
         _scrollHost = new Panel {
             Dock = DockStyle.Fill,
             AutoScroll = true,
             BackColor = HudTheme.Window,
+            TabIndex = 1,
         };
-        _scrollHost.Controls.Add(_flow);
-        _scrollHost.Resize += (_, _) => Relayout();
+        _scrollHost.ClientSizeChanged += (_, _) => Relayout();
 
-        _statusCard = MakeCard();
-        _statusCard.Height = 168;
+        // ── Home ──────────────────────────────────────────────
+        var home = AddPage(GlyphHome, Loc.T("Home"), Loc.T("Status, model and how you dictate."));
+        _statusCard = AddCard(home);
+        _statusCard.Dividers = false;
         _statusCard.Paint += OnStatusCardPaint;
-
         _loginButton = MakeButton(Loc.T("Open window"), HudButton.Kind.Primary);
         _loginButton.Click += (_, _) => _host.ToggleLoginWindow();
-        PlaceOnCard(_statusCard, _loginButton, 18);
+        _statusCard.Controls.Add(_loginButton);
 
-        var modelCard = MakeCard();
-        AddCaption(modelCard, Loc.T("Transcription model"));
-        _modelSeg = new HudSegmented { Items = ["ChatGPT", "Gemini", "Claude"] };
-        _modelSeg.SelectedIndexChanged += (_, _) => {
-            if (_syncing) {
-                return;
-            }
-            _host.SelectModel(_modelSeg.SelectedIndex switch {
-                1 => TranscriptionProvider.Gemini,
-                2 => TranscriptionProvider.Claude,
-                _ => TranscriptionProvider.ChatGpt,
-            });
-        };
-        AddControl(modelCard, _modelSeg, 40);
-        _chatgptKey = AddHotkey(modelCard, Loc.T("Switch to ChatGPT"), AppShortcut.ChatGpt);
-        _geminiKey = AddHotkey(modelCard, Loc.T("Switch to Gemini"), AppShortcut.Gemini);
-        _claudeKey = AddHotkey(modelCard, Loc.T("Switch to Claude (live transcript)"), AppShortcut.Claude);
-        FinishCard(modelCard);
-
-        var cleanCard = MakeCard();
-        AddCaption(cleanCard, Loc.T("Auto Clean (cleaning model)"));
-        _cleanToggle = AddToggle(cleanCard, Loc.T("Auto Clean dictation"),
-            toggle => _host.SetAutoClean(toggle.Checked));
-        _cleanKey = AddHotkey(cleanCard, Loc.T("Auto Clean on/off shortcut"), AppShortcut.AutoClean);
-        _cleanSeg = new HudSegmented { Items = ["ChatGPT", "Gemini", "Claude"] };
-        _cleanSeg.SelectedIndexChanged += (_, _) => {
-            if (_syncing) {
-                return;
-            }
-            _host.SetCleanModel(_cleanSeg.SelectedIndex switch {
-                1 => TranscriptionProvider.Gemini,
-                2 => TranscriptionProvider.Claude,
-                _ => TranscriptionProvider.ChatGpt,
-            });
-        };
-        AddControl(cleanCard, _cleanSeg, 40);
-        _cleanWindowButton = MakeButton(Loc.T("Open cleaning window"), HudButton.Kind.Ghost);
-        _cleanWindowButton.Click += (_, _) => _host.ToggleCleanWindow();
-        AddControl(cleanCard, _cleanWindowButton, 44);
-        _cleanPromptButton = MakeButton(Loc.T("Edit cleaning prompt…"), HudButton.Kind.Ghost);
-        _cleanPromptButton.Click += (_, _) => _host.EditCleanPrompt();
-        AddControl(cleanCard, _cleanPromptButton, 44);
-        FinishCard(cleanCard);
-
-        var askCard = MakeCard();
-        AddCaption(askCard, Loc.T("Ask model (answers the Ask shortcut)"));
-        _askSeg = new HudSegmented { Items = ["ChatGPT", "Gemini", "Claude"] };
-        _askSeg.SelectedIndexChanged += (_, _) => {
-            if (_syncing) {
-                return;
-            }
-            _host.SetAskModel(_askSeg.SelectedIndex switch {
-                1 => TranscriptionProvider.Gemini,
-                2 => TranscriptionProvider.Claude,
-                _ => TranscriptionProvider.ChatGpt,
-            });
-        };
-        AddControl(askCard, _askSeg, 40);
-        _askWindowButton = MakeButton(Loc.T("Open Ask model window…"), HudButton.Kind.Ghost);
-        _askWindowButton.Click += (_, _) => _host.ToggleAskWindow();
-        AddControl(askCard, _askWindowButton, 44);
-        FinishCard(askCard);
-
-        var wordsCard = MakeCard();
-        AddCaption(wordsCard, Loc.T("Word replacements (dialect)"));
-        var wordsButton = MakeButton(Loc.T("Edit word replacements…"), HudButton.Kind.Ghost);
-        wordsButton.Click += (_, _) => _host.EditWordReplacements();
-        AddControl(wordsCard, wordsButton, 44);
-        FinishCard(wordsCard);
-
-        var modesCard = MakeCard();
-        AddCaption(modesCard, Loc.T("Workspace modes (voice → shortcut)"));
-        var modesButton = MakeButton(Loc.T("Edit workspace modes…"), HudButton.Kind.Ghost);
-        modesButton.Click += (_, _) => _host.EditWorkspaceModes();
-        AddControl(modesCard, modesButton, 44);
-        FinishCard(modesCard);
-
-        var recordCard = MakeCard();
-        AddCaption(recordCard, Loc.T("Recording"));
+        AddSection(home, Loc.T("Dictation"));
+        var dictation = AddCard(home);
+        _modelSeg = ModelSegmented(provider => _host.SelectModel(provider));
+        AddRow(dictation, Loc.T("Transcription model"), Loc.T("Turns your speech into text."), _modelSeg, 300);
         _modeSeg = new HudSegmented { Items = [Loc.T("Hold to talk"), Loc.T("Press to start/stop")] };
         _modeSeg.SelectedIndexChanged += (_, _) => {
-            if (_syncing) {
-                return;
+            if (!_syncing) {
+                _host.SetToggleRecording(_modeSeg.SelectedIndex == 1);
             }
-            _host.SetToggleRecording(_modeSeg.SelectedIndex == 1);
         };
-        AddControl(recordCard, _modeSeg, 40);
-        _dictationKey = AddHotkey(recordCard, Loc.T("Dictation key"), AppShortcut.Dictation, optional: false);
-        _askModelKey = AddHotkey(recordCard, Loc.T("Ask model"), AppShortcut.AskModel);
-        _translateKey = AddHotkey(recordCard, Loc.T("Translate"), AppShortcut.Translate);
+        AddRow(dictation, Loc.T("Recording mode"), null, _modeSeg, 300);
+        _dictationKey = AddHotkey(dictation, Loc.T("Dictation key"), AppShortcut.Dictation, optional: false);
+
+        // ── Clean & Ask ───────────────────────────────────────
+        var ai = AddPage(GlyphChat, Loc.T("Clean & Ask"), Loc.T("Models that tidy your dictation and answer your questions."));
+        AddSection(ai, Loc.T("Auto Clean"));
+        var clean = AddCard(ai);
+        _cleanToggle = AddToggle(clean, Loc.T("Auto Clean dictation"),
+            Loc.T("A second model tidies each transcript before it is pasted."),
+            toggle => _host.SetAutoClean(toggle.Checked));
+        _cleanSeg = ModelSegmented(provider => _host.SetCleanModel(provider));
+        AddRow(clean, Loc.T("Cleaning model"), Loc.T("Also runs your custom commands."), _cleanSeg, 300);
+        _cleanKey = AddHotkey(clean, Loc.T("Auto Clean on/off shortcut"), AppShortcut.AutoClean);
+        var cleanPrompt = MakeButton(Loc.T("Edit…"), HudButton.Kind.Ghost);
+        cleanPrompt.Click += (_, _) => _host.EditCleanPrompt();
+        AddRow(clean, Loc.T("Cleaning prompt"), Loc.T("The instructions sent with each transcript."), cleanPrompt, 200);
+        _cleanWindowButton = MakeButton(Loc.T("Open window"), HudButton.Kind.Ghost);
+        _cleanWindowButton.Click += (_, _) => _host.ToggleCleanWindow();
+        AddRow(clean, Loc.T("Model window"), Loc.T("Sign in, or watch the cleaning model work."), _cleanWindowButton, 200);
+
+        AddSection(ai, Loc.T("Ask model"));
+        var ask = AddCard(ai);
+        _askSeg = ModelSegmented(provider => _host.SetAskModel(provider));
+        AddRow(ask, Loc.T("Ask model"), Loc.T("Answers what you say with the Ask shortcut."), _askSeg, 300);
+        _askModelKey = AddHotkey(ask, Loc.T("Ask model shortcut"), AppShortcut.AskModel);
+        _askPopupToggle = AddToggle(ask, Loc.T("Show Ask model replies in a popup"),
+            Loc.T("When off, the reply is pasted into the field you started in."),
+            toggle => _host.SetShowAskReplyWindow(toggle.Checked));
+        _askWindowButton = MakeButton(Loc.T("Open window"), HudButton.Kind.Ghost);
+        _askWindowButton.Click += (_, _) => _host.ToggleAskWindow();
+        AddRow(ask, Loc.T("Model window"), Loc.T("Sign in, or continue the conversation."), _askWindowButton, 200);
+
+        // ── Translate ─────────────────────────────────────────
+        var translate = AddPage(GlyphGlobe, Loc.T("Translate"), Loc.T("Speak in one language, paste in another."));
+        var translateCard = AddCard(translate);
+        _translateKey = AddHotkey(translateCard, Loc.T("Translate shortcut"), AppShortcut.Translate);
         _translateKey.MultiKey = true;
         _translateLanguage = new ComboBox {
             DropDownStyle = ComboBoxStyle.DropDownList,
-            FlatStyle = FlatStyle.Flat,
+            FlatStyle = FlatStyle.Standard,
+            MaxDropDownItems = 12,
+            DrawMode = DrawMode.OwnerDrawFixed,
+            ItemHeight = 28,
+            BackColor = HudTheme.Track,
             ForeColor = HudTheme.Body,
-            Font = Font,
+            Font = HudTheme.BodyText,
             RightToLeft = Loc.Rtl ? RightToLeft.Yes : RightToLeft.No,
         };
+        _translateLanguage.DrawItem += OnLanguageDrawItem;
         foreach (var (code, name) in GoogleTranslation.Languages) {
             _translateLanguage.Items.Add(new LanguageItem(code, name));
         }
@@ -283,29 +271,57 @@ internal sealed class AppWindow : Form {
                 _host.SetTranslateLanguage(item.Code);
             }
         };
-        AddControl(recordCard, _translateLanguage, 32);
-        var openAiKey = MakeButton(Loc.T("OpenAI API key…"), HudButton.Kind.Ghost);
-        openAiKey.Click += (_, _) => _host.EditOpenAiKey();
-        AddControl(recordCard, openAiKey, 44);
-        FinishCard(recordCard);
+        AddRow(translateCard, Loc.T("Translate to"), null, _translateLanguage, 220, heightDip: 0);
+        _openAiButton = MakeButton(Loc.T("Add key…"), HudButton.Kind.Ghost);
+        _openAiButton.Click += (_, _) => _host.EditOpenAiKey();
+        _openAiRow = AddRow(translateCard, Loc.T("OpenAI API key"), null, _openAiButton, 200);
 
-        var optionsCard = MakeCard();
-        AddCaption(optionsCard, Loc.T("Options"));
-        _muteToggle = AddToggle(optionsCard, Loc.T("Pause or mute other apps while dictating"),
+        // ── Shortcuts ─────────────────────────────────────────
+        var shortcuts = AddPage(GlyphKeyboard, Loc.T("Shortcuts"), Loc.T("Keys that switch models and open windows."));
+        AddSection(shortcuts, Loc.T("Switch model"));
+        var switchCard = AddCard(shortcuts);
+        _chatgptKey = AddHotkey(switchCard, Loc.T("Switch to ChatGPT"), AppShortcut.ChatGpt);
+        _geminiKey = AddHotkey(switchCard, Loc.T("Switch to Gemini"), AppShortcut.Gemini);
+        _claudeKey = AddHotkey(switchCard, Loc.T("Switch to Claude (live transcript)"), AppShortcut.Claude);
+        AddSection(shortcuts, Loc.T("Other shortcuts"));
+        var otherKeys = AddCard(shortcuts);
+        _windowKey = AddHotkey(otherKeys, Loc.T("Open model window"), AppShortcut.ModelWindow);
+        _enterKey = AddHotkey(otherKeys, Loc.T("Auto Enter shortcut"), AppShortcut.PressEnter);
+
+        // ── Commands ──────────────────────────────────────────
+        var commands = AddPage(GlyphCommand, Loc.T("Commands"), Loc.T("Custom commands, workspace modes and word replacements."));
+        AddSection(commands, Loc.T("Custom commands"));
+        var commandsCard = AddCard(commands);
+        var editCommands = MakeButton(Loc.T("Add or edit…"), HudButton.Kind.Ghost);
+        editCommands.Click += (_, _) => _host.OpenCommands();
+        AddRow(commandsCard, Loc.T("Custom commands"), Loc.T("Your own prompts, run on what you dictate."), editCommands, 200);
+        _commands = new HudCommandList { BackColor = HudTheme.Card };
+        commandsCard.Controls.Add(_commands);
+
+        AddSection(commands, Loc.T("Voice & text"));
+        var voiceCard = AddCard(commands);
+        var modesButton = MakeButton(Loc.T("Edit…"), HudButton.Kind.Ghost);
+        modesButton.Click += (_, _) => _host.EditWorkspaceModes();
+        AddRow(voiceCard, Loc.T("Workspace modes"), Loc.T("Say a word to press a shortcut."), modesButton, 200);
+        var wordsButton = MakeButton(Loc.T("Edit…"), HudButton.Kind.Ghost);
+        wordsButton.Click += (_, _) => _host.EditWordReplacements();
+        AddRow(voiceCard, Loc.T("Word replacements"), Loc.T("Fix dialect words in every transcript."), wordsButton, 200);
+
+        // ── Settings ──────────────────────────────────────────
+        var settings = AddPage(GlyphSettings, Loc.T("Settings"), Loc.T("General options, language and app controls."));
+        AddSection(settings, Loc.T("General"));
+        var general = AddCard(settings);
+        _muteToggle = AddToggle(general, Loc.T("Pause or mute other apps while dictating"), null,
             toggle => _host.SetMuteOthers(toggle.Checked));
-        _enterToggle = AddToggle(optionsCard, Loc.T("Press Enter after paste"),
+        _enterToggle = AddToggle(general, Loc.T("Press Enter after paste"), null,
             toggle => _host.SetPressEnterAfterPaste(toggle.Checked));
-        _enterKey = AddHotkey(optionsCard, Loc.T("Auto Enter shortcut"), AppShortcut.PressEnter);
-        _clipboardToggle = AddToggle(optionsCard, Loc.T("Keep transcript on clipboard"),
+        _clipboardToggle = AddToggle(general, Loc.T("Keep transcript on clipboard"), null,
             toggle => _host.SetKeepTranscriptOnClipboard(toggle.Checked));
-        _askPopupToggle = AddToggle(optionsCard, Loc.T("Show Ask model replies in a popup"),
-            toggle => _host.SetShowAskReplyWindow(toggle.Checked));
-        _startupToggle = AddToggle(optionsCard, Loc.T("Start EchoType with Windows"),
+        _startupToggle = AddToggle(general, Loc.T("Start EchoType with Windows"), null,
             toggle => _host.SetStartWithWindows(toggle.Checked));
-        FinishCard(optionsCard);
 
-        var languageCard = MakeCard();
-        AddCaption(languageCard, Loc.T("Language") + (Loc.Arabic ? "" : " · اللغة"));
+        AddSection(settings, Loc.T("Language") + (Loc.Arabic ? "" : " · اللغة"));
+        var languageCard = AddCard(settings);
         // Each name in its own language so it can be found whatever the current UI is.
         _languageSeg = new HudSegmented { Items = ["English", "العربية"] };
         _languageSeg.SelectedIndexChanged += (_, _) => {
@@ -313,42 +329,21 @@ internal sealed class AppWindow : Form {
                 _host.SetUiLanguage(_languageSeg.SelectedIndex == 1 ? Loc.ArabicCode : Loc.English);
             }
         };
-        AddControl(languageCard, _languageSeg, 40);
-        FinishCard(languageCard);
+        AddRow(languageCard, Loc.T("Interface language"), Loc.T("EchoType restarts to apply it."), _languageSeg, 240);
 
-        var commandsCard = MakeCard();
-        AddCaption(commandsCard, Loc.T("Custom commands"));
-        _commands = new HudCommandList();
-        AddControl(commandsCard, _commands, 48);
-        _editCommands = MakeButton(Loc.T("Add or edit…"), HudButton.Kind.Ghost);
-        _editCommands.Click += (_, _) => _host.OpenCommands();
-        AddControl(commandsCard, _editCommands, 38);
-        FinishCard(commandsCard);
+        AddSection(settings, Loc.T("App"));
+        var about = AddCard(settings);
+        var openLog = MakeButton(Loc.T("Open log"), HudButton.Kind.Ghost);
+        openLog.Click += (_, _) => _host.OpenLog();
+        AddRow(about, Loc.T("Diagnostics log"), Loc.T("Open the log when something goes wrong."), openLog, 160);
+        var quit = MakeButton(Loc.T("Quit"), HudButton.Kind.Danger);
+        quit.Click += (_, _) => _host.Quit();
+        AddRow(about, Loc.T("Quit EchoType"), Loc.T("Stops dictation and removes the tray icon."), quit, 160);
 
-        var moreCard = MakeCard();
-        AddCaption(moreCard, Loc.T("Model window"));
-        _windowKey = AddHotkey(moreCard, Loc.T("Open model window"), AppShortcut.ModelWindow);
-        var actions = new FlowLayoutPanel {
-            // Full card width for Arabic so the buttons can line up from the right.
-            AutoSize = !Loc.Rtl,
-            WrapContents = false,
-            BackColor = HudTheme.Card,
-            Margin = new Padding(0, 8, 0, 0),
-            FlowDirection = Loc.Rtl ? FlowDirection.RightToLeft : FlowDirection.LeftToRight,
-        };
-        _openLog = MakeButton(Loc.T("Open log"), HudButton.Kind.Ghost);
-        _openLog.Width = 120;
-        _openLog.Click += (_, _) => _host.OpenLog();
-        _quit = MakeButton(Loc.T("Quit EchoType"), HudButton.Kind.Danger);
-        _quit.Width = 140;
-        _quit.Click += (_, _) => _host.Quit();
-        actions.Controls.Add(_openLog);
-        actions.Controls.Add(_quit);
-        AddControl(moreCard, actions, 46);
-        FinishCard(moreCard);
-
+        // Dock order: the sidebar takes the full height, the header tops the rest.
         Controls.Add(_scrollHost);
-        Controls.Add(_caption);
+        Controls.Add(_header);
+        Controls.Add(_sidebar);
 
         _tick = new System.Windows.Forms.Timer { Interval = 16 };
         _tick.Tick += (_, _) => OnTick();
@@ -358,8 +353,8 @@ internal sealed class AppWindow : Form {
         host.UiChanged += OnHostChanged;
         Load += (_, _) => {
             HudTheme.ApplyChrome(this);
-            _caption.Height = HudTheme.Dip(this, HudTheme.CaptionHeightDip);
-            PlaceCaptionButtons();
+            ApplyChromeMetrics();
+            ShowPage(_lastPage);
             SyncFromHost();
             Opacity = 0;
             _intro.Start();
@@ -368,7 +363,7 @@ internal sealed class AppWindow : Form {
         Resize += (_, _) => {
             PlaceCaptionButtons();
             Relayout();
-            _caption.Invalidate();
+            _header.Invalidate();
         };
         Deactivate += (_, _) => StopCapture();
     }
@@ -384,8 +379,7 @@ internal sealed class AppWindow : Form {
 
     protected override void OnDpiChanged(DpiChangedEventArgs e) {
         base.OnDpiChanged(e);
-        _caption.Height = HudTheme.Dip(this, HudTheme.CaptionHeightDip);
-        PlaceCaptionButtons();
+        ApplyChromeMetrics();
         Relayout();
     }
 
@@ -417,6 +411,10 @@ internal sealed class AppWindow : Form {
     protected override void OnKeyDown(KeyEventArgs e) {
         if (e.KeyCode == Keys.Escape && _capturing != null) {
             StopCapture();
+            e.Handled = true;
+        } else if (e.Control && e.KeyCode == Keys.Tab && _capturing == null) {
+            // Ctrl+Tab / Ctrl+Shift+Tab step through the pages.
+            ShowPage((_page + (e.Shift ? _pages.Count - 1 : 1)) % _pages.Count);
             e.Handled = true;
         }
         base.OnKeyDown(e);
@@ -490,23 +488,11 @@ internal sealed class AppWindow : Form {
         _syncing = true;
         try {
             var s = _host.Settings;
-            _modelSeg.SetSilent(s.TranscriptionProvider switch {
-                TranscriptionProvider.Gemini => 1,
-                TranscriptionProvider.Claude => 2,
-                _ => 0,
-            });
+            _modelSeg.SetSilent(ProviderIndex(s.TranscriptionProvider));
             _cleanToggle.SetSilent(s.AutoClean);
-            _cleanSeg.SetSilent(s.CleanProvider switch {
-                TranscriptionProvider.Gemini => 1,
-                TranscriptionProvider.Claude => 2,
-                _ => 0,
-            });
+            _cleanSeg.SetSilent(ProviderIndex(s.CleanProvider));
             _cleanWindowButton.Text = Loc.F(_host.CleanWindowVisible ? "Close {0} window" : "Open {0} window", _host.CleanModelName);
-            _askSeg.SetSilent(s.AskProvider switch {
-                TranscriptionProvider.Gemini => 1,
-                TranscriptionProvider.Claude => 2,
-                _ => 0,
-            });
+            _askSeg.SetSilent(ProviderIndex(s.AskProvider));
             _askWindowButton.Text = Loc.F(_host.AskWindowVisible ? "Close {0} window" : "Open {0} window", _host.AskModelName);
             _modeSeg.SetSilent(s.ToggleRecording ? 1 : 0);
             _muteToggle.SetSilent(s.MuteOtherAppsWhileDictating);
@@ -521,21 +507,19 @@ internal sealed class AppWindow : Form {
                 _translateKey.Value = HotkeyNames.For(s.TranslateChord);
             }
             _translateLanguage.SelectedIndex = IndexOfLanguage(s.TranslateTargetLanguage);
+            bool hasKey = !string.IsNullOrWhiteSpace(s.OpenAiApiKey);
+            _openAiRow.Description = Loc.T(hasKey ? "Set — translating with OpenAI." : "Not set — translating with Google.");
+            _openAiButton.Text = Loc.T(hasKey ? "Change…" : "Add key…");
+            _openAiRow.Invalidate();
             _chatgptKey.Value = HotkeyLabel(s.ChatGptSwitchVk);
             _geminiKey.Value = HotkeyLabel(s.GeminiSwitchVk);
             _claudeKey.Value = HotkeyLabel(s.ClaudeSwitchVk);
             _enterKey.Value = HotkeyLabel(s.PressEnterToggleVk);
             _cleanKey.Value = HotkeyLabel(s.AutoCleanToggleVk);
             _windowKey.Value = HotkeyLabel(s.OpenModelWindowVk);
-            _dictationKey.Invalidate();
-            _askModelKey.Invalidate();
-            _translateKey.Invalidate();
-            _chatgptKey.Invalidate();
-            _geminiKey.Invalidate();
-            _claudeKey.Invalidate();
-            _enterKey.Invalidate();
-            _cleanKey.Invalidate();
-            _windowKey.Invalidate();
+            foreach (var row in new[] { _dictationKey, _askModelKey, _translateKey, _chatgptKey, _geminiKey, _claudeKey, _enterKey, _cleanKey, _windowKey }) {
+                row.Invalidate();
+            }
             _loginButton.Text = !_host.Online ? Loc.T("Retry connection")
                 : _host.LoginWindowVisible ? Loc.F("Close {0} window", _host.ModelName)
                 : _host.LoggedIn ? Loc.F("Open {0} window", _host.ModelName)
@@ -547,7 +531,7 @@ internal sealed class AppWindow : Form {
             Icon = TrayIcons.For(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
             _statusCard.Accent = HudTheme.PhaseAccent(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
             _statusCard.Invalidate();
-            _caption.Invalidate();
+            _sidebar.Invalidate();
             Relayout();
         } finally {
             _syncing = false;
@@ -566,11 +550,12 @@ internal sealed class AppWindow : Form {
                 HudTheme.StepWave(_bars, ref _smoothed, _host.MicLevel, _time);
             }
             _statusCard.Invalidate();
-            _caption.Invalidate();
+            _sidebar.Invalidate(new Rectangle(0, 0, _sidebar.Width, HudTheme.Dip(this, NavTopDip)));
         } else if (_smoothed > 0.01f) {
             _smoothed *= 0.86f;
             Array.Clear(_bars);
             _statusCard.Invalidate();
+            _sidebar.Invalidate(new Rectangle(0, 0, _sidebar.Width, HudTheme.Dip(this, NavTopDip)));
         }
     }
 
@@ -584,11 +569,14 @@ internal sealed class AppWindow : Form {
         }
     }
 
-    private void OnCaptionPaint(object? sender, PaintEventArgs e) {
+    // ── Painting ──────────────────────────────────────────────
+
+    private void OnSidebarPaint(object? sender, PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
-        e.Graphics.Clear(HudTheme.Window);
-        int pad = HudTheme.Dip(this, 22);
-        int cy = _caption.Height / 2;
+        e.Graphics.Clear(HudTheme.Sidebar);
+        int w = _sidebar.Width;
+
+        // Brand: a status dot that glows and pulses while listening, the name, the phase.
         Color accent = HudTheme.PhaseAccent(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
         float pulse = _host.Phase == AppPhase.Listening
             ? 0.55f + 0.45f * MathF.Sin(_time * 5.5f)
@@ -596,66 +584,99 @@ internal sealed class AppWindow : Form {
         float glow = HudTheme.DipF(this, 7)
             + HudTheme.DipF(this, 3) * (pulse - 0.55f)
             + HudTheme.DipF(this, 4) * _smoothed * pulse;
-        int w = _caption.Width;
-        int cx = pad + HudTheme.Dip(this, 6);
+        float cx = HudTheme.DipF(this, 34);
+        float cy = HudTheme.DipF(this, 40);
         if (Loc.Rtl) {
             cx = w - cx;
         }
         using (var glowBrush = new SolidBrush(Color.FromArgb((int)(36 + 40 * _smoothed), accent))) {
-            e.Graphics.FillEllipse(glowBrush, cx - glow, cy - glow - 6, glow * 2, glow * 2);
+            e.Graphics.FillEllipse(glowBrush, cx - glow, cy - glow, glow * 2, glow * 2);
         }
         using (var dot = new SolidBrush(accent)) {
             float d = HudTheme.DipF(this, 4.5f);
-            e.Graphics.FillEllipse(dot, cx - d, cy - d - 6, d * 2, d * 2);
+            e.Graphics.FillEllipse(dot, cx - d, cy - d, d * 2, d * 2);
         }
-
-        // Caption buttons sit on the left for Arabic (PlaceCaptionButtons), so measure
-        // the free space from whichever side they are on.
-        int textLeft = pad + HudTheme.Dip(this, 22);
-        int buttonsEdge = Loc.Rtl ? w - _min.Right : _min.Left;
-        int textRight = Math.Max(textLeft + 40, buttonsEdge - HudTheme.Dip(this, 8));
+        int textLeft = HudTheme.Dip(this, 54);
+        int textWidth = Math.Max(0, w - textLeft - HudTheme.Dip(this, 16));
+        const TextFormatFlags flags = TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
         TextRenderer.DrawText(e.Graphics, "EchoType", HudTheme.Caption,
-            Loc.Mirror(new Rectangle(textLeft, HudTheme.Dip(this, 10), textRight - textLeft, HudTheme.Dip(this, 24)), w),
-            HudTheme.Body, Loc.Flags(TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
-        TextRenderer.DrawText(e.Graphics, _host.StatusText, HudTheme.Small,
-            Loc.Mirror(new Rectangle(textLeft, HudTheme.Dip(this, 34), textRight - textLeft, HudTheme.Dip(this, 20)), w),
-            HudTheme.Muted, Loc.Flags(TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
+            Loc.Mirror(new Rectangle(textLeft, HudTheme.Dip(this, 22), textWidth, HudTheme.Dip(this, 24)), w),
+            HudTheme.Body, Loc.Flags(flags));
+        TextRenderer.DrawText(e.Graphics, HudTheme.PhaseLabel(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady),
+            HudTheme.Tiny,
+            Loc.Mirror(new Rectangle(textLeft, HudTheme.Dip(this, 46), textWidth, HudTheme.Dip(this, 18)), w),
+            accent, Loc.Flags(flags));
 
-        using var hair = new Pen(HudTheme.Border, 1f);
-        e.Graphics.DrawLine(hair, 0, _caption.Height - 1, _caption.Width, _caption.Height - 1);
+        TextRenderer.DrawText(e.Graphics, Loc.F("Version {0}", _version), HudTheme.Tiny,
+            Loc.Mirror(new Rectangle(HudTheme.Dip(this, 26), _sidebar.Height - HudTheme.Dip(this, 36), textWidth, HudTheme.Dip(this, 18)), w),
+            HudTheme.Muted, Loc.Flags(flags));
+
+        // Hairline between the sidebar and the page.
+        using var line = new SolidBrush(HudTheme.Divider);
+        e.Graphics.FillRectangle(line, Loc.Rtl ? 0 : w - 1, 0, 1, _sidebar.Height);
+    }
+
+    private void OnHeaderPaint(object? sender, PaintEventArgs e) {
+        HudTheme.Prepare(e.Graphics);
+        e.Graphics.Clear(HudTheme.Window);
+        if (_pages.Count == 0) {
+            return;
+        }
+        var page = _pages[_page];
+        int w = _header.Width;
+        int left = HudTheme.Dip(this, PagePadDip + 4);
+        int buttonsEdge = Loc.Rtl ? w - _min.Right : _min.Left;
+        int right = Math.Max(left + 40, buttonsEdge - HudTheme.Dip(this, 12));
+        const TextFormatFlags flags = TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
+        TextRenderer.DrawText(e.Graphics, page.Title, HudTheme.Display,
+            Loc.Mirror(new Rectangle(left, HudTheme.Dip(this, 26), right - left, HudTheme.Dip(this, 32)), w),
+            HudTheme.Body, Loc.Flags(flags));
+        // The subtitle may run under the caption buttons; they sit higher.
+        TextRenderer.DrawText(e.Graphics, page.Subtitle, HudTheme.Small,
+            Loc.Mirror(new Rectangle(left, HudTheme.Dip(this, 58), w - left * 2, HudTheme.Dip(this, 20)), w),
+            HudTheme.Muted, Loc.Flags(flags));
     }
 
     private void OnStatusCardPaint(object? sender, PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
-        int shadow = HudTheme.Dip(_statusCard, 7);
-        var pill = Rectangle.Inflate(_statusCard.ClientRectangle, -shadow, -shadow);
-        int left = pill.Left + HudTheme.Dip(this, 28);
-        int top = pill.Top + HudTheme.Dip(this, 16);
-        string phase = HudTheme.PhaseLabel(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
-        string body = _host.ModelName + " · " + Loc.T(
-            !_host.Online ? "No internet"
-                : !_host.LoggedIn ? "Sign in to dictate"
-                : _host.PageReady ? "Signed in"
-                : "Waiting for page");
         int cw = _statusCard.Width;
-        TextRenderer.DrawText(e.Graphics, phase, HudTheme.Display,
-            Loc.Mirror(new Rectangle(left, top, pill.Width - HudTheme.Dip(this, 48), HudTheme.Dip(this, 32)), cw),
-            HudTheme.Body, Loc.Flags(TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
-        TextRenderer.DrawText(e.Graphics, body, HudTheme.Small,
-            Loc.Mirror(new Rectangle(left, top + HudTheme.Dip(this, 32), pill.Width - HudTheme.Dip(this, 48), HudTheme.Dip(this, 20)), cw),
-            HudTheme.Muted, Loc.Flags(TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
+        int left = HudTheme.Dip(this, 30);
+        int trailing = cw - _loginButton.Width - HudTheme.Dip(this, 22 + 20);
+        bool listening = _host.Phase == AppPhase.Listening;
+        int waveWidth = HudTheme.Dip(this, 120);
+        int textWidth = Math.Max(0, trailing - left - (listening ? waveWidth + HudTheme.Dip(this, 16) : 0));
 
-        if (_host.Phase == AppPhase.Listening) {
-            var wave = Loc.Mirror(new Rectangle(
-                pill.Right - HudTheme.Dip(this, 168),
-                pill.Top + HudTheme.Dip(this, 18),
-                HudTheme.Dip(this, 132),
-                HudTheme.Dip(this, 36)), cw);
+        string phase = HudTheme.PhaseLabel(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
+        string body = !_host.Online ? Loc.T("No internet")
+            : !_host.LoggedIn ? _host.ModelName + " · " + Loc.T("Sign in to dictate")
+            : _host.StatusText;
+        int titleH = HudTheme.Dip(this, 30);
+        int bodyH = HudTheme.Dip(this, 20);
+        int top = (_statusCard.Height - titleH - bodyH) / 2;
+        const TextFormatFlags flags = TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
+        TextRenderer.DrawText(e.Graphics, phase, HudTheme.Display,
+            Loc.Mirror(new Rectangle(left, top, textWidth, titleH), cw),
+            HudTheme.Body, Loc.Flags(flags));
+        TextRenderer.DrawText(e.Graphics, body, HudTheme.Small,
+            Loc.Mirror(new Rectangle(left, top + titleH, textWidth, bodyH), cw),
+            HudTheme.Muted, Loc.Flags(flags));
+
+        if (listening) {
+            int waveH = HudTheme.Dip(this, 36);
+            var wave = Loc.Mirror(new Rectangle(trailing - waveWidth, (_statusCard.Height - waveH) / 2, waveWidth, waveH), cw);
             HudTheme.DrawWave(e.Graphics, wave, _bars, HudTheme.Teal, HudTheme.DipF(this, 18));
         }
     }
 
-    private void OnCaptionMouseDown(object? sender, MouseEventArgs e) {
+    // ── Dragging the borderless window ────────────────────────
+
+    private void HookDrag(Control surface) {
+        surface.MouseDown += OnDragMouseDown;
+        surface.MouseMove += OnDragMouseMove;
+        surface.MouseUp += (_, _) => _dragging = false;
+    }
+
+    private void OnDragMouseDown(object? sender, MouseEventArgs e) {
         if (e.Button != MouseButtons.Left || WindowState == FormWindowState.Maximized) {
             return;
         }
@@ -664,77 +685,176 @@ internal sealed class AppWindow : Form {
         _dragY = e.Y;
     }
 
-    private void OnCaptionMouseMove(object? sender, MouseEventArgs e) {
+    private void OnDragMouseMove(object? sender, MouseEventArgs e) {
         if (!_dragging) {
             return;
         }
         Location = new Point(Location.X + e.X - _dragX, Location.Y + e.Y - _dragY);
     }
 
+    // ── Layout ────────────────────────────────────────────────
+
+    private void ApplyChromeMetrics() {
+        _sidebar.Width = HudTheme.Dip(this, SidebarWidthDip);
+        _header.Height = HudTheme.Dip(this, HeaderHeightDip);
+        _translateLanguage.ItemHeight = HudTheme.Dip(this, 28);
+        PlaceCaptionButtons();
+    }
+
     private void PlaceCaptionButtons() {
-        int pad = HudTheme.Dip(this, 14);
+        int pad = HudTheme.Dip(this, 12);
         _close.Size = new Size(HudTheme.Dip(this, 36), HudTheme.Dip(this, 28));
         _min.Size = _close.Size;
-        int top = (_caption.Height - _close.Height) / 2;
+        int top = HudTheme.Dip(this, 12);
         if (Loc.Rtl) {
             _close.Location = new Point(pad, top);
-            _min.Location = new Point(_close.Right + HudTheme.Dip(this, 6), top);
+            _min.Location = new Point(_close.Right + HudTheme.Dip(this, 4), top);
             return;
         }
-        _close.Location = new Point(_caption.Width - _close.Width - pad, top);
-        _min.Location = new Point(_close.Left - _min.Width - HudTheme.Dip(this, 6), top);
+        _close.Location = new Point(_header.Width - _close.Width - pad, top);
+        _min.Location = new Point(_close.Left - _min.Width - HudTheme.Dip(this, 4), top);
+    }
+
+    private void ShowPage(int index) {
+        index = Math.Clamp(index, 0, _pages.Count - 1);
+        StopCapture();
+        _page = index;
+        _lastPage = index;
+        for (int i = 0; i < _pages.Count; i++) {
+            _pages[i].Nav.Selected = i == index;
+        }
+        _scrollHost.SuspendLayout();
+        _scrollHost.AutoScrollPosition = Point.Empty;
+        for (int i = 0; i < _pages.Count; i++) {
+            _pages[i].Body.Visible = i == index;
+        }
+        _scrollHost.ResumeLayout();
+        Relayout();
+        _header.Invalidate();
     }
 
     private void Relayout() {
-        int width = Math.Max(200, _scrollHost.ClientSize.Width - 4);
-        _flow.Width = width;
-        foreach (Control child in _flow.Controls) {
-            child.Width = Math.Max(120, width - _flow.Padding.Horizontal);
-            if (child is HudCard card && card != _statusCard) {
-                LayoutStacked(card);
-            }
+        if (_pages.Count == 0 || _layingOut) {
+            return;
         }
-        _statusCard.Height = HudTheme.Dip(this, 168);
-        PlaceOnCard(_statusCard, _loginButton, 18);
-        _flow.PerformLayout();
+        _layingOut = true;
+        try {
+            int navX = HudTheme.Dip(this, 14);
+            int navY = HudTheme.Dip(this, NavTopDip);
+            int navW = _sidebar.Width - navX * 2;
+            foreach (var p in _pages) {
+                p.Nav.SetBounds(navX, navY, navW, HudTheme.Dip(this, 40));
+                navY += HudTheme.Dip(this, 44);
+            }
+
+            var page = _pages[_page];
+            int width = _scrollHost.Width;
+            if (LayoutPage(page, width) > _scrollHost.Height) {
+                // Make room for the vertical scrollbar up front so a horizontal one never appears.
+                width -= SystemInformation.VerticalScrollBarWidth;
+            }
+            int height = LayoutPage(page, width);
+            page.Body.SetBounds(0, _scrollHost.AutoScrollPosition.Y, width, height);
+        } finally {
+            _layingOut = false;
+        }
     }
 
-    private HudCard MakeCard() {
-        var card = new HudCard {
-            Margin = new Padding(4, 4, 4, 8),
-            Width = 480,
-        };
-        _flow.Controls.Add(card);
+    /// <summary>Stacks the page's section labels and cards; returns the content height.</summary>
+    private int LayoutPage(Page page, int width) {
+        int pad = HudTheme.Dip(this, PagePadDip);
+        int inner = Math.Max(HudTheme.Dip(this, 280), width - pad * 2);
+        int y = 0;
+        bool first = true;
+        foreach (var block in page.Blocks) {
+            if (block is HudSectionLabel) {
+                int h = HudTheme.Dip(this, first ? 28 : 46);
+                block.SetBounds(pad, y, inner, h);
+                y += h;
+            } else if (block is HudCard card) {
+                card.Width = inner;
+                if (card == _statusCard) {
+                    LayoutStatusCard();
+                } else {
+                    LayoutCard(card);
+                }
+                card.Location = new Point(pad, y);
+                y += card.Height + HudTheme.Dip(this, 4);
+                card.Invalidate();
+            }
+            first = false;
+        }
+        return y + HudTheme.Dip(this, 24);
+    }
+
+    private void LayoutStatusCard() {
+        _statusCard.Height = HudTheme.Dip(this, 104);
+        int w = Math.Min(HudTheme.Dip(this, 220), _statusCard.Width / 2);
+        int h = HudTheme.Dip(this, 38);
+        var r = new Rectangle(_statusCard.Width - w - HudTheme.Dip(this, 22), (_statusCard.Height - h) / 2, w, h);
+        _loginButton.Bounds = Loc.Mirror(r, _statusCard.Width);
+    }
+
+    /// <summary>Stacks a card's rows full width, a hairline gap between each.</summary>
+    private void LayoutCard(HudCard card) {
+        int padX = HudTheme.Dip(this, 20);
+        int padY = HudTheme.Dip(this, 4);
+        int gap = Math.Max(1, HudTheme.Dip(this, 1));
+        int inner = Math.Max(40, card.Width - padX * 2);
+        int y = padY;
+        foreach (Control child in card.Controls) {
+            int h = _rowHeights.TryGetValue(child, out int dip) ? HudTheme.Dip(this, dip) : child.Height;
+            if (child == _commands) {
+                // Breathing room above and below the list.
+                h += HudTheme.Dip(this, 12);
+            }
+            child.SetBounds(padX, y, inner, h);
+            y += h + gap;
+        }
+        card.Height = y - gap + padY;
+    }
+
+    // ── Building blocks ───────────────────────────────────────
+
+    private Page AddPage(string glyph, string title, string subtitle) {
+        var nav = new HudNavItem { Glyph = glyph, Text = title };
+        int index = _pages.Count;
+        nav.Click += (_, _) => ShowPage(index);
+        _sidebar.Controls.Add(nav);
+        var body = new Panel { BackColor = HudTheme.Window, Visible = false };
+        _scrollHost.Controls.Add(body);
+        var page = new Page { Nav = nav, Body = body, Title = title, Subtitle = subtitle };
+        _pages.Add(page);
+        return page;
+    }
+
+    private static void AddSection(Page page, string text) {
+        var label = new HudSectionLabel { Text = text };
+        page.Body.Controls.Add(label);
+        page.Blocks.Add(label);
+    }
+
+    private static HudCard AddCard(Page page) {
+        var card = new HudCard();
+        page.Body.Controls.Add(card);
+        page.Blocks.Add(card);
         return card;
     }
 
-    private static void AddCaption(HudCard card, string text) {
-        // Arabic: a full-width, right-aligned label (LayoutStacked sets the width).
-        var label = new Label {
-            Text = text,
-            AutoSize = !Loc.Rtl,
-            Font = HudTheme.Section,
-            ForeColor = HudTheme.Title,
-            BackColor = HudTheme.Card,
-            Margin = new Padding(0, 0, 0, 10),
-            UseMnemonic = false,
-        };
-        if (Loc.Rtl) {
-            // RightToLeft mirrors TextAlign, so MiddleLeft lands on the right edge.
-            label.RightToLeft = RightToLeft.Yes;
-            label.TextAlign = ContentAlignment.MiddleLeft;
-            label.Height = TextRenderer.MeasureText(text, label.Font).Height + 4;
-        }
-        card.Controls.Add(label);
-        LayoutStacked(card);
+    private void AddRowControl(HudCard card, Control control, int heightDip) {
+        control.BackColor = HudTheme.Card;
+        _rowHeights[control] = heightDip;
+        card.Controls.Add(control);
     }
 
-    private static void AddControl(HudCard card, Control control, int height) {
-        control.Margin = new Padding(0, 0, 0, 8);
-        control.Height = height;
-        control.BackColor = HudTheme.Card;
-        card.Controls.Add(control);
-        LayoutStacked(card);
+    private HudSettingRow AddRow(HudCard card, string title, string? description, Control trailing, int widthDip, int heightDip = 36) {
+        var row = new HudSettingRow { Title = title, Description = description };
+        if (trailing is HudButton or HudSegmented) {
+            trailing.BackColor = HudTheme.Card;
+        }
+        row.SetTrailing(trailing, widthDip, heightDip);
+        AddRowControl(card, row, description == null ? 56 : 62);
+        return row;
     }
 
     private HudHotkeyRow AddHotkey(HudCard card, string title, AppShortcut shortcut, bool optional = true) {
@@ -750,58 +870,51 @@ internal sealed class AppWindow : Form {
                 _host.TrySetShortcut(shortcut, 0);
             }
         };
-        AddControl(card, row, 56);
+        AddRowControl(card, row, 62);
         return row;
     }
 
-    private HudToggleRow AddToggle(HudCard card, string text, Action<HudToggleRow> changed) {
-        var row = new HudToggleRow { Text = text, Font = Font };
+    private HudToggleRow AddToggle(HudCard card, string text, string? description, Action<HudToggleRow> changed) {
+        var row = new HudToggleRow { Text = text, Description = description, Font = Font };
         row.CheckedChanged += (_, _) => {
             if (!_syncing) {
                 changed(row);
             }
         };
-        AddControl(card, row, 44);
+        AddRowControl(card, row, description == null ? 52 : 62);
         return row;
     }
+
+    private HudSegmented ModelSegmented(Action<TranscriptionProvider> select) {
+        var seg = new HudSegmented { Items = ["ChatGPT", "Gemini", "Claude"] };
+        seg.SelectedIndexChanged += (_, _) => {
+            if (!_syncing) {
+                select(seg.SelectedIndex switch {
+                    1 => TranscriptionProvider.Gemini,
+                    2 => TranscriptionProvider.Claude,
+                    _ => TranscriptionProvider.ChatGpt,
+                });
+            }
+        };
+        return seg;
+    }
+
+    private static int ProviderIndex(TranscriptionProvider provider) => provider switch {
+        TranscriptionProvider.Gemini => 1,
+        TranscriptionProvider.Claude => 2,
+        _ => 0,
+    };
 
     private static HudButton MakeButton(string text, HudButton.Kind kind) {
         return new HudButton {
             Text = text,
             StyleKind = kind,
             Font = HudTheme.SmallBold,
-            Height = 38,
+            Height = 36,
         };
     }
 
-    private static void FinishCard(HudCard card) => LayoutStacked(card);
-
-    private static void LayoutStacked(HudCard card) {
-        int x = card.Padding.Left;
-        int y = card.Padding.Top;
-        int inner = Math.Max(40, card.ClientSize.Width - card.Padding.Horizontal);
-        foreach (Control child in card.Controls) {
-            if (child == null) {
-                continue;
-            }
-            child.Left = x;
-            child.Top = y;
-            child.Width = inner;
-            y += child.Height + child.Margin.Bottom;
-        }
-        card.Height = y + card.Padding.Bottom;
-    }
-
-    private static void PlaceOnCard(HudCard card, Control control, int bottomPad) {
-        int inner = Math.Max(40, card.ClientSize.Width - card.Padding.Horizontal);
-        control.Width = inner;
-        control.Left = card.Padding.Left;
-        control.Top = card.Height - card.Padding.Bottom - control.Height + 6;
-        if (!card.Controls.Contains(control)) {
-            card.Controls.Add(control);
-        }
-        _ = bottomPad;
-    }
+    // ── Shortcut capture ──────────────────────────────────────
 
     private void BeginCapture(HudHotkeyRow row, AppShortcut shortcut) {
         if (_capturing == row) {
@@ -876,6 +989,21 @@ internal sealed class AppWindow : Form {
         }
     }
 
+    private void OnLanguageDrawItem(object? sender, DrawItemEventArgs e) {
+        if (e.Index < 0) {
+            return;
+        }
+        // The closed box and the hovered list item get a soft highlight; the rest stay dark.
+        bool hot = (e.State & DrawItemState.Selected) != 0 && (e.State & DrawItemState.ComboBoxEdit) == 0;
+        using (var fill = new SolidBrush(hot ? Color.FromArgb(255, 34, 52, 54) : HudTheme.Track)) {
+            e.Graphics.FillRectangle(fill, e.Bounds);
+        }
+        var text = Rectangle.Inflate(e.Bounds, -HudTheme.Dip(this, 8), 0);
+        TextRenderer.DrawText(e.Graphics, _translateLanguage.Items[e.Index]?.ToString(),_translateLanguage.Font, text,
+            hot ? HudTheme.Teal : HudTheme.Body,
+            Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix));
+    }
+
     private int IndexOfLanguage(string code) {
         for (int i = 0; i < _translateLanguage.Items.Count; i++) {
             if (_translateLanguage.Items[i] is LanguageItem item
@@ -887,7 +1015,7 @@ internal sealed class AppWindow : Form {
     }
 
     private sealed record LanguageItem(string Code, string Name) {
-        public override string ToString() => Loc.F("Translate to {0}", Name);
+        public override string ToString() => Name;
     }
 
     private static string HotkeyLabel(int vk) => vk <= 0 ? Loc.T("(none)") : HotkeyNames.For(vk);

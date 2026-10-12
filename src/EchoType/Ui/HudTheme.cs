@@ -11,6 +11,7 @@ namespace EchoType.Ui;
 internal static class HudTheme {
 
     public static readonly Color Window = Color.FromArgb(255, 10, 11, 13);
+    public static readonly Color Sidebar = Color.FromArgb(255, 14, 15, 18);
     public static readonly Color Pill = Color.FromArgb(242, 18, 20, 24);
     public static readonly Color Card = Color.FromArgb(255, 18, 20, 24);
     public static readonly Color Border = Color.FromArgb(48, 255, 255, 255);
@@ -26,6 +27,7 @@ internal static class HudTheme {
     public static readonly Color Track = Color.FromArgb(255, 32, 36, 42);
     public static readonly Color HoverFill = Color.FromArgb(28, 255, 255, 255);
     public static readonly Color PressFill = Color.FromArgb(42, 255, 255, 255);
+    public static readonly Color Divider = Color.FromArgb(255, 30, 33, 38);
 
     public const int PillRadiusDip = 18;
     public const int ControlRadiusDip = 11;
@@ -41,6 +43,9 @@ internal static class HudTheme {
     public static readonly Font Small = Font(9.5f);
     public static readonly Font SmallBold = Font(9.5f, FontStyle.Bold);
     public static readonly Font Tiny = Font(8.5f);
+
+    /// <summary>Segoe Fluent Icons (Windows 11) or Segoe MDL2 Assets (Windows 10); null when neither is installed.</summary>
+    public static readonly Font? Icons = IconFont(12f);
 
     public static Color Accent(OverlayKind kind) => kind switch {
         OverlayKind.Success => Mint,
@@ -109,6 +114,37 @@ internal static class HudTheme {
         } catch (ArgumentException) {
             return new Font("Segoe UI", size, style, GraphicsUnit.Point);
         }
+    }
+
+    private static Font? IconFont(float size) {
+        foreach (string name in new[] { "Segoe Fluent Icons", "Segoe MDL2 Assets" }) {
+            var font = new Font(name, size, FontStyle.Regular, GraphicsUnit.Point);
+            // GDI+ silently substitutes a default font when the family is missing.
+            if (string.Equals(font.Name, name, StringComparison.OrdinalIgnoreCase)) {
+                return font;
+            }
+            font.Dispose();
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The label side of a settings row: a title, and an optional muted description
+    /// under it, centered vertically in <paramref name="area"/>.
+    /// </summary>
+    public static void DrawRowText(Graphics g, Rectangle area, string title, string? description, Color? descriptionColor = null) {
+        const TextFormatFlags flags = TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
+        if (string.IsNullOrEmpty(description)) {
+            TextRenderer.DrawText(g, title, BodyText, area, Body, Loc.Flags(flags | TextFormatFlags.VerticalCenter));
+            return;
+        }
+        int titleH = TextRenderer.MeasureText(g, string.IsNullOrEmpty(title) ? "Ag" : title, BodyText, Size.Empty, flags).Height;
+        int descH = TextRenderer.MeasureText(g, description, Tiny, Size.Empty, flags).Height;
+        int gap = 2;
+        int top = area.Top + (area.Height - titleH - descH - gap) / 2;
+        TextRenderer.DrawText(g, title, BodyText, new Rectangle(area.Left, top, area.Width, titleH), Body, Loc.Flags(flags));
+        TextRenderer.DrawText(g, description, Tiny, new Rectangle(area.Left, top + titleH + gap, area.Width, descH),
+            descriptionColor ?? Muted, Loc.Flags(flags));
     }
 
     public static int Dip(Control control, int value) {

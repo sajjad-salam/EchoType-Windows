@@ -1186,9 +1186,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
     /// <summary>
     /// Ask model: the complete reply (the wait already covered generated images and videos)
-    /// is pasted into the field you started in — the image if there is one, otherwise the
-    /// text — or left on the clipboard when no field was focused. It also opens in a popup
-    /// with Copy buttons for the text and the image.
+    /// opens in a popup with Copy buttons for the text and the image. With the popup turned
+    /// off it is pasted into the field you started in instead — the image if there is one,
+    /// otherwise the text — or left on the clipboard when no field was focused.
     /// </summary>
     private async Task DeliverAskReplyAsync(ModelReply reply, string message, string transcript, int session) {
         const string label = "ask-model";
@@ -1231,6 +1231,21 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return;
         }
 
+        if (_settings.ShowAskReplyWindow) {
+            // Popup only: nothing is pasted into the field; copy from the popup's buttons.
+            Log.Write(label + ": shown in popup (text " + text.Length + " chars, image " + (image != null) + ")");
+            Sounds.Pasted();
+            AskReplyForm.ShowReply(
+                new AskReplyContent(modelName, transcript, text, image, reply.Images.Count, reply.Videos,
+                    Loc.T("Use the Copy buttons to copy the reply.")),
+                () => {
+                    web.ShowLoginWindow();
+                    NotifyUi();
+                });
+            ResetToIdle();
+            return;
+        }
+
         // Paste: the image when there is one (that is what was asked for), else the text.
         Paster.Outcome? outcome = null;
         if (image != null) {
@@ -1251,17 +1266,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             Paster.Outcome.CopiedToClipboard => Loc.T("No text field was focused — the reply is on the clipboard (Ctrl+V)."),
             _ => Loc.T("Nothing to paste — open the video from the model window."),
         };
-        if (_settings.ShowAskReplyWindow) {
-            AskReplyForm.ShowReply(
-                new AskReplyContent(modelName, transcript, text, image, reply.Images.Count, reply.Videos, note),
-                () => {
-                    web.ShowLoginWindow();
-                    NotifyUi();
-                });
-        } else {
-            image?.Dispose();
-            ShowBalloon(outcome == Paster.Outcome.Pasted ? Loc.T("Pasted the reply.") : note, OverlayKind.Success);
-        }
+        image?.Dispose();
+        ShowBalloon(outcome == Paster.Outcome.Pasted ? Loc.T("Pasted the reply.") : note, OverlayKind.Success);
         ResetToIdle();
     }
 

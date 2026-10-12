@@ -21,7 +21,7 @@ internal static class MicInputVolume {
 
     public static void EnsureFull() {
         try {
-            var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+            var enumerator = (IMMDeviceEnumerator)CoreAudio.CreateDeviceEnumerator();
             try {
                 var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 bool found = false;
@@ -130,10 +130,6 @@ internal static class MicInputVolume {
             // Best effort — COM object may already be gone.
         }
     }
-
-    [ComImport]
-    [Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
-    private class MMDeviceEnumerator { }
 
     [ComImport]
     [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6")]
