@@ -58,11 +58,19 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private readonly ChatGPTWebController _web;
     /// <summary>
     /// Second hidden window that runs Auto Clean, custom commands and selection rewrites
-    /// so dictation and cleaning never wait on each other (Ask model stays on
-    /// <see cref="_web"/>). Null when the cleaning
+    /// so dictation and cleaning never wait on each other. Null when the cleaning
     /// model is the same as the transcription model (then <see cref="_web"/> does both).
     /// </summary>
     private ChatGPTWebController? _cleanWeb;
+    /// <summary>
+    /// Third hidden window that answers Ask model. Null when the Ask model is the same as
+    /// the transcription or cleaning model (that window answers instead).
+    /// </summary>
+    private ChatGPTWebController? _askWeb;
+    private readonly ToolStripMenuItem _chatgptAskItem;
+    private readonly ToolStripMenuItem _geminiAskItem;
+    private readonly ToolStripMenuItem _claudeAskItem;
+    private int _askWarmupEpoch;
     private readonly ToolStripMenuItem _autoCleanItem;
     private readonly ToolStripMenuItem _chatgptCleanItem;
     private readonly ToolStripMenuItem _geminiCleanItem;
@@ -92,6 +100,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private CustomCommand? _activeCommand;
     private CommandButtonPickerForm? _actionPicker;
     private bool _askModel;
+    /// <summary>Image files named by the selection (Obsidian embeds, paths) to attach to the Ask model prompt.</summary>
+    private IReadOnlyList<string> _askImages = [];
     private bool _translate;
     private HotkeyChord _sessionChord;
     private PasteTarget? _pasteTarget;
@@ -139,6 +149,15 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         cleanRoot.DropDownItems.Add(new ToolStripSeparator());
         cleanRoot.DropDownItems.Add(Loc.T("Open cleaning model window…"), null, (_, _) => ToggleCleanWindow());
         cleanRoot.DropDownItems.Add(Loc.T("Edit cleaning prompt…"), null, (_, _) => EditCleanPrompt());
+        _chatgptAskItem = new ToolStripMenuItem("ChatGPT", null, (_, _) => SetAskModel(TranscriptionProvider.ChatGpt));
+        _geminiAskItem = new ToolStripMenuItem("Gemini", null, (_, _) => SetAskModel(TranscriptionProvider.Gemini));
+        _claudeAskItem = new ToolStripMenuItem("Claude", null, (_, _) => SetAskModel(TranscriptionProvider.Claude));
+        var askRoot = new ToolStripMenuItem(Loc.T("Ask model (answers the Ask shortcut)"));
+        askRoot.DropDownItems.Add(_chatgptAskItem);
+        askRoot.DropDownItems.Add(_geminiAskItem);
+        askRoot.DropDownItems.Add(_claudeAskItem);
+        askRoot.DropDownItems.Add(new ToolStripSeparator());
+        askRoot.DropDownItems.Add(Loc.T("Open Ask model window…"), null, (_, _) => ToggleAskWindow());
         _commandsRoot = new ToolStripMenuItem(Loc.T("Custom Commands"));
         _pressEnterItem = new ToolStripMenuItem(Loc.T("Press Enter after paste")) {
             CheckOnClick = true,
@@ -190,6 +209,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         menu.Items.Add(Loc.T("Workspace modes…"), null, (_, _) => EditWorkspaceModes());
         menu.Items.Add(cleanRoot);
         menu.Items.Add(_commandsRoot);
+        menu.Items.Add(askRoot);
         menu.Items.Add(_askModelShortcutItem);
         menu.Items.Add(_translateShortcutItem);
         menu.Items.Add(_translateLanguageRoot);
@@ -209,6 +229,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         RebuildCommandsMenu();
         SyncModelMenu();
         SyncCleanMenu();
+        SyncAskMenu();
         UpdateModelShortcutsMenu();
         UpdateLoginMenuItem();
         _statusItem.Text = StatusLine();
@@ -240,11 +261,11 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkey.CancelRequested += OnCancelRequested;
         StatusOverlay.CancelClicked += OnHudCancelClicked;
 
-        Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey VK=0x{_settings.HotkeyVk:X2}, askModelVk=0x{_settings.AskModelVk:X2}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateTo={_settings.TranslateTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating})");
+        Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey VK=0x{_settings.HotkeyVk:X2}, askModelVk=0x{_settings.AskModelVk:X2}, askModel={_settings.AskProviderName}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateTo={_settings.TranslateTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating})");
         StartupRegistration.Apply(_settings.StartWithWindows);
         // Stay in the tray on launch. Double-click the icon (or Open EchoType) to show the window.
         _ = WarmupAsync(); // alwaysReady: load the selected model at launch (mac applyPolicyAtLaunch)
-        ApplyCleanSite();  // second window for the cleaning model, warmed in parallel
+        ApplyReplySites(); // windows for the cleaning and Ask models, warmed in parallel
     }
 
     // ------------------------------------------------------------------
@@ -271,35 +292,126 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             }
         } else if (_cleanWeb == null) {
             _cleanWeb = new ChatGPTWebController(ChatSite.For(provider));
-            _ = WarmupCleanAsync();
+            WarmupCleanWindow();
         } else if (_cleanWeb.Site.Id != ChatSite.For(provider).Id) {
             _cleanWeb.SwitchSite(ChatSite.For(provider));
-            _ = WarmupCleanAsync();
+            WarmupCleanWindow();
         }
         SyncCleanMenu();
         NotifyUi();
     }
 
-    private async Task WarmupCleanAsync() {
+    private void WarmupCleanWindow() {
         var web = _cleanWeb;
         if (web == null) {
             return;
         }
         int epoch = ++_cleanWarmupEpoch;
+        _ = WarmupSideWindowAsync(web, "clean",
+            Loc.F("Log in to {0} (cleaning model) from the tray menu.", web.Site.DisplayName),
+            () => epoch == _cleanWarmupEpoch && ReferenceEquals(web, _cleanWeb));
+    }
+
+    private static async Task WarmupSideWindowAsync(
+        ChatGPTWebController web, string role, string loggedOutNotice, Func<bool> stillCurrent) {
         try {
             var outcome = await web.EnsureReadyAsync();
-            if (epoch != _cleanWarmupEpoch || !ReferenceEquals(web, _cleanWeb)) {
+            if (!stillCurrent()) {
                 return;
             }
-            Log.Write("launch: clean warmup (" + web.Site.Id + ") -> " + outcome);
+            Log.Write("launch: " + role + " warmup (" + web.Site.Id + ") -> " + outcome);
             if (outcome == ReadyOutcome.RuntimeMissing) {
                 ChatGPTWebController.ShowRuntimeMissingDialog();
             } else if (outcome == ReadyOutcome.LoggedOut) {
-                ShowBalloon(Loc.F("Log in to {0} (cleaning model) from the tray menu.", web.Site.DisplayName), OverlayKind.Warning);
+                ShowBalloon(loggedOutNotice, OverlayKind.Warning);
             }
         } catch (Exception ex) {
-            Log.Write("launch: clean warmup failed: " + ex.Message);
+            Log.Write("launch: " + role + " warmup failed: " + ex.Message);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Ask model (third window)
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Brings the cleaning and Ask windows in step with settings. An Ask window that is no
+    /// longer needed is closed before the cleaning window changes site, so two windows never
+    /// load the same model's profile at once.
+    /// </summary>
+    private void ApplyReplySites() {
+        if (_askWeb != null && AskSharesWindow) {
+            _askWeb.Dispose();
+            _askWeb = null;
+        }
+        ApplyCleanSite();
+        ApplyAskSite();
+    }
+
+    /// <summary>True when the transcription or cleaning window already runs the Ask model.</summary>
+    private bool AskSharesWindow =>
+        _settings.AskProvider == _settings.TranscriptionProvider || _settings.AskProvider == _settings.CleanProvider;
+
+    private void ApplyAskSite() {
+        var site = ChatSite.For(_settings.AskProvider);
+        if (AskSharesWindow) {
+            if (_askWeb != null) {
+                _askWeb.Dispose();
+                _askWeb = null;
+            }
+        } else if (_askWeb == null) {
+            _askWeb = new ChatGPTWebController(site);
+            WarmupAskWindow();
+        } else if (_askWeb.Site.Id != site.Id) {
+            _askWeb.SwitchSite(site);
+            WarmupAskWindow();
+        }
+        SyncAskMenu();
+        NotifyUi();
+    }
+
+    private void WarmupAskWindow() {
+        var web = _askWeb;
+        if (web == null) {
+            return;
+        }
+        int epoch = ++_askWarmupEpoch;
+        _ = WarmupSideWindowAsync(web, "ask",
+            Loc.F("Log in to {0} (Ask model) from the tray menu.", web.Site.DisplayName),
+            () => epoch == _askWarmupEpoch && ReferenceEquals(web, _askWeb));
+    }
+
+    private void SyncAskMenu() {
+        _chatgptAskItem.Checked = _settings.AskProvider == TranscriptionProvider.ChatGpt;
+        _geminiAskItem.Checked = _settings.AskProvider == TranscriptionProvider.Gemini;
+        _claudeAskItem.Checked = _settings.AskProvider == TranscriptionProvider.Claude;
+    }
+
+    private void SetAskModel(TranscriptionProvider provider) {
+        if (_settings.AskProvider == provider) {
+            SyncAskMenu();
+            return;
+        }
+        if (_phase != AppPhase.Idle) {
+            ShowBalloon(Loc.T("Wait until dictation finishes before switching models."), OverlayKind.Warning);
+            SyncAskMenu();
+            return;
+        }
+        _settings.AskProvider = provider;
+        _settings.Save();
+        Log.Write("settings: askProvider=" + _settings.AskProviderName);
+        ApplyReplySites();
+        ShowBalloon(Loc.F("Ask model: {0}.", AskWeb.Site.DisplayName), OverlayKind.Success);
+    }
+
+    private void ToggleAskWindow() {
+        var web = AskWeb;
+        if (web.IsLoginWindowVisible) {
+            web.HideLoginWindow();
+        } else {
+            web.ShowLoginWindow();
+        }
+        NotifyUi();
     }
 
     private void SetAutoClean(bool value) {
@@ -327,7 +439,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _settings.CleanProvider = provider;
         _settings.Save();
         Log.Write("settings: cleanProvider=" + _settings.CleanProviderName);
-        ApplyCleanSite();
+        ApplyReplySites();
         RebuildCommandsMenu();
         ShowBalloon(Loc.F("Cleaning model: {0}.", Gen.Site.DisplayName), OverlayKind.Success);
     }
@@ -861,9 +973,20 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
         if (_askModel) {
             CopyTranscript(transcript);
-            string message = string.IsNullOrEmpty(_selectedText)
+            // A selected image path or Obsidian embed (![[image.png]]) is attached as the
+            // image itself; any other selected text still goes in with the question.
+            string? selection = _selectedText;
+            if (!string.IsNullOrEmpty(selection)) {
+                var refs = ImageReferences.Extract(selection);
+                if (refs.Paths.Count > 0) {
+                    _askImages = refs.Paths;
+                    selection = refs.Remainder;
+                    Log.Write("ask-model: attaching " + refs.Paths.Count + " image(s) from the selection");
+                }
+            }
+            string message = string.IsNullOrEmpty(selection)
                 ? transcript
-                : SelectionCapture.BuildAskModelMessage(_selectedText, transcript);
+                : SelectionCapture.BuildAskModelMessage(selection, transcript);
             await DeliverGeneratedReplyAsync(message, "ask-model", session, transcript);
             return;
         }
@@ -1345,7 +1468,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         TimeSpan firstByteTimeout = CommandFirstByteTimeout();
         Log.Write("command: waiting up to " + ((int)firstByteTimeout.TotalSeconds)
             + "s for a reply (recording " + HeldSeconds().ToString("0.0") + "s)");
-        bool firstNeedsNewChat = ShouldStartNewChat();
+        // Image questions get a fresh chat: a reused ChatGPT thread could still hold
+        // attachments from an earlier failed send.
+        bool firstNeedsNewChat = (_askModel && _askImages.Count > 0) || ShouldStartNewChat();
         try {
             ModelReply reply = await SendCommandOnceAsync(message, firstNeedsNewChat, firstByteTimeout);
             if (!IsLive(session)) {
@@ -1426,6 +1551,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
         CommandTurnSnapshot previous = await driver.SnapshotCommandTurnAsync();
         await driver.SetComposerAsync(message);
+        if (_askModel && _askImages.Count > 0 && !await driver.AttachImagesAsync(_askImages)) {
+            ShowBalloon(Loc.T("Couldn't confirm the image was attached — sending the question anyway."), OverlayKind.Warning);
+        }
         await driver.SendPromptAsync();
         ModelReply reply;
         try {
@@ -1494,11 +1622,15 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     /// <summary>Cleaning-model window: Auto Clean, custom commands and selection rewrites.</summary>
     private ChatGPTWebController Gen => _cleanWeb ?? _web;
 
+    /// <summary>Ask-model window: its own, or the transcription/cleaning window when the model is the same.</summary>
+    private ChatGPTWebController AskWeb =>
+        _askWeb ?? (_settings.AskProvider == _settings.TranscriptionProvider ? _web : Gen);
+
     /// <summary>
-    /// Window that answers the current session. Ask model uses the transcription model;
+    /// Window that answers the current session. Ask model uses the Ask model;
     /// everything else goes to the cleaning model.
     /// </summary>
-    private ChatGPTWebController ReplyWeb => _askModel ? _web : Gen;
+    private ChatGPTWebController ReplyWeb => _askModel ? AskWeb : Gen;
 
     private bool IsChatGptSite => ReplyWeb.Site.Id == ChatSite.ChatGpt.Id;
 
@@ -1526,6 +1658,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         try {
             _web.Driver?.InvalidateWaits();
             _cleanWeb?.Driver?.InvalidateWaits();
+            _askWeb?.Driver?.InvalidateWaits();
         } catch { /* best effort */ }
         _engagementFailures = 0;
         // Cancel leaves ChatGPT/Gemini's mic UI wedged often enough that the next
@@ -1621,6 +1754,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkeyHeld = false;
         _activeCommand = null;
         _askModel = false;
+        _askImages = [];
         _translate = false;
         _sessionChord = default;
         _pasteTarget = null;
@@ -1961,7 +2095,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         UpdateStatusText();
         RebuildCommandsMenu();
         _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
-        ApplyCleanSite();
+        ApplyReplySites();
         Log.Write("settings: transcriptionProvider=" + _settings.TranscriptionProviderName);
         ShowBalloon(Loc.F("Switched to {0}.", _web.Site.DisplayName), OverlayKind.Success);
         _ = WarmupAsync();
@@ -2417,6 +2551,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     void IAppWindowHost.SetCleanModel(TranscriptionProvider provider) => SetCleanModel(provider);
     void IAppWindowHost.ToggleCleanWindow() => ToggleCleanWindow();
     void IAppWindowHost.EditCleanPrompt() => EditCleanPrompt();
+    string IAppWindowHost.AskModelName => AskWeb.Site.DisplayName;
+    bool IAppWindowHost.AskWindowVisible => AskWeb.IsLoginWindowVisible;
+    void IAppWindowHost.SetAskModel(TranscriptionProvider provider) => SetAskModel(provider);
+    void IAppWindowHost.ToggleAskWindow() => ToggleAskWindow();
     void IAppWindowHost.EditOpenAiKey() => EditOpenAiKey();
     void IAppWindowHost.EditWordReplacements() => EditWordReplacements();
     void IAppWindowHost.EditWorkspaceModes() => EditWorkspaceModes();
@@ -2577,6 +2715,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkey.Dispose();
         _web.Dispose();
         _cleanWeb?.Dispose();
+        _askWeb?.Dispose();
         if (_window is { IsDisposed: false } window) {
             window.Hide();
             window.Dispose();

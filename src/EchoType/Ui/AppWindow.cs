@@ -30,6 +30,10 @@ internal interface IAppWindowHost {
     void SetCleanModel(TranscriptionProvider provider);
     void ToggleCleanWindow();
     void EditCleanPrompt();
+    string AskModelName { get; }
+    bool AskWindowVisible { get; }
+    void SetAskModel(TranscriptionProvider provider);
+    void ToggleAskWindow();
     void EditOpenAiKey();
     void EditWordReplacements();
     void EditWorkspaceModes();
@@ -88,6 +92,8 @@ internal sealed class AppWindow : Form {
     private readonly HudButton _cleanWindowButton;
     private readonly HudButton _cleanPromptButton;
     private readonly HudHotkeyRow _cleanKey;
+    private readonly HudSegmented _askSeg;
+    private readonly HudButton _askWindowButton;
     private readonly HudToggleRow _enterToggle;
     private readonly HudToggleRow _clipboardToggle;
     private readonly HudToggleRow _startupToggle;
@@ -214,6 +220,25 @@ internal sealed class AppWindow : Form {
         _cleanPromptButton.Click += (_, _) => _host.EditCleanPrompt();
         AddControl(cleanCard, _cleanPromptButton, 44);
         FinishCard(cleanCard);
+
+        var askCard = MakeCard();
+        AddCaption(askCard, Loc.T("Ask model (answers the Ask shortcut)"));
+        _askSeg = new HudSegmented { Items = ["ChatGPT", "Gemini", "Claude"] };
+        _askSeg.SelectedIndexChanged += (_, _) => {
+            if (_syncing) {
+                return;
+            }
+            _host.SetAskModel(_askSeg.SelectedIndex switch {
+                1 => TranscriptionProvider.Gemini,
+                2 => TranscriptionProvider.Claude,
+                _ => TranscriptionProvider.ChatGpt,
+            });
+        };
+        AddControl(askCard, _askSeg, 40);
+        _askWindowButton = MakeButton(Loc.T("Open Ask model window…"), HudButton.Kind.Ghost);
+        _askWindowButton.Click += (_, _) => _host.ToggleAskWindow();
+        AddControl(askCard, _askWindowButton, 44);
+        FinishCard(askCard);
 
         var wordsCard = MakeCard();
         AddCaption(wordsCard, Loc.T("Word replacements (dialect)"));
@@ -477,6 +502,12 @@ internal sealed class AppWindow : Form {
                 _ => 0,
             });
             _cleanWindowButton.Text = Loc.F(_host.CleanWindowVisible ? "Close {0} window" : "Open {0} window", _host.CleanModelName);
+            _askSeg.SetSilent(s.AskProvider switch {
+                TranscriptionProvider.Gemini => 1,
+                TranscriptionProvider.Claude => 2,
+                _ => 0,
+            });
+            _askWindowButton.Text = Loc.F(_host.AskWindowVisible ? "Close {0} window" : "Open {0} window", _host.AskModelName);
             _modeSeg.SetSilent(s.ToggleRecording ? 1 : 0);
             _muteToggle.SetSilent(s.MuteOtherAppsWhileDictating);
             _enterToggle.SetSilent(s.PressEnterAfterPaste);

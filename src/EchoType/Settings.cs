@@ -141,7 +141,7 @@ internal sealed class Settings {
     [JsonPropertyName("autoClean")]
     public bool AutoClean { get; set; }
 
-    /// <summary>"chatgpt", "gemini" or "claude". Runs Auto Clean, custom commands and selection rewrites (Ask model uses the transcription model).</summary>
+    /// <summary>"chatgpt", "gemini" or "claude". Runs Auto Clean, custom commands and selection rewrites (Ask model has its own <see cref="AskProvider"/>).</summary>
     [JsonPropertyName("cleanProvider")]
     public string CleanProviderName { get; set; } = "chatgpt";
 
@@ -162,6 +162,28 @@ internal sealed class Settings {
             _ => TranscriptionProvider.ChatGpt,
         };
         set => CleanProviderName = value switch {
+            TranscriptionProvider.Gemini => "gemini",
+            TranscriptionProvider.Claude => "claude",
+            _ => "chatgpt",
+        };
+    }
+
+    /// <summary>
+    /// "chatgpt", "gemini" or "claude". Answers the Ask model shortcut in its own window
+    /// (shared with the transcription or cleaning window when it is the same model).
+    /// Missing from older configs → the transcription model, which used to answer Ask model.
+    /// </summary>
+    [JsonPropertyName("askProvider")]
+    public string AskProviderName { get; set; } = "";
+
+    [JsonIgnore]
+    public TranscriptionProvider AskProvider {
+        get => AskProviderName.ToLowerInvariant() switch {
+            "gemini" => TranscriptionProvider.Gemini,
+            "claude" => TranscriptionProvider.Claude,
+            _ => TranscriptionProvider.ChatGpt,
+        };
+        set => AskProviderName = value switch {
             TranscriptionProvider.Gemini => "gemini",
             TranscriptionProvider.Claude => "claude",
             _ => "chatgpt",
@@ -267,6 +289,9 @@ internal sealed class Settings {
             }
             if (string.IsNullOrWhiteSpace(loaded.CleanProviderName)) {
                 loaded.CleanProviderName = "chatgpt";
+            }
+            if (string.IsNullOrWhiteSpace(loaded.AskProviderName)) {
+                loaded.AskProviderName = loaded.TranscriptionProviderName;
             }
             if (string.IsNullOrWhiteSpace(loaded.AutoCleanPrompt)) {
                 loaded.AutoCleanPrompt = DefaultAutoCleanPrompt;

@@ -533,6 +533,61 @@ internal sealed class DictationDriver {
             if (b.disabled || b.getAttribute('aria-disabled') === 'true') return 'disabled';
             return 'ok';
           };
+          // Attachments: the box around the composer (stops before the page-tall
+          // column) is where all three sites show thumbnails of attached files.
+          E.attachArea = () => {
+            const c = E.composer();
+            if (!c) return null;
+            let area = c;
+            const limit = Math.max(320, window.innerHeight * 0.6);
+            for (let n = c.parentElement, i = 0; n && i < 8; n = n.parentElement, i++) {
+              if (n.getBoundingClientRect().height > limit) break;
+              area = n;
+            }
+            return area;
+          };
+          E.attachmentCount = () => {
+            const a = E.attachArea();
+            if (!a) return -1;
+            return a.querySelectorAll('img, [data-testid*="attachment" i], [data-testid*="file-thumbnail" i], '
+              + '[class*="attachment" i], [class*="file-preview" i], [class*="uploader-file" i], '
+              + 'button[aria-label*="remove" i]').length;
+          };
+          E.attachBusy = () => {
+            const a = E.attachArea();
+            return !!(a && a.querySelector('[role="progressbar"], [aria-busy="true"], [class*="spinner" i]'));
+          };
+          E.clearFiles = () => { window.__etFiles = []; window.__etB64 = ''; return 'ok'; };
+          E.stageFile = (name, mime) => {
+            const bin = atob(window.__etB64 || '');
+            window.__etB64 = '';
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            (window.__etFiles = window.__etFiles || []).push(new File([bytes], name, { type: mime, lastModified: Date.now() }));
+            return String(window.__etFiles.length);
+          };
+          E.pasteFiles = () => {
+            const c = E.composer();
+            if (!c) return 'no-composer';
+            const files = window.__etFiles || [];
+            if (!files.length) return 'no-files';
+            c.focus();
+            const dt = new DataTransfer();
+            files.forEach(function (f) { dt.items.add(f); });
+            c.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+            return 'ok';
+          };
+          E.markFileInput = (count) => {
+            document.querySelectorAll('[data-et-file]').forEach(function (n) { n.removeAttribute('data-et-file'); });
+            const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
+            if (!inputs.length) return 'none';
+            const fits = inputs.filter(function (i) { return count < 2 || i.multiple; });
+            const pool = fits.length ? fits : inputs;
+            const pick = pool.find(function (i) { return /image/i.test(i.accept || ''); })
+              || pool.find(function (i) { return !i.accept; }) || pool[0];
+            pick.setAttribute('data-et-file', '1');
+            return 'ok';
+          };
           E.newChat = () => {
             const b = E.button('newChat');
             if (!b) return 'no-new-chat';
@@ -1846,6 +1901,109 @@ internal sealed class DictationDriver {
             }
         }
         Log.Write($"driver: CDP insertText {text.Length} chars");
+    }
+
+    /// <summary>
+    /// Attaches image files to the composer (after the text is in): first a paste event
+    /// carrying the files, which ChatGPT, Gemini and Claude all accept like a Ctrl+V of an
+    /// image; if no thumbnail shows up, the page's file input is filled over CDP. Then waits
+    /// for the upload so Send is enabled. Returns false when no attachment could be seen.
+    /// </summary>
+    public async Task<bool> AttachImagesAsync(IReadOnlyList<string> paths) {
+        if (paths.Count == 0) {
+            return true;
+        }
+        int before = await AttachmentCountAsync();
+        _ = await EvalAsync("__echotype.clearFiles()");
+        foreach (string path in paths) {
+            string b64 = Convert.ToBase64String(await File.ReadAllBytesAsync(path));
+            // Chunked so a multi-megabyte image never has to fit in one script call.
+            const int chunk = 512 * 1024;
+            for (int i = 0; i < b64.Length; i += chunk) {
+                string part = JsonSerializer.Serialize(b64.Substring(i, Math.Min(chunk, b64.Length - i)));
+                _ = await EvalLiteAsync("(window.__etB64 = (window.__etB64 || '') + " + part + ", 'ok')");
+            }
+            string name = JsonSerializer.Serialize(Path.GetFileName(path));
+            string mime = JsonSerializer.Serialize(Input.ImageReferences.MimeType(path));
+            _ = await EvalAsync("__echotype.stageFile(" + name + ", " + mime + ")");
+        }
+
+        bool attached = false;
+        try {
+            string pasted = await EvalAsync("__echotype.pasteFiles()");
+            Log.Write("driver: pasted " + paths.Count + " image(s) into the composer (" + pasted + ")");
+            attached = pasted == "ok" && await AwaitAttachmentAsync(before, TimeSpan.FromSeconds(3));
+            if (!attached) {
+                Log.Write("driver: no attachment after paste, trying the file input");
+                attached = await SetFileInputAsync(paths) && await AwaitAttachmentAsync(before, TimeSpan.FromSeconds(4));
+            }
+        } finally {
+            try { _ = await EvalAsync("__echotype.clearFiles()"); } catch (DriverException) { /* best effort */ }
+        }
+        if (!attached) {
+            Log.Write("driver: could not see an attachment in the composer");
+            return false;
+        }
+        await AwaitUploadAsync(TimeSpan.FromSeconds(30));
+        return true;
+    }
+
+    private async Task<int> AttachmentCountAsync() {
+        string count = await EvalAsync("__echotype.attachmentCount()");
+        return int.TryParse(count, out int n) ? n : -1;
+    }
+
+    private async Task<bool> AwaitAttachmentAsync(int before, TimeSpan window) {
+        DateTime deadline = DateTime.UtcNow + window;
+        while (DateTime.UtcNow < deadline) {
+            await Task.Delay(200);
+            int now = await AttachmentCountAsync();
+            if (now > before) {
+                Log.Write("driver: attachment visible (" + before + " -> " + now + ")");
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Waits until no upload spinner is left and Send is enabled.</summary>
+    private async Task AwaitUploadAsync(TimeSpan cap) {
+        DateTime started = DateTime.UtcNow;
+        await Task.Delay(800);
+        while (DateTime.UtcNow - started < cap) {
+            bool busy = await EvalAsync("__echotype.attachBusy()") == "true";
+            if (!busy && await EvalAsync("__echotype.sendReady()") == "ok") {
+                Log.Write("driver: upload ready after " + (int)(DateTime.UtcNow - started).TotalMilliseconds + " ms");
+                return;
+            }
+            await Task.Delay(250);
+        }
+        Log.Write("driver: upload still busy after " + (int)cap.TotalSeconds + "s, sending anyway");
+    }
+
+    /// <summary>Puppeteer's uploadFile: DOM.setFileInputFiles on the page's own file input.</summary>
+    private async Task<bool> SetFileInputAsync(IReadOnlyList<string> paths) {
+        try {
+            if (await EvalAsync("__echotype.markFileInput(" + paths.Count + ")") != "ok") {
+                Log.Write("driver: no file input on the page");
+                return false;
+            }
+            string evaluated = await _webview.CallDevToolsProtocolMethodAsync("Runtime.evaluate",
+                JsonSerializer.Serialize(new { expression = "document.querySelector('input[data-et-file]')" }));
+            using var doc = JsonDocument.Parse(evaluated);
+            if (!doc.RootElement.TryGetProperty("result", out var result)
+                || !result.TryGetProperty("objectId", out var objectId)) {
+                Log.Write("driver: file input has no object id");
+                return false;
+            }
+            CheckCdp(await _webview.CallDevToolsProtocolMethodAsync("DOM.setFileInputFiles",
+                JsonSerializer.Serialize(new { files = paths, objectId = objectId.GetString() })));
+            Log.Write("driver: set " + paths.Count + " file(s) on the file input");
+            return true;
+        } catch (Exception ex) {
+            Log.Write("driver: file input upload failed: " + ex.Message);
+            return false;
+        }
     }
 
     public async Task SendPromptAsync() {
