@@ -30,6 +30,7 @@ internal interface IAppWindowHost {
     void SetCleanModel(TranscriptionProvider provider);
     void ToggleCleanWindow();
     void EditCleanPrompt();
+    void EditOpenAiKey();
     void EditWordReplacements();
     void EditWorkspaceModes();
     bool LoginWindowVisible { get; }
@@ -232,7 +233,7 @@ internal sealed class AppWindow : Form {
         AddControl(recordCard, _modeSeg, 40);
         _dictationKey = AddHotkey(recordCard, "Dictation key", AppShortcut.Dictation, optional: false);
         _askModelKey = AddHotkey(recordCard, "Ask model", AppShortcut.AskModel);
-        _translateKey = AddHotkey(recordCard, "Translate (Google Translate)", AppShortcut.Translate);
+        _translateKey = AddHotkey(recordCard, "Translate", AppShortcut.Translate);
         _translateKey.MultiKey = true;
         _translateLanguage = new ComboBox {
             DropDownStyle = ComboBoxStyle.DropDownList,
@@ -249,6 +250,9 @@ internal sealed class AppWindow : Form {
             }
         };
         AddControl(recordCard, _translateLanguage, 32);
+        var openAiKey = MakeButton("OpenAI API key…", HudButton.Kind.Ghost);
+        openAiKey.Click += (_, _) => _host.EditOpenAiKey();
+        AddControl(recordCard, openAiKey, 44);
         FinishCard(recordCard);
 
         var optionsCard = MakeCard();

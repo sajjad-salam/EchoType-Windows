@@ -80,7 +80,7 @@ internal sealed class Settings {
 
     /// <summary>
     /// One to three keys (e.g. Ctrl+Shift+T) that transcribe with the selected model, then
-    /// translate the transcript with Google Translate (no model reply) and paste it.
+    /// translate the transcript with OpenAI (when a key is set) or Google Translate and paste it.
     /// Empty falls back to <see cref="TranslateVk"/>.
     /// </summary>
     [JsonPropertyName("translateVks")]
@@ -97,6 +97,18 @@ internal sealed class Settings {
     /// <summary>Google Translate target language code for <see cref="TranslateVk"/> (e.g. "en", "ar").</summary>
     [JsonPropertyName("translateTargetLanguage")]
     public string TranslateTargetLanguage { get; set; } = "en";
+
+    /// <summary>
+    /// OpenAI API key for the Translate shortcut. When set (here or in the OPENAI_API_KEY
+    /// environment variable) translation goes through OpenAI, which handles mixed-language
+    /// text; Google Translate stays the fallback. Empty = Google Translate only.
+    /// </summary>
+    [JsonPropertyName("openAiApiKey")]
+    public string OpenAiApiKey { get; set; } = "";
+
+    /// <summary>OpenAI model used for translation. Empty = <c>gpt-4o-mini</c>.</summary>
+    [JsonPropertyName("openAiTranslationModel")]
+    public string OpenAiTranslationModel { get; set; } = "";
 
     /// <summary>
     /// Tap key that opens the ChatGPT/Gemini window (same as tray Login). 0 = none.
@@ -226,6 +238,8 @@ internal sealed class Settings {
             loaded.CustomCommands ??= [];
             loaded.GeminiCustomCommands ??= [];
             loaded.TranslateVks ??= [];
+            loaded.OpenAiApiKey ??= "";
+            loaded.OpenAiTranslationModel ??= "";
             loaded.WordReplacements ??= [];
             loaded.WorkspaceModes ??= [];
             foreach (var mode in loaded.WorkspaceModes) {

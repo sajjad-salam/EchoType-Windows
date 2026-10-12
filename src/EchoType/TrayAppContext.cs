@@ -69,6 +69,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private readonly ToolStripMenuItem _claudeCleanItem;
     private int _cleanWarmupEpoch;
     private bool _cleanPromptUiOpen;
+    private bool _openAiKeyUiOpen;
     private bool _wordReplacementsUiOpen;
     private bool _workspaceModesUiOpen;
     private readonly HotkeyMonitor _hotkey;
@@ -190,6 +191,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         menu.Items.Add(_askModelShortcutItem);
         menu.Items.Add(_translateShortcutItem);
         menu.Items.Add(_translateLanguageRoot);
+        menu.Items.Add("OpenAI API key (translation)…", null, (_, _) => EditOpenAiKey());
         menu.Items.Add(_recordingModeRoot);
         menu.Items.Add(_pressEnterItem);
         menu.Items.Add(_pressEnterShortcutItem);
@@ -324,6 +326,34 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         ApplyCleanSite();
         RebuildCommandsMenu();
         ShowBalloon("Cleaning model: " + Gen.Site.DisplayName + ".", OverlayKind.Success);
+    }
+
+    private void EditOpenAiKey() {
+        if (_openAiKeyUiOpen) {
+            return;
+        }
+        _openAiKeyUiOpen = true;
+        try {
+            using var form = new OpenAiKeyForm(_settings.OpenAiApiKey, _settings.OpenAiTranslationModel);
+            IWin32Window? owner = _window is { Visible: true, IsDisposed: false } ? _window : null;
+            if (form.ShowDialog(owner) != DialogResult.OK || form.Result == _settings.OpenAiApiKey) {
+                return;
+            }
+            _settings.OpenAiApiKey = form.Result;
+            _settings.Save();
+            Log.Write("settings: openAiApiKey " + (form.Result.Length == 0 ? "cleared" : "set"));
+            ShowBalloon(form.Result.Length == 0
+                ? "OpenAI key cleared — translation uses Google Translate."
+                : "OpenAI key saved — translation uses OpenAI.", OverlayKind.Success);
+            UpdateTranslateMenu();
+            NotifyUi();
+        } catch (Exception ex) {
+            Log.Write("openai key ui: " + ex);
+            MessageBox.Show("Could not open the OpenAI key settings: " + ex.Message, "EchoType",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        } finally {
+            _openAiKeyUiOpen = false;
+        }
     }
 
     private void EditCleanPrompt() {
@@ -1015,9 +1045,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     }
 
     /// <summary>
-    /// Translate shortcut: the model page only transcribed; Google Translate (GTranslate)
-    /// does the translation directly, so there is no wait for a model reply. On failure
-    /// the original transcript is left on the clipboard.
+    /// Translate shortcut: the model page only transcribed; the translation runs over plain
+    /// HTTP, so there is no wait for a model reply. With an OpenAI API key it goes through
+    /// OpenAI (handles mixed Arabic/English text); otherwise, or if that call fails, through
+    /// Google Translate (GTranslate). On failure the original transcript is left on the clipboard.
     /// </summary>
     private async Task DeliverTranslationAsync(string transcript, int session) {
         if (!IsLive(session)) {
@@ -1026,11 +1057,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         SetPhase(AppPhase.Generating);
         CopyTranscript(transcript);
         string target = _settings.TranslateTargetLanguage;
-        Log.Write("translate: sending " + transcript.Length + " chars to Google Translate (to " + target + ")");
 
         string translated;
         try {
-            translated = (await GoogleTranslation.TranslateAsync(transcript, target)).Trim();
+            translated = await TranslateAsync(transcript, target);
         } catch (Exception ex) {
             if (!IsLive(session)) {
                 return;
@@ -1047,7 +1077,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (translated.Length == 0) {
             Log.Write("translate: empty translation");
             Sounds.Error();
-            ShowBalloon("Google Translate returned nothing. Transcript copied to clipboard.", OverlayKind.Error);
+            ShowBalloon("The translation came back empty. Transcript copied to clipboard.", OverlayKind.Error);
             ResetToIdle();
             return;
         }
@@ -1068,6 +1098,27 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 break;
         }
         ResetToIdle();
+    }
+
+    private async Task<string> TranslateAsync(string transcript, string target) {
+        string apiKey = OpenAiTranslation.ResolveKey(_settings);
+        if (apiKey.Length > 0) {
+            Log.Write("translate: sending " + transcript.Length + " chars to OpenAI (to " + target + ")");
+            var started = DateTime.UtcNow;
+            try {
+                string result = (await OpenAiTranslation.TranslateAsync(
+                    transcript, target, apiKey, _settings.OpenAiTranslationModel)).Trim();
+                Log.Write("translate: OpenAI replied in " + (int)(DateTime.UtcNow - started).TotalMilliseconds + " ms");
+                if (result.Length > 0) {
+                    return result;
+                }
+                Log.Write("translate: OpenAI returned nothing, falling back to Google Translate");
+            } catch (Exception ex) {
+                Log.Write("translate: OpenAI failed (" + ex.Message + "), falling back to Google Translate");
+            }
+        }
+        Log.Write("translate: sending " + transcript.Length + " chars to Google Translate (to " + target + ")");
+        return (await GoogleTranslation.TranslateAsync(transcript, target)).Trim();
     }
 
     private void DeliverPaste(string text, string logLabel) {
@@ -1886,7 +1937,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                     ? "Click the box, then press one to three keys together (for example Ctrl+Shift+T). Press the shortcut to start, speak, and press it again to stop."
                     : "Click the box, then press one to three keys together (for example Ctrl+Shift+T). Hold them and speak.")
                     + " EchoType transcribes with the selected model, translates the text to " + language
-                    + " with Google Translate, and pastes it. Change the language from Translate to. Clear removes the shortcut.");
+                    + " with " + (OpenAiTranslation.ResolveKey(_settings).Length > 0 ? "OpenAI" : "Google Translate") + ", and pastes it. Change the language from Translate to. Clear removes the shortcut.");
             if (form.ShowDialog() == DialogResult.OK) {
                 ApplyTranslateChord(form.Chord);
             }
@@ -2185,6 +2236,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     void IAppWindowHost.SetCleanModel(TranscriptionProvider provider) => SetCleanModel(provider);
     void IAppWindowHost.ToggleCleanWindow() => ToggleCleanWindow();
     void IAppWindowHost.EditCleanPrompt() => EditCleanPrompt();
+    void IAppWindowHost.EditOpenAiKey() => EditOpenAiKey();
     void IAppWindowHost.EditWordReplacements() => EditWordReplacements();
     void IAppWindowHost.EditWorkspaceModes() => EditWorkspaceModes();
 
