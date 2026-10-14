@@ -11,8 +11,27 @@ namespace EchoType;
 /// </summary>
 internal sealed class Settings {
 
+    /// <summary>
+    /// Legacy single dictation key. Kept in sync with the last key of
+    /// <see cref="HotkeyVks"/> so older config files keep working.
+    /// </summary>
     [JsonPropertyName("hotkeyVk")]
     public int HotkeyVk { get; set; } = 0xA3; // VK_RCONTROL
+
+    /// <summary>
+    /// One to three keys (e.g. Right Ctrl, or Ctrl+Space) that start dictation.
+    /// Empty falls back to <see cref="HotkeyVk"/>.
+    /// </summary>
+    [JsonPropertyName("hotkeyVks")]
+    public List<int> HotkeyVks { get; set; } = [];
+
+    [JsonIgnore]
+    public HotkeyChord DictationChord => HotkeyChord.FromVks(HotkeyVks, HotkeyVk);
+
+    public void SetDictationChord(HotkeyChord chord) {
+        HotkeyVks = chord.ToIntArray().ToList();
+        HotkeyVk = chord.LegacyVk;
+    }
 
     [JsonPropertyName("keepTranscriptOnClipboard")]
     public bool KeepTranscriptOnClipboard { get; set; } = true;
@@ -273,6 +292,7 @@ internal sealed class Settings {
             var loaded = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), JsonOptions) ?? new Settings();
             loaded.CustomCommands ??= [];
             loaded.GeminiCustomCommands ??= [];
+            loaded.HotkeyVks ??= [];
             loaded.TranslateVks ??= [];
             loaded.OpenAiApiKey ??= "";
             loaded.OpenAiTranslationModel ??= "";

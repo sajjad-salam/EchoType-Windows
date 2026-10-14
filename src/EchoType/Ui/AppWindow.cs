@@ -55,6 +55,7 @@ internal interface IAppWindowHost {
     void SetStartWithWindows(bool value);
     bool TrySetShortcut(AppShortcut shortcut, int vk);
     bool TrySetTranslateChord(HotkeyChord chord);
+    bool TrySetDictationChord(HotkeyChord chord);
     void ToggleLoginWindow();
     void OpenCommands();
     void OpenLog();
@@ -216,6 +217,7 @@ internal sealed class AppWindow : Form {
         };
         AddRow(dictation, Loc.T("Recording mode"), null, _modeSeg, 300);
         _dictationKey = AddHotkey(dictation, Loc.T("Dictation key"), AppShortcut.Dictation, optional: false);
+        _dictationKey.MultiKey = true;
 
         // ── Clean & Ask ───────────────────────────────────────
         var ai = AddPage(GlyphChat, Loc.T("Clean & Ask"), Loc.T("Models that tidy your dictation and answer your questions."));
@@ -501,7 +503,9 @@ internal sealed class AppWindow : Form {
             _startupToggle.SetSilent(s.StartWithWindows);
             _askPopupToggle.SetSilent(s.ShowAskReplyWindow);
             _languageSeg.SetSilent(Loc.Arabic ? 1 : 0);
-            _dictationKey.Value = HotkeyNames.For(s.HotkeyVk);
+            if (_capturing != _dictationKey) {
+                _dictationKey.Value = HotkeyNames.For(s.DictationChord);
+            }
             _askModelKey.Value = HotkeyLabel(s.AskModelVk);
             if (_capturing != _translateKey) {
                 _translateKey.Value = HotkeyNames.For(s.TranslateChord);
@@ -926,9 +930,9 @@ internal sealed class AppWindow : Form {
         row.Capturing = true;
         row.Tag = shortcut;
         _host.Hotkey.ResetCapture();
-        if (shortcut == AppShortcut.Translate) {
-            // Translate takes one to three keys (e.g. Ctrl+Shift+T); it is saved
-            // once every key of the combination has been released.
+        if (shortcut is AppShortcut.Translate or AppShortcut.Dictation) {
+            // Dictation and Translate take one to three keys (e.g. Ctrl+Space);
+            // they are saved once every key of the combination has been released.
             _host.Hotkey.CaptureMaxKeys = HotkeyChord.MaxKeys;
             _host.Hotkey.ChordCaptured += OnChordCaptured;
             _host.Hotkey.ChordReleased += OnChordReleased;
@@ -952,27 +956,32 @@ internal sealed class AppWindow : Form {
         _translateKey.CapturePreview = null;
         _translateKey.Value = HotkeyNames.For(_host.Settings.TranslateChord);
         _translateKey.Invalidate();
+        _dictationKey.CapturePreview = null;
+        _dictationKey.Value = HotkeyNames.For(_host.Settings.DictationChord);
+        _dictationKey.Invalidate();
     }
 
     private void OnChordCaptured(HotkeyChord chord) {
-        if (IsDisposed || _capturing != _translateKey || chord.IsEmpty) {
+        if (IsDisposed || _capturing is not { MultiKey: true } row || chord.IsEmpty) {
             return;
         }
-        _translateKey.CapturePreview = HotkeyNames.For(chord);
-        _translateKey.Invalidate();
+        row.CapturePreview = HotkeyNames.For(chord);
+        row.Invalidate();
     }
 
     private void OnChordReleased(HotkeyChord chord) {
-        if (IsDisposed || _capturing != _translateKey) {
+        if (IsDisposed || _capturing is not { MultiKey: true, Tag: AppShortcut shortcut }) {
             return;
         }
         StopCapture();
         if (chord.IsEmpty) {
             return;
         }
-        _host.TrySetTranslateChord(chord);
-        _translateKey.Value = HotkeyNames.For(_host.Settings.TranslateChord);
-        _translateKey.Invalidate();
+        if (shortcut == AppShortcut.Dictation) {
+            _host.TrySetDictationChord(chord);
+        } else {
+            _host.TrySetTranslateChord(chord);
+        }
     }
 
     private void OnKeyCaptured(uint vk) {

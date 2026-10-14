@@ -261,7 +261,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkey.CancelRequested += OnCancelRequested;
         StatusOverlay.CancelClicked += OnHudCancelClicked;
 
-        Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey VK=0x{_settings.HotkeyVk:X2}, askModelVk=0x{_settings.AskModelVk:X2}, askModel={_settings.AskProviderName}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateTo={_settings.TranslateTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating})");
+        Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey={HotkeyNames.For(_settings.DictationChord)}, askModelVk=0x{_settings.AskModelVk:X2}, askModel={_settings.AskProviderName}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateTo={_settings.TranslateTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating})");
         StartupRegistration.Apply(_settings.StartWithWindows);
         // Stay in the tray on launch. Double-click the icon (or Open EchoType) to show the window.
         _ = WarmupAsync(); // alwaysReady: load the selected model at launch (mac applyPolicyAtLaunch)
@@ -2059,7 +2059,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         !_web.IsInteractive && _online && _loggedIn && _phase == AppPhase.Idle
             ? Loc.F("Loading {0}…", _web.Site.DisplayName)
             : Loc.F(_settings.ToggleRecording ? "Press {0} to start/stop · {1}" : "Hold {0} to dictate · {1}",
-                HotkeyNames.For(_settings.HotkeyVk), _web.Site.DisplayName);
+                HotkeyNames.For(_settings.DictationChord), _web.Site.DisplayName);
 
     private void UpdateStatusText() {
         _statusItem.Text = StatusLine();
@@ -2384,7 +2384,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (_phase != AppPhase.Idle) {
             return;
         }
-        OnHoldStart(HotkeyChord.Single(_settings.HotkeyVk));
+        OnHoldStart(_settings.DictationChord);
         await Task.Delay(5000);
         if (_phase == AppPhase.Listening) {
             _hotkeyHeld = false;
@@ -2395,7 +2395,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 #endif
 
     private bool IsDictationChord(HotkeyChord chord) =>
-        chord.Count == 1 && chord.K1 == (uint)_settings.HotkeyVk;
+        chord.Equals(_settings.DictationChord);
 
     private CustomCommand? FindCommand(HotkeyChord chord) {
         if (IsDictationChord(chord)) {
@@ -2405,7 +2405,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     }
 
     private HotkeyChord[] CollectHotkeys() {
-        var chords = new List<HotkeyChord> { HotkeyChord.Single(_settings.HotkeyVk) };
+        var chords = new List<HotkeyChord> { _settings.DictationChord };
         if (_settings.AskModelVk != 0) {
             chords.Add(HotkeyChord.Single(_settings.AskModelVk));
         }
@@ -2609,13 +2609,30 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         return true;
     }
 
+    bool IAppWindowHost.TrySetDictationChord(HotkeyChord chord) {
+        if (chord.IsEmpty) {
+            ShowBalloon(Loc.T("Pick a dictation key — EchoType needs one to record."), OverlayKind.Warning);
+            return false;
+        }
+        string? conflict = HotkeyConflicts.Message(chord, _settings, _settings.DictationChord);
+        if (conflict != null) {
+            ShowBalloon(conflict, OverlayKind.Warning);
+            return false;
+        }
+        _settings.SetDictationChord(chord);
+        _settings.Save();
+        _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
+        UpdateStatusText();
+        Log.Write("settings: dictation=" + HotkeyNames.For(chord));
+        return true;
+    }
+
     bool IAppWindowHost.TrySetShortcut(AppShortcut shortcut, int vk) {
         if (shortcut == AppShortcut.Translate) {
             return ((IAppWindowHost)this).TrySetTranslateChord(HotkeyChord.Single(vk));
         }
-        if (shortcut == AppShortcut.Dictation && vk <= 0) {
-            ShowBalloon(Loc.T("Pick a dictation key — EchoType needs one to record."), OverlayKind.Warning);
-            return false;
+        if (shortcut == AppShortcut.Dictation) {
+            return ((IAppWindowHost)this).TrySetDictationChord(HotkeyChord.Single(vk));
         }
         if (shortcut == AppShortcut.ChatGpt && vk != 0 && vk == _settings.GeminiSwitchVk) {
             ShowBalloon(Loc.T("ChatGPT and Gemini cannot share the same shortcut."), OverlayKind.Warning);
@@ -2636,7 +2653,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
 
         int ignore = shortcut switch {
-            AppShortcut.Dictation => _settings.HotkeyVk,
             AppShortcut.AskModel => _settings.AskModelVk,
             AppShortcut.PressEnter => _settings.PressEnterToggleVk,
             AppShortcut.AutoClean => _settings.AutoCleanToggleVk,
@@ -2653,9 +2669,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
 
         switch (shortcut) {
-            case AppShortcut.Dictation:
-                _settings.HotkeyVk = vk;
-                break;
             case AppShortcut.AskModel:
                 _settings.AskModelVk = vk;
                 break;
