@@ -23,13 +23,14 @@ internal static class HotkeyConflicts {
             return "Enter cannot be reserved — EchoType would swallow every Enter key.";
         }
 
-        var dictation = settings.DictationChord;
-        bool ignoreDictation = (!ignoreChord.IsEmpty && dictation.Equals(ignoreChord))
-            || (dictation.Count == 1 && ignoreVks.Contains((int)dictation.K1));
-        if (!ignoreDictation && Conflicts(chord, dictation)) {
-            return chord.Count == 1 && dictation.Count == 1
-                ? $"That key is already the dictation shortcut ({HotkeyNames.For(dictation)})."
-                : $"That shortcut overlaps the dictation shortcut ({HotkeyNames.For(dictation)}).";
+        foreach (var dictation in settings.DictationChords) {
+            bool ignoreDictation = (!ignoreChord.IsEmpty && dictation.Equals(ignoreChord))
+                || (dictation.Count == 1 && ignoreVks.Contains((int)dictation.K1));
+            if (!ignoreDictation && Conflicts(chord, dictation)) {
+                return chord.Count == 1 && dictation.Count == 1
+                    ? $"That key is already the dictation shortcut ({HotkeyNames.For(dictation)})."
+                    : $"That shortcut overlaps the dictation shortcut ({HotkeyNames.For(dictation)}).";
+            }
         }
         if (ConflictsWithReserved(chord, settings.PressEnterToggleVk, ignoreVks)) {
             return chord.Count == 1

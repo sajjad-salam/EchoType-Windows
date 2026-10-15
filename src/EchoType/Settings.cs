@@ -33,6 +33,34 @@ internal sealed class Settings {
         HotkeyVk = chord.LegacyVk;
     }
 
+    /// <summary>
+    /// Optional second dictation shortcut (e.g. Ctrl+Space alongside Right Ctrl).
+    /// Either one starts the same dictation. Empty = none.
+    /// </summary>
+    [JsonPropertyName("secondHotkeyVks")]
+    public List<int> SecondHotkeyVks { get; set; } = [];
+
+    [JsonIgnore]
+    public HotkeyChord SecondDictationChord => HotkeyChord.FromVks(SecondHotkeyVks);
+
+    public void SetSecondDictationChord(HotkeyChord chord) =>
+        SecondHotkeyVks = chord.ToIntArray().ToList();
+
+    /// <summary>Every non-empty dictation shortcut, primary first.</summary>
+    [JsonIgnore]
+    public IEnumerable<HotkeyChord> DictationChords {
+        get {
+            yield return DictationChord;
+            var second = SecondDictationChord;
+            if (!second.IsEmpty && !second.Equals(DictationChord)) {
+                yield return second;
+            }
+        }
+    }
+
+    public bool IsDictationChord(HotkeyChord chord) =>
+        !chord.IsEmpty && DictationChords.Any(d => d.Equals(chord));
+
     [JsonPropertyName("keepTranscriptOnClipboard")]
     public bool KeepTranscriptOnClipboard { get; set; } = true;
 
@@ -293,6 +321,7 @@ internal sealed class Settings {
             loaded.CustomCommands ??= [];
             loaded.GeminiCustomCommands ??= [];
             loaded.HotkeyVks ??= [];
+            loaded.SecondHotkeyVks ??= [];
             loaded.TranslateVks ??= [];
             loaded.OpenAiApiKey ??= "";
             loaded.OpenAiTranslationModel ??= "";

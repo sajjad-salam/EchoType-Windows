@@ -605,7 +605,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (isDictation && ConsumeCancelDoubleTap()) {
             // In toggle mode the second press of the same recording key stops
             // listening; don't treat that as the cancel double-tap.
-            if (!(_settings.ToggleRecording && _phase == AppPhase.Listening && chord.Equals(_sessionChord))) {
+            if (!(_settings.ToggleRecording && _phase == AppPhase.Listening && IsSessionChord(chord))) {
                 if (_phase != AppPhase.Idle) {
                     _ = CancelAndResetAsync("double-tap, cancelled");
                 }
@@ -650,7 +650,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             }
             case AppPhase.Waking:
             case AppPhase.Engaging:
-                if (_settings.ToggleRecording && chord.Equals(_sessionChord)) {
+                if (_settings.ToggleRecording && IsSessionChord(chord)) {
                     _ = CancelAndResetAsync("toggle press while opening, cancelled");
                     break;
                 }
@@ -658,7 +658,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 Log.Write("dictation: second press while opening");
                 break;
             case AppPhase.Listening:
-                if (_settings.ToggleRecording && chord.Equals(_sessionChord)) {
+                if (_settings.ToggleRecording && IsSessionChord(chord)) {
                     StopToggleListening();
                     break;
                 }
@@ -2059,7 +2059,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         !_web.IsInteractive && _online && _loggedIn && _phase == AppPhase.Idle
             ? Loc.F("Loading {0}…", _web.Site.DisplayName)
             : Loc.F(_settings.ToggleRecording ? "Press {0} to start/stop · {1}" : "Hold {0} to dictate · {1}",
-                HotkeyNames.For(_settings.DictationChord), _web.Site.DisplayName);
+                string.Join(" / ", _settings.DictationChords.Select(HotkeyNames.For)), _web.Site.DisplayName);
 
     private void UpdateStatusText() {
         _statusItem.Text = StatusLine();
@@ -2395,7 +2395,14 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 #endif
 
     private bool IsDictationChord(HotkeyChord chord) =>
-        chord.Equals(_settings.DictationChord);
+        _settings.IsDictationChord(chord);
+
+    /// <summary>
+    /// Whether a press belongs to the running session — the same chord, or any
+    /// dictation shortcut when the session is dictation (Right Ctrl starts, Ctrl+Space stops).
+    /// </summary>
+    private bool IsSessionChord(HotkeyChord chord) =>
+        chord.Equals(_sessionChord) || (IsDictationChord(chord) && IsDictationChord(_sessionChord));
 
     private CustomCommand? FindCommand(HotkeyChord chord) {
         if (IsDictationChord(chord)) {
@@ -2405,7 +2412,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     }
 
     private HotkeyChord[] CollectHotkeys() {
-        var chords = new List<HotkeyChord> { _settings.DictationChord };
+        var chords = new List<HotkeyChord>(_settings.DictationChords);
         if (_settings.AskModelVk != 0) {
             chords.Add(HotkeyChord.Single(_settings.AskModelVk));
         }
@@ -2627,12 +2634,31 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         return true;
     }
 
+    bool IAppWindowHost.TrySetSecondDictationChord(HotkeyChord chord) {
+        if (!chord.IsEmpty) {
+            string? conflict = HotkeyConflicts.Message(chord, _settings, _settings.SecondDictationChord);
+            if (conflict != null) {
+                ShowBalloon(conflict, OverlayKind.Warning);
+                return false;
+            }
+        }
+        _settings.SetSecondDictationChord(chord);
+        _settings.Save();
+        _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
+        UpdateStatusText();
+        Log.Write("settings: second dictation=" + (chord.IsEmpty ? "(none)" : HotkeyNames.For(chord)));
+        return true;
+    }
+
     bool IAppWindowHost.TrySetShortcut(AppShortcut shortcut, int vk) {
         if (shortcut == AppShortcut.Translate) {
             return ((IAppWindowHost)this).TrySetTranslateChord(HotkeyChord.Single(vk));
         }
         if (shortcut == AppShortcut.Dictation) {
             return ((IAppWindowHost)this).TrySetDictationChord(HotkeyChord.Single(vk));
+        }
+        if (shortcut == AppShortcut.SecondDictation) {
+            return ((IAppWindowHost)this).TrySetSecondDictationChord(HotkeyChord.Single(vk));
         }
         if (shortcut == AppShortcut.ChatGpt && vk != 0 && vk == _settings.GeminiSwitchVk) {
             ShowBalloon(Loc.T("ChatGPT and Gemini cannot share the same shortcut."), OverlayKind.Warning);

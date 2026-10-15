@@ -6,6 +6,7 @@ namespace EchoType.Ui;
 
 internal enum AppShortcut {
     Dictation,
+    SecondDictation,
     AskModel,
     Translate,
     PressEnter,
@@ -56,6 +57,7 @@ internal interface IAppWindowHost {
     bool TrySetShortcut(AppShortcut shortcut, int vk);
     bool TrySetTranslateChord(HotkeyChord chord);
     bool TrySetDictationChord(HotkeyChord chord);
+    bool TrySetSecondDictationChord(HotkeyChord chord);
     void ToggleLoginWindow();
     void OpenCommands();
     void OpenLog();
@@ -97,6 +99,7 @@ internal sealed class AppWindow : Form {
     private readonly HudSegmented _modelSeg;
     private readonly HudSegmented _modeSeg;
     private readonly HudHotkeyRow _dictationKey;
+    private readonly HudHotkeyRow _secondDictationKey;
     private readonly HudToggleRow _cleanToggle;
     private readonly HudSegmented _cleanSeg;
     private readonly HudHotkeyRow _cleanKey;
@@ -218,6 +221,8 @@ internal sealed class AppWindow : Form {
         AddRow(dictation, Loc.T("Recording mode"), null, _modeSeg, 300);
         _dictationKey = AddHotkey(dictation, Loc.T("Dictation key"), AppShortcut.Dictation, optional: false);
         _dictationKey.MultiKey = true;
+        _secondDictationKey = AddHotkey(dictation, Loc.T("Second dictation key"), AppShortcut.SecondDictation);
+        _secondDictationKey.MultiKey = true;
 
         // ── Clean & Ask ───────────────────────────────────────
         var ai = AddPage(GlyphChat, Loc.T("Clean & Ask"), Loc.T("Models that tidy your dictation and answer your questions."));
@@ -506,6 +511,9 @@ internal sealed class AppWindow : Form {
             if (_capturing != _dictationKey) {
                 _dictationKey.Value = HotkeyNames.For(s.DictationChord);
             }
+            if (_capturing != _secondDictationKey) {
+                _secondDictationKey.Value = HotkeyNames.For(s.SecondDictationChord);
+            }
             _askModelKey.Value = HotkeyLabel(s.AskModelVk);
             if (_capturing != _translateKey) {
                 _translateKey.Value = HotkeyNames.For(s.TranslateChord);
@@ -521,7 +529,7 @@ internal sealed class AppWindow : Form {
             _enterKey.Value = HotkeyLabel(s.PressEnterToggleVk);
             _cleanKey.Value = HotkeyLabel(s.AutoCleanToggleVk);
             _windowKey.Value = HotkeyLabel(s.OpenModelWindowVk);
-            foreach (var row in new[] { _dictationKey, _askModelKey, _translateKey, _chatgptKey, _geminiKey, _claudeKey, _enterKey, _cleanKey, _windowKey }) {
+            foreach (var row in new[] { _dictationKey, _secondDictationKey, _askModelKey, _translateKey, _chatgptKey, _geminiKey, _claudeKey, _enterKey, _cleanKey, _windowKey }) {
                 row.Invalidate();
             }
             _loginButton.Text = !_host.Online ? Loc.T("Retry connection")
@@ -930,7 +938,7 @@ internal sealed class AppWindow : Form {
         row.Capturing = true;
         row.Tag = shortcut;
         _host.Hotkey.ResetCapture();
-        if (shortcut is AppShortcut.Translate or AppShortcut.Dictation) {
+        if (shortcut is AppShortcut.Translate or AppShortcut.Dictation or AppShortcut.SecondDictation) {
             // Dictation and Translate take one to three keys (e.g. Ctrl+Space);
             // they are saved once every key of the combination has been released.
             _host.Hotkey.CaptureMaxKeys = HotkeyChord.MaxKeys;
@@ -959,6 +967,9 @@ internal sealed class AppWindow : Form {
         _dictationKey.CapturePreview = null;
         _dictationKey.Value = HotkeyNames.For(_host.Settings.DictationChord);
         _dictationKey.Invalidate();
+        _secondDictationKey.CapturePreview = null;
+        _secondDictationKey.Value = HotkeyNames.For(_host.Settings.SecondDictationChord);
+        _secondDictationKey.Invalidate();
     }
 
     private void OnChordCaptured(HotkeyChord chord) {
@@ -979,6 +990,8 @@ internal sealed class AppWindow : Form {
         }
         if (shortcut == AppShortcut.Dictation) {
             _host.TrySetDictationChord(chord);
+        } else if (shortcut == AppShortcut.SecondDictation) {
+            _host.TrySetSecondDictationChord(chord);
         } else {
             _host.TrySetTranslateChord(chord);
         }

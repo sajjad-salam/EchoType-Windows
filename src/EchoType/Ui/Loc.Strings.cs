@@ -152,6 +152,7 @@ internal static partial class Loc {
         ["Edit workspace modes…"] = "تعديل أوضاع مساحة العمل…",
         ["Recording"] = "التسجيل",
         ["Dictation key"] = "مفتاح الإملاء",
+        ["Second dictation key"] = "مفتاح إملاء ثانٍ",
         ["Ask model"] = "سؤال النموذج",
         ["Translate"] = "الترجمة",
         ["OpenAI API key…"] = "مفتاح OpenAI API…",
