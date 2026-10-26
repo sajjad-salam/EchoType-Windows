@@ -5,14 +5,16 @@ using EchoType.Native;
 namespace EchoType.Ui;
 
 /// <summary>
-/// Visual identity shared by the status HUD and the main window: the dark
-/// rounded pill, hairline border, soft shadow, and the HUD type scale.
+/// Visual identity of EchoType, after Typeless: the floating HUD is a black pill
+/// with a white voice wave; the main window and popups are light paper — warm
+/// off-white pages, white cards with hairline borders, ink text and black pill
+/// buttons.
 /// </summary>
 internal static class HudTheme {
 
     public static readonly Color Window = Color.FromArgb(255, 10, 11, 13);
     public static readonly Color Sidebar = Color.FromArgb(255, 14, 15, 18);
-    public static readonly Color Pill = Color.FromArgb(242, 18, 20, 24);
+    public static readonly Color Pill = Color.FromArgb(246, 14, 14, 16);
     public static readonly Color Card = Color.FromArgb(255, 18, 20, 24);
     public static readonly Color Border = Color.FromArgb(48, 255, 255, 255);
     public static readonly Color Title = Color.FromArgb(210, 214, 220);
@@ -29,12 +31,35 @@ internal static class HudTheme {
     public static readonly Color PressFill = Color.FromArgb(42, 255, 255, 255);
     public static readonly Color Divider = Color.FromArgb(255, 30, 33, 38);
 
+    // ── Paper: the light palette of the main window and popups ──
+    public static readonly Color Paper = Color.FromArgb(255, 250, 249, 247);
+    public static readonly Color PaperSide = Color.FromArgb(255, 243, 242, 238);
+    public static readonly Color Surface = Color.FromArgb(255, 255, 255, 255);
+    public static readonly Color Well = Color.FromArgb(255, 241, 240, 236);
+    public static readonly Color WellHover = Color.FromArgb(255, 233, 231, 226);
+    public static readonly Color Hairline = Color.FromArgb(255, 232, 230, 225);
+    public static readonly Color HairlineStrong = Color.FromArgb(255, 216, 213, 207);
+    public static readonly Color Rule = Color.FromArgb(255, 240, 238, 234);
+    public static readonly Color Ink = Color.FromArgb(255, 17, 17, 17);
+    public static readonly Color InkHover = Color.FromArgb(255, 48, 48, 50);
+    public static readonly Color InkSoft = Color.FromArgb(255, 82, 82, 86);
+    public static readonly Color InkMuted = Color.FromArgb(255, 128, 127, 124);
+    public static readonly Color OnInk = Color.FromArgb(255, 255, 255, 255);
+    public static readonly Color OnInkMuted = Color.FromArgb(255, 163, 163, 168);
+    public static readonly Color ToggleOff = Color.FromArgb(255, 222, 220, 214);
+    public static readonly Color Positive = Color.FromArgb(255, 22, 163, 74);
+    public static readonly Color Caution = Color.FromArgb(255, 217, 119, 6);
+    public static readonly Color Negative = Color.FromArgb(255, 220, 38, 38);
+    public static readonly Color NegativeWash = Color.FromArgb(255, 254, 236, 236);
+    public static readonly Color Info = Color.FromArgb(255, 37, 99, 235);
+
     public const int PillRadiusDip = 18;
     public const int ControlRadiusDip = 11;
     public const int CaptionHeightDip = 64;
     public const int InDurationMs = 320;
     public const int OutDurationMs = 240;
 
+    public static readonly Font Hero = Font(21f, FontStyle.Bold);
     public static readonly Font Display = Font(16f, FontStyle.Bold);
     public static readonly Font Caption = Font(13.5f, FontStyle.Bold);
     public static readonly Font Section = Font(10.5f, FontStyle.Bold);
@@ -66,6 +91,22 @@ internal static class HudTheme {
             AppPhase.Transcribing or AppPhase.ChoosingAction or AppPhase.Generating => Blue,
             AppPhase.Waking or AppPhase.Engaging => Amber,
             _ => pageReady ? Teal : Title,
+        };
+    }
+
+    /// <summary>The phase colour on paper: the same meaning as <see cref="PhaseAccent"/>, dark enough for a light page.</summary>
+    public static Color PaperAccent(AppPhase phase, bool loggedIn, bool online, bool pageReady) {
+        if (!online) {
+            return Caution;
+        }
+        if (!loggedIn) {
+            return Negative;
+        }
+        return phase switch {
+            AppPhase.Listening => Negative,
+            AppPhase.Transcribing or AppPhase.ChoosingAction or AppPhase.Generating => Info,
+            AppPhase.Waking or AppPhase.Engaging => Caution,
+            _ => pageReady ? Positive : InkMuted,
         };
     }
 
@@ -110,7 +151,8 @@ internal static class HudTheme {
 
     private static Font LatinFont(float size, FontStyle style) {
         try {
-            return new Font("Segoe UI Variable Text", size, style, GraphicsUnit.Point);
+            // The Display optical size for headings, Text for everything else.
+            return new Font(size >= 14f ? "Segoe UI Variable Display" : "Segoe UI Variable Text", size, style, GraphicsUnit.Point);
         } catch (ArgumentException) {
             return new Font("Segoe UI", size, style, GraphicsUnit.Point);
         }
@@ -135,16 +177,16 @@ internal static class HudTheme {
     public static void DrawRowText(Graphics g, Rectangle area, string title, string? description, Color? descriptionColor = null) {
         const TextFormatFlags flags = TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
         if (string.IsNullOrEmpty(description)) {
-            TextRenderer.DrawText(g, title, BodyText, area, Body, Loc.Flags(flags | TextFormatFlags.VerticalCenter));
+            TextRenderer.DrawText(g, title, BodyText, area, Ink, Loc.Flags(flags | TextFormatFlags.VerticalCenter));
             return;
         }
         int titleH = TextRenderer.MeasureText(g, string.IsNullOrEmpty(title) ? "Ag" : title, BodyText, Size.Empty, flags).Height;
         int descH = TextRenderer.MeasureText(g, description, Tiny, Size.Empty, flags).Height;
         int gap = 2;
         int top = area.Top + (area.Height - titleH - descH - gap) / 2;
-        TextRenderer.DrawText(g, title, BodyText, new Rectangle(area.Left, top, area.Width, titleH), Body, Loc.Flags(flags));
+        TextRenderer.DrawText(g, title, BodyText, new Rectangle(area.Left, top, area.Width, titleH), Ink, Loc.Flags(flags));
         TextRenderer.DrawText(g, description, Tiny, new Rectangle(area.Left, top + titleH + gap, area.Width, descH),
-            descriptionColor ?? Muted, Loc.Flags(flags));
+            descriptionColor ?? InkMuted, Loc.Flags(flags));
     }
 
     public static int Dip(Control control, int value) {
@@ -171,10 +213,11 @@ internal static class HudTheme {
         g.DrawPath(border, path);
     }
 
+    /// <summary>A white paper card with a hairline border.</summary>
     public static void DrawCard(Graphics g, Rectangle pill, int radius) {
         using var path = Rounded(pill, radius);
-        using var fill = new SolidBrush(Card);
-        using var border = new Pen(Border, 1f);
+        using var fill = new SolidBrush(Surface);
+        using var border = new Pen(Hairline, 1f);
         g.FillPath(fill, path);
         g.DrawPath(border, path);
     }
@@ -292,7 +335,8 @@ internal static class HudTheme {
             (int)(a.B + (b.B - a.B) * t));
     }
 
-    public static void ApplyChrome(Form form) {
+    /// <summary>Rounded DWM corners and border; <paramref name="paper"/> picks the light frame.</summary>
+    public static void ApplyChrome(Form form, bool paper = false) {
         if (!form.IsHandleCreated) {
             return;
         }
@@ -300,10 +344,12 @@ internal static class HudTheme {
             int round = NativeMethods.DWMWCP_ROUND;
             NativeMethods.DwmSetWindowAttribute(
                 form.Handle, NativeMethods.DWMWA_WINDOW_CORNER_PREFERENCE, ref round, sizeof(int));
-            int border = 0x00181412; // COLORREF of (18, 20, 24)
+            int border = paper
+                ? 0x00CFD5D8 // COLORREF of (216, 213, 207)
+                : 0x00181412; // COLORREF of (18, 20, 24)
             NativeMethods.DwmSetWindowAttribute(
                 form.Handle, NativeMethods.DWMWA_BORDER_COLOR, ref border, sizeof(int));
-            int dark = 1;
+            int dark = paper ? 0 : 1;
             NativeMethods.DwmSetWindowAttribute(
                 form.Handle, NativeMethods.DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
         } catch (DllNotFoundException) {

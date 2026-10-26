@@ -35,7 +35,7 @@ Pick **ChatGPT**, **Gemini** or **Claude** from the window or the tray menu, or 
 
 Add extra recording shortcuts that send the transcript to the selected model with your own prompt and paste the model's reply instead. A command can be one button or a group of buttons. Custom commands are shared across ChatGPT and Gemini, and they follow the same hold vs press-to-start/stop mode as dictation.
 
-This is the Windows port of [DevWizardHQ/EchoType](https://github.com/DevWizardHQ/EchoType) (macOS). Same idea, rebuilt natively in C# / WinForms / WebView2. Settings live in the EchoType window — the same dark, rounded HUD language as the on-screen notices — and the tray icon stays for quick access while you dictate.
+This is the Windows port of [DevWizardHQ/EchoType](https://github.com/DevWizardHQ/EchoType) (macOS). Same idea, rebuilt natively in C# / WinForms / WebView2. Settings live in the EchoType window — a light, Typeless-style design (warm off-white pages, white cards, black pill buttons) beside the black floating dictation pill — and the tray icon stays for quick access while you dictate.
 
 ```text
 Right Ctrl (hold, or press to start/stop)

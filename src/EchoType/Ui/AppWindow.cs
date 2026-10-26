@@ -72,15 +72,16 @@ internal interface IAppWindowHost {
 }
 
 /// <summary>
-/// Main EchoType window — the same dark language as the HUD, with every setting that
-/// used to live only in the tray. A sidebar switches between short pages so each group
+/// Main EchoType window — light paper in the style of Typeless (warm off-white pages,
+/// white cards, ink text, black pill buttons), with every setting that used to live
+/// only in the tray. A sidebar switches between short pages so each group
 /// of settings fits without scrolling.
 /// </summary>
 internal sealed class AppWindow : Form {
 
     private const int SidebarWidthDip = 224;
-    private const int HeaderHeightDip = 92;
-    private const int NavTopDip = 92;
+    private const int HeaderHeightDip = 100;
+    private const int NavTopDip = 96;
     private const int PagePadDip = 28;
 
     // Segoe Fluent Icons / MDL2 Assets code points.
@@ -171,8 +172,8 @@ internal sealed class AppWindow : Form {
         ShowInTaskbar = true;
         MinimumSize = new Size(760, 520);
         Size = new Size(920, 680);
-        BackColor = HudTheme.Window;
-        ForeColor = HudTheme.Body;
+        BackColor = HudTheme.Paper;
+        ForeColor = HudTheme.Ink;
         DoubleBuffered = true;
         KeyPreview = true;
         Font = HudTheme.BodyText;
@@ -180,7 +181,7 @@ internal sealed class AppWindow : Form {
         _sidebar = new Panel {
             Dock = Loc.Rtl ? DockStyle.Right : DockStyle.Left,
             Width = SidebarWidthDip,
-            BackColor = HudTheme.Sidebar,
+            BackColor = HudTheme.PaperSide,
             TabIndex = 0,
         };
         _sidebar.Paint += OnSidebarPaint;
@@ -189,7 +190,7 @@ internal sealed class AppWindow : Form {
         _header = new Panel {
             Dock = DockStyle.Top,
             Height = HeaderHeightDip,
-            BackColor = HudTheme.Window,
+            BackColor = HudTheme.Paper,
             TabIndex = 2,
         };
         _header.Paint += OnHeaderPaint;
@@ -205,7 +206,7 @@ internal sealed class AppWindow : Form {
         _scrollHost = new Panel {
             Dock = DockStyle.Fill,
             AutoScroll = true,
-            BackColor = HudTheme.Window,
+            BackColor = HudTheme.Paper,
             TabIndex = 1,
         };
         _scrollHost.ClientSizeChanged += (_, _) => Relayout();
@@ -214,8 +215,10 @@ internal sealed class AppWindow : Form {
         var home = AddPage(GlyphHome, Loc.T("Home"), Loc.T("Status, model and how you dictate."));
         _statusCard = AddCard(home);
         _statusCard.Dividers = false;
+        _statusCard.Inked = true;
         _statusCard.Paint += OnStatusCardPaint;
-        _loginButton = MakeButton(Loc.T("Open window"), HudButton.Kind.Primary);
+        _loginButton = MakeButton(Loc.T("Open window"), HudButton.Kind.Inverse);
+        _loginButton.BackColor = HudTheme.Ink;
         _loginButton.Click += (_, _) => _host.ToggleLoginWindow();
         _statusCard.Controls.Add(_loginButton);
 
@@ -302,7 +305,7 @@ internal sealed class AppWindow : Form {
         var editCommands = MakeButton(Loc.T("Add or edit…"), HudButton.Kind.Ghost);
         editCommands.Click += (_, _) => _host.OpenCommands();
         AddRow(commandsCard, Loc.T("Custom commands"), Loc.T("Your own prompts, run on what you dictate."), editCommands, 200);
-        _commands = new HudCommandList { BackColor = HudTheme.Card };
+        _commands = new HudCommandList { BackColor = HudTheme.Surface };
         commandsCard.Controls.Add(_commands);
 
         AddSection(commands, Loc.T("Voice & text"));
@@ -363,7 +366,7 @@ internal sealed class AppWindow : Form {
 
         host.UiChanged += OnHostChanged;
         Load += (_, _) => {
-            HudTheme.ApplyChrome(this);
+            HudTheme.ApplyChrome(this, paper: true);
             ApplyChromeMetrics();
             ShowPage(_lastPage);
             SyncFromHost();
@@ -396,13 +399,13 @@ internal sealed class AppWindow : Form {
 
     protected override void OnShown(EventArgs e) {
         base.OnShown(e);
-        HudTheme.ApplyChrome(this);
+        HudTheme.ApplyChrome(this, paper: true);
         Relayout();
     }
 
     protected override void OnHandleCreated(EventArgs e) {
         base.OnHandleCreated(e);
-        HudTheme.ApplyChrome(this);
+        HudTheme.ApplyChrome(this, paper: true);
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e) {
@@ -553,7 +556,6 @@ internal sealed class AppWindow : Form {
                 return (c.DisplayName, HotkeyNames.For(c.Chord));
             }).ToList());
             Icon = TrayIcons.For(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
-            _statusCard.Accent = HudTheme.PhaseAccent(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
             _statusCard.Invalidate();
             _sidebar.Invalidate();
             Relayout();
@@ -597,52 +599,70 @@ internal sealed class AppWindow : Form {
 
     private void OnSidebarPaint(object? sender, PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
-        e.Graphics.Clear(HudTheme.Sidebar);
+        e.Graphics.Clear(HudTheme.PaperSide);
         int w = _sidebar.Width;
 
-        // Brand: a status dot that glows and pulses while listening, the name, the phase.
-        Color accent = HudTheme.PhaseAccent(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
-        float pulse = _host.Phase == AppPhase.Listening
-            ? 0.55f + 0.45f * MathF.Sin(_time * 5.5f)
-            : 1f;
-        float glow = HudTheme.DipF(this, 7)
-            + HudTheme.DipF(this, 3) * (pulse - 0.55f)
-            + HudTheme.DipF(this, 4) * _smoothed * pulse;
-        float cx = HudTheme.DipF(this, 34);
-        float cy = HudTheme.DipF(this, 40);
-        if (Loc.Rtl) {
-            cx = w - cx;
+        // Brand: a black rounded tile with a white voice wave that moves while you speak.
+        int markSize = HudTheme.Dip(this, 34);
+        var mark = Loc.Mirror(new Rectangle(HudTheme.Dip(this, 22), HudTheme.Dip(this, 26), markSize, markSize), w);
+        using (var path = HudTheme.Rounded(mark, HudTheme.Dip(this, 10)))
+        using (var tile = new SolidBrush(HudTheme.Ink)) {
+            e.Graphics.FillPath(tile, path);
         }
-        using (var glowBrush = new SolidBrush(Color.FromArgb((int)(36 + 40 * _smoothed), accent))) {
-            e.Graphics.FillEllipse(glowBrush, cx - glow, cy - glow, glow * 2, glow * 2);
+        float[] rest = [0.38f, 0.7f, 1f, 0.62f, 0.34f];
+        float barW = HudTheme.DipF(this, 2.6f);
+        float barGap = HudTheme.DipF(this, 2.4f);
+        float barsW = rest.Length * barW + (rest.Length - 1) * barGap;
+        float barX = mark.Left + (mark.Width - barsW) / 2f;
+        float midY = mark.Top + mark.Height / 2f;
+        float maxBar = mark.Height * 0.56f;
+        bool listening = _host.Phase == AppPhase.Listening;
+        using (var white = new SolidBrush(HudTheme.OnInk)) {
+            for (int i = 0; i < rest.Length; i++) {
+                float live = listening ? _bars[Math.Min(_bars.Length - 1, 6 + i * 3)] : 0f;
+                float h = Math.Max(barW, maxBar * Math.Clamp(rest[i] * (0.55f + 0.45f * _smoothed) + live * 0.5f, 0.2f, 1f));
+                using var bar = HudTheme.Rounded(new RectangleF(barX + i * (barW + barGap), midY - h / 2f, barW, h), barW / 2f);
+                e.Graphics.FillPath(white, bar);
+            }
         }
-        using (var dot = new SolidBrush(accent)) {
-            float d = HudTheme.DipF(this, 4.5f);
-            e.Graphics.FillEllipse(dot, cx - d, cy - d, d * 2, d * 2);
-        }
-        int textLeft = HudTheme.Dip(this, 54);
+
+        int textLeft = HudTheme.Dip(this, 22 + 34 + 12);
         int textWidth = Math.Max(0, w - textLeft - HudTheme.Dip(this, 16));
         const TextFormatFlags flags = TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
         TextRenderer.DrawText(e.Graphics, "EchoType", HudTheme.Caption,
-            Loc.Mirror(new Rectangle(textLeft, HudTheme.Dip(this, 22), textWidth, HudTheme.Dip(this, 24)), w),
-            HudTheme.Body, Loc.Flags(flags));
+            Loc.Mirror(new Rectangle(textLeft, HudTheme.Dip(this, 24), textWidth, HudTheme.Dip(this, 22)), w),
+            HudTheme.Ink, Loc.Flags(flags));
+
+        // Phase: a small status dot (pulsing while listening) and its label.
+        Color accent = HudTheme.PaperAccent(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
+        float pulse = listening ? 0.6f + 0.4f * MathF.Sin(_time * 5.5f) : 1f;
+        float dotR = HudTheme.DipF(this, 3.5f);
+        float dotX = textLeft + dotR;
+        float dotY = HudTheme.DipF(this, 49 + 7);
+        if (Loc.Rtl) {
+            dotX = w - dotX;
+        }
+        using (var dot = new SolidBrush(Color.FromArgb((int)(255 * pulse), accent))) {
+            e.Graphics.FillEllipse(dot, dotX - dotR, dotY - dotR, dotR * 2, dotR * 2);
+        }
+        int phaseLeft = textLeft + HudTheme.Dip(this, 12);
         TextRenderer.DrawText(e.Graphics, HudTheme.PhaseLabel(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady),
             HudTheme.Tiny,
-            Loc.Mirror(new Rectangle(textLeft, HudTheme.Dip(this, 46), textWidth, HudTheme.Dip(this, 18)), w),
-            accent, Loc.Flags(flags));
+            Loc.Mirror(new Rectangle(phaseLeft, HudTheme.Dip(this, 48), Math.Max(0, textWidth - HudTheme.Dip(this, 12)), HudTheme.Dip(this, 16)), w),
+            HudTheme.InkSoft, Loc.Flags(flags));
 
         TextRenderer.DrawText(e.Graphics, Loc.F("Version {0}", _version), HudTheme.Tiny,
             Loc.Mirror(new Rectangle(HudTheme.Dip(this, 26), _sidebar.Height - HudTheme.Dip(this, 36), textWidth, HudTheme.Dip(this, 18)), w),
-            HudTheme.Muted, Loc.Flags(flags));
+            HudTheme.InkMuted, Loc.Flags(flags));
 
         // Hairline between the sidebar and the page.
-        using var line = new SolidBrush(HudTheme.Divider);
+        using var line = new SolidBrush(HudTheme.Hairline);
         e.Graphics.FillRectangle(line, Loc.Rtl ? 0 : w - 1, 0, 1, _sidebar.Height);
     }
 
     private void OnHeaderPaint(object? sender, PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
-        e.Graphics.Clear(HudTheme.Window);
+        e.Graphics.Clear(HudTheme.Paper);
         if (_pages.Count == 0) {
             return;
         }
@@ -652,43 +672,66 @@ internal sealed class AppWindow : Form {
         int buttonsEdge = Loc.Rtl ? w - _min.Right : _min.Left;
         int right = Math.Max(left + 40, buttonsEdge - HudTheme.Dip(this, 12));
         const TextFormatFlags flags = TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
-        TextRenderer.DrawText(e.Graphics, page.Title, HudTheme.Display,
-            Loc.Mirror(new Rectangle(left, HudTheme.Dip(this, 26), right - left, HudTheme.Dip(this, 32)), w),
-            HudTheme.Body, Loc.Flags(flags));
+        TextRenderer.DrawText(e.Graphics, page.Title, HudTheme.Hero,
+            Loc.Mirror(new Rectangle(left, HudTheme.Dip(this, 28), right - left, HudTheme.Dip(this, 38)), w),
+            HudTheme.Ink, Loc.Flags(flags));
         // The subtitle may run under the caption buttons; they sit higher.
         TextRenderer.DrawText(e.Graphics, page.Subtitle, HudTheme.Small,
-            Loc.Mirror(new Rectangle(left, HudTheme.Dip(this, 58), w - left * 2, HudTheme.Dip(this, 20)), w),
-            HudTheme.Muted, Loc.Flags(flags));
+            Loc.Mirror(new Rectangle(left, HudTheme.Dip(this, 68), w - left * 2, HudTheme.Dip(this, 20)), w),
+            HudTheme.InkMuted, Loc.Flags(flags));
     }
 
     private void OnStatusCardPaint(object? sender, PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
         int cw = _statusCard.Width;
-        int left = HudTheme.Dip(this, 30);
-        int trailing = cw - _loginButton.Width - HudTheme.Dip(this, 22 + 20);
+        int left = HudTheme.Dip(this, 28);
+        int trailing = cw - _loginButton.Width - HudTheme.Dip(this, 24 + 20);
         bool listening = _host.Phase == AppPhase.Listening;
-        int waveWidth = HudTheme.Dip(this, 120);
+        int waveWidth = HudTheme.Dip(this, 132);
         int textWidth = Math.Max(0, trailing - left - (listening ? waveWidth + HudTheme.Dip(this, 16) : 0));
 
         string phase = HudTheme.PhaseLabel(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
         string body = !_host.Online ? Loc.T("No internet")
             : !_host.LoggedIn ? _host.ModelName + " · " + Loc.T("Sign in to dictate")
             : _host.StatusText;
-        int titleH = HudTheme.Dip(this, 30);
+        int chipH = HudTheme.Dip(this, 18);
+        int titleH = HudTheme.Dip(this, 36);
         int bodyH = HudTheme.Dip(this, 20);
-        int top = (_statusCard.Height - titleH - bodyH) / 2;
+        int gap = HudTheme.Dip(this, 6);
+        int top = (_statusCard.Height - chipH - gap - titleH - bodyH) / 2;
         const TextFormatFlags flags = TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
-        TextRenderer.DrawText(e.Graphics, phase, HudTheme.Display,
-            Loc.Mirror(new Rectangle(left, top, textWidth, titleH), cw),
-            HudTheme.Body, Loc.Flags(flags));
+
+        // Status line: a coloured dot and the model, like a small eyebrow above the phase.
+        Color accent = HudTheme.PhaseAccent(_host.Phase, _host.LoggedIn, _host.Online, _host.PageReady);
+        float dotR = HudTheme.DipF(this, 4);
+        float dotX = left + dotR;
+        if (Loc.Rtl) {
+            dotX = cw - dotX;
+        }
+        float dotY = top + chipH / 2f;
+        using (var glow = new SolidBrush(Color.FromArgb(60, accent))) {
+            float g = dotR * (listening ? 2.2f + 0.6f * MathF.Sin(_time * 5.5f) : 2f);
+            e.Graphics.FillEllipse(glow, dotX - g, dotY - g, g * 2, g * 2);
+        }
+        using (var dot = new SolidBrush(accent)) {
+            e.Graphics.FillEllipse(dot, dotX - dotR, dotY - dotR, dotR * 2, dotR * 2);
+        }
+        int eyebrowLeft = left + HudTheme.Dip(this, 18);
+        TextRenderer.DrawText(e.Graphics, _host.ModelName, HudTheme.SmallBold,
+            Loc.Mirror(new Rectangle(eyebrowLeft, top, Math.Max(0, textWidth - HudTheme.Dip(this, 18)), chipH), cw),
+            HudTheme.OnInkMuted, Loc.Flags(flags | TextFormatFlags.VerticalCenter));
+
+        TextRenderer.DrawText(e.Graphics, phase, HudTheme.Hero,
+            Loc.Mirror(new Rectangle(left, top + chipH + gap, textWidth, titleH), cw),
+            HudTheme.OnInk, Loc.Flags(flags));
         TextRenderer.DrawText(e.Graphics, body, HudTheme.Small,
-            Loc.Mirror(new Rectangle(left, top + titleH, textWidth, bodyH), cw),
-            HudTheme.Muted, Loc.Flags(flags));
+            Loc.Mirror(new Rectangle(left, top + chipH + gap + titleH, textWidth, bodyH), cw),
+            HudTheme.OnInkMuted, Loc.Flags(flags));
 
         if (listening) {
-            int waveH = HudTheme.Dip(this, 36);
+            int waveH = HudTheme.Dip(this, 40);
             var wave = Loc.Mirror(new Rectangle(trailing - waveWidth, (_statusCard.Height - waveH) / 2, waveWidth, waveH), cw);
-            HudTheme.DrawWave(e.Graphics, wave, _bars, HudTheme.Teal, HudTheme.DipF(this, 18));
+            HudTheme.DrawWave(e.Graphics, wave, _bars, HudTheme.OnInk, HudTheme.DipF(this, 18));
         }
     }
 
@@ -804,7 +847,7 @@ internal sealed class AppWindow : Form {
                     LayoutCard(card);
                 }
                 card.Location = new Point(pad, y);
-                y += card.Height + HudTheme.Dip(this, 4);
+                y += card.Height + HudTheme.Dip(this, card == _statusCard ? 8 : 4);
                 card.Invalidate();
             }
             first = false;
@@ -813,10 +856,10 @@ internal sealed class AppWindow : Form {
     }
 
     private void LayoutStatusCard() {
-        _statusCard.Height = HudTheme.Dip(this, 104);
+        _statusCard.Height = HudTheme.Dip(this, 136);
         int w = Math.Min(HudTheme.Dip(this, 220), _statusCard.Width / 2);
-        int h = HudTheme.Dip(this, 38);
-        var r = new Rectangle(_statusCard.Width - w - HudTheme.Dip(this, 22), (_statusCard.Height - h) / 2, w, h);
+        int h = HudTheme.Dip(this, 42);
+        var r = new Rectangle(_statusCard.Width - w - HudTheme.Dip(this, 24), (_statusCard.Height - h) / 2, w, h);
         _loginButton.Bounds = Loc.Mirror(r, _statusCard.Width);
     }
 
@@ -846,7 +889,7 @@ internal sealed class AppWindow : Form {
         int index = _pages.Count;
         nav.Click += (_, _) => ShowPage(index);
         _sidebar.Controls.Add(nav);
-        var body = new Panel { BackColor = HudTheme.Window, Visible = false };
+        var body = new Panel { BackColor = HudTheme.Paper, Visible = false };
         _scrollHost.Controls.Add(body);
         var page = new Page { Nav = nav, Body = body, Title = title, Subtitle = subtitle };
         _pages.Add(page);
@@ -867,7 +910,7 @@ internal sealed class AppWindow : Form {
     }
 
     private void AddRowControl(HudCard card, Control control, int heightDip) {
-        control.BackColor = HudTheme.Card;
+        control.BackColor = HudTheme.Surface;
         _rowHeights[control] = heightDip;
         card.Controls.Add(control);
     }
@@ -875,7 +918,7 @@ internal sealed class AppWindow : Form {
     private HudSettingRow AddRow(HudCard card, string title, string? description, Control trailing, int widthDip, int heightDip = 36) {
         var row = new HudSettingRow { Title = title, Description = description };
         if (trailing is HudButton or HudSegmented) {
-            trailing.BackColor = HudTheme.Card;
+            trailing.BackColor = HudTheme.Surface;
         }
         row.SetTrailing(trailing, widthDip, heightDip);
         AddRowControl(card, row, description == null ? 56 : 62);
@@ -1042,8 +1085,8 @@ internal sealed class AppWindow : Form {
             MaxDropDownItems = 12,
             DrawMode = DrawMode.OwnerDrawFixed,
             ItemHeight = 28,
-            BackColor = HudTheme.Track,
-            ForeColor = HudTheme.Body,
+            BackColor = HudTheme.Surface,
+            ForeColor = HudTheme.Ink,
             Font = HudTheme.BodyText,
             RightToLeft = Loc.Rtl ? RightToLeft.Yes : RightToLeft.No,
         };
@@ -1063,14 +1106,14 @@ internal sealed class AppWindow : Form {
         if (e.Index < 0 || sender is not ComboBox combo) {
             return;
         }
-        // The closed box and the hovered list item get a soft highlight; the rest stay dark.
+        // The hovered list item gets a soft well; the closed box and the rest stay white.
         bool hot = (e.State & DrawItemState.Selected) != 0 && (e.State & DrawItemState.ComboBoxEdit) == 0;
-        using (var fill = new SolidBrush(hot ? Color.FromArgb(255, 34, 52, 54) : HudTheme.Track)) {
+        using (var fill = new SolidBrush(hot ? HudTheme.Well : HudTheme.Surface)) {
             e.Graphics.FillRectangle(fill, e.Bounds);
         }
         var text = Rectangle.Inflate(e.Bounds, -HudTheme.Dip(this, 8), 0);
         TextRenderer.DrawText(e.Graphics, combo.Items[e.Index]?.ToString(), combo.Font, text,
-            hot ? HudTheme.Teal : HudTheme.Body,
+            HudTheme.Ink,
             Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix));
     }
 
