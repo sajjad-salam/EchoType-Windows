@@ -15,6 +15,37 @@ internal sealed class WordReplacement {
     [JsonPropertyName("to")]
     public string To { get; set; } = "";
 
+    /// <summary>The rule for <paramref name="from"/> (same case-insensitive match as <see cref="Apply"/>), or null.</summary>
+    public static WordReplacement? Find(IEnumerable<WordReplacement> rules, string from) {
+        from = from.Trim();
+        if (from.Length == 0) {
+            return null;
+        }
+        return rules.FirstOrDefault(r =>
+            string.Equals(r.From.Trim(), from, StringComparison.InvariantCultureIgnoreCase));
+    }
+
+    /// <summary>
+    /// Selected text as a rule source: one short line without surrounding punctuation,
+    /// or null when the selection is empty or looks like more than a word or phrase.
+    /// </summary>
+    public static string? WordFromSelection(string? selected) {
+        string word = (selected ?? "").Trim()
+            .Trim('.', ',', '،', '؛', ';', ':', '!', '?', '؟', '"', '\'', '(', ')', '«', '»')
+            .Trim();
+        return word.Length is > 0 and <= 60 && !word.Contains('\n') ? word : null;
+    }
+
+    /// <summary>Adds the rule, or updates the existing one for the same word. True when it was new.</summary>
+    public static bool AddOrUpdate(List<WordReplacement> rules, string from, string to) {
+        if (Find(rules, from) is { } existing) {
+            existing.To = to;
+            return false;
+        }
+        rules.Add(new WordReplacement { From = from.Trim(), To = to });
+        return true;
+    }
+
     /// <summary>
     /// Replaces whole words only (so "قال" does not touch "مقال"), case-insensitively.
     /// Longer source words run first so a phrase wins over a word inside it.

@@ -164,6 +164,20 @@ internal sealed class Settings {
         TranslateSelectionVks = chord.ToIntArray().ToList();
     }
 
+    /// <summary>
+    /// One to three keys that open the quick "add word replacement" popup, pre-filled with
+    /// the word selected in any app. Default Ctrl+Shift+U; empty = off.
+    /// </summary>
+    [JsonPropertyName("addWordReplacementVks")]
+    public List<int> AddWordReplacementVks { get; set; } = [0x11, 0x10, 0x55];
+
+    [JsonIgnore]
+    public HotkeyChord AddWordReplacementChord => HotkeyChord.FromVks(AddWordReplacementVks);
+
+    public void SetAddWordReplacementChord(HotkeyChord chord) {
+        AddWordReplacementVks = chord.ToIntArray().ToList();
+    }
+
     /// <summary>Google Translate target language code for <see cref="TranslateVk"/> (e.g. "en", "ar").</summary>
     [JsonPropertyName("translateTargetLanguage")]
     public string TranslateTargetLanguage { get; set; } = "en";
@@ -363,6 +377,7 @@ internal sealed class Settings {
             loaded.SecondHotkeyVks ??= [];
             loaded.TranslateVks ??= [];
             loaded.TranslateSelectionVks ??= [];
+            loaded.AddWordReplacementVks ??= [];
             loaded.OpenAiApiKey ??= "";
             loaded.OpenAiTranslationModel ??= "";
             loaded.WordReplacements ??= [];

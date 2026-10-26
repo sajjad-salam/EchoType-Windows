@@ -48,6 +48,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private readonly ToolStripMenuItem _askModelShortcutItem;
     private readonly ToolStripMenuItem _translateShortcutItem;
     private readonly ToolStripMenuItem _translateSelectionShortcutItem;
+    private readonly ToolStripMenuItem _addWordReplacementItem;
     private readonly ToolStripMenuItem _translateLanguageRoot;
     private readonly ToolStripMenuItem _translateSelectionLanguageRoot;
     private readonly ToolStripMenuItem _modelWindowShortcutItem;
@@ -263,9 +264,14 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         pasteRoot.DropDownItems.Add(new ToolStripSeparator());
         pasteRoot.DropDownItems.Add(Loc.T("Per-app profiles…"), null, (_, _) => EditAppProfiles());
 
+        _addWordReplacementItem = new ToolStripMenuItem(Loc.T("Add word replacement…"), null,
+            (_, _) => _ = AddWordReplacementAsync(fromSelection: false));
+        UpdateAddWordReplacementMenu();
+
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusItem);
         menu.Items.Add(Loc.T("Open EchoType"), null, (_, _) => ShowAppWindow());
+        menu.Items.Add(_addWordReplacementItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(dictationRoot);
         menu.Items.Add(cleanAskRoot);
@@ -303,6 +309,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _ = _marshal.Handle;
 
         DropTranslateSelectionChordIfTaken();
+        DropAddWordReplacementChordIfTaken();
         if (!_hotkey.Start(CollectHotkeys(), CollectTapHotkeys(), _marshal)) {
             MessageBox.Show(Loc.T("EchoType could not install its global keyboard hook."), "EchoType",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -585,6 +592,88 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
     }
 
+    private bool IsAddWordReplacementChord(HotkeyChord chord) =>
+        !_settings.AddWordReplacementChord.IsEmpty && chord.Equals(_settings.AddWordReplacementChord);
+
+    /// <summary>
+    /// Quick add: a small popup for one word replacement, without opening the full list.
+    /// From the shortcut it is pre-filled with the word selected in the foreground app,
+    /// so fixing a word is select → shortcut → type the fix → Enter.
+    /// </summary>
+    private async Task AddWordReplacementAsync(bool fromSelection) {
+        if (_wordReplacementsUiOpen) {
+            return;
+        }
+        if (fromSelection && _phase != AppPhase.Idle) {
+            ShowBalloon(Loc.T("Wait until dictation finishes before adding a word."), OverlayKind.Warning);
+            return;
+        }
+        _wordReplacementsUiOpen = true;
+        bool openFullList = false;
+        try {
+            string? word = null;
+            if (fromSelection) {
+                // Copy once the shortcut's modifiers are up: with Shift still held the app would
+                // get Ctrl+Shift+C instead of Ctrl+C.
+                var wait = Stopwatch.StartNew();
+                while (NativeMethods.AnyModifierDown() && wait.ElapsedMilliseconds < 1500) {
+                    await Task.Delay(15);
+                }
+                word = WordReplacement.WordFromSelection(await SelectionCapture.CaptureAsync());
+            }
+            using var form = new QuickWordReplacementForm(_settings.WordReplacements, word);
+            IWin32Window? owner = _window is { Visible: true, IsDisposed: false } ? _window : null;
+            if (form.ShowDialog(owner) == DialogResult.OK) {
+                bool added = WordReplacement.AddOrUpdate(_settings.WordReplacements, form.From, form.To);
+                _settings.Save();
+                Log.Write("settings: wordReplacements=" + _settings.WordReplacements.Count
+                    + (added ? " (quick add)" : " (quick update)"));
+                ShowBalloon(Loc.F(added ? "Added: {0} → {1}" : "Updated: {0} → {1}", form.From, form.To),
+                    OverlayKind.Success);
+                NotifyUi();
+            }
+            openFullList = form.OpenFullList;
+        } catch (Exception ex) {
+            Log.Write("add word replacement ui: " + ex);
+            MessageBox.Show("Could not open Add word replacement: " + ex.Message, "EchoType",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        } finally {
+            _wordReplacementsUiOpen = false;
+        }
+        if (openFullList) {
+            EditWordReplacements();
+        }
+    }
+
+    private void UpdateAddWordReplacementMenu() {
+        var chord = _settings.AddWordReplacementChord;
+        _addWordReplacementItem.ShortcutKeyDisplayString = chord.IsEmpty ? null : HotkeyNames.For(chord);
+    }
+
+    private void ApplyAddWordReplacementChord(HotkeyChord chord) {
+        _settings.SetAddWordReplacementChord(chord);
+        _settings.Save();
+        UpdateAddWordReplacementMenu();
+        _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
+        Log.Write("settings: add-word-replacement=" + (chord.IsEmpty ? "(none)" : HotkeyNames.For(chord)));
+        NotifyUi();
+    }
+
+    /// <summary>
+    /// The default Add word replacement shortcut (Ctrl+Shift+U) reaches older configs too;
+    /// drop it if another shortcut already uses the same keys.
+    /// </summary>
+    private void DropAddWordReplacementChordIfTaken() {
+        var chord = _settings.AddWordReplacementChord;
+        if (chord.IsEmpty || CollectHotkeys().Count(c => c.Equals(chord)) <= 1) {
+            return;
+        }
+        Log.Write("settings: add-word-replacement " + HotkeyNames.For(chord) + " already in use, cleared");
+        _settings.SetAddWordReplacementChord(default);
+        _settings.Save();
+        UpdateAddWordReplacementMenu();
+    }
+
     private void EditWorkspaceModes() {
         if (_workspaceModesUiOpen) {
             return;
@@ -682,6 +771,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             _ = TranslateSelectionAsync();
             return;
         }
+        if (IsAddWordReplacementChord(chord)) {
+            _ = AddWordReplacementAsync(fromSelection: true);
+            return;
+        }
         bool isDictation = IsDictationChord(chord);
         if (isDictation && ConsumeCancelDoubleTap()) {
             // In toggle mode the second press of the same recording key stops
@@ -756,7 +849,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     }
 
     private void OnHoldEnd(HotkeyChord chord) {
-        if (IsTranslateSelectionChord(chord)) {
+        if (IsTranslateSelectionChord(chord) || IsAddWordReplacementChord(chord)) {
             return;
         }
         if (_settings.ToggleRecording) {
@@ -2888,6 +2981,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (!_settings.TranslateSelectionChord.IsEmpty) {
             chords.Add(_settings.TranslateSelectionChord);
         }
+        if (!_settings.AddWordReplacementChord.IsEmpty) {
+            chords.Add(_settings.AddWordReplacementChord);
+        }
         foreach (var cmd in _settings.ActiveCommands) {
             var chord = cmd.Chord;
             if (!chord.IsEmpty) {
@@ -3098,6 +3194,16 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         return true;
     }
 
+    bool IAppWindowHost.TrySetAddWordReplacementChord(HotkeyChord chord) {
+        string? conflict = HotkeyConflicts.Message(chord, _settings, _settings.AddWordReplacementChord);
+        if (conflict != null) {
+            ShowBalloon(conflict, OverlayKind.Warning);
+            return false;
+        }
+        ApplyAddWordReplacementChord(chord);
+        return true;
+    }
+
     bool IAppWindowHost.TrySetDictationChord(HotkeyChord chord) {
         if (chord.IsEmpty) {
             ShowBalloon(Loc.T("Pick a dictation key — EchoType needs one to record."), OverlayKind.Warning);
@@ -3138,6 +3244,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
         if (shortcut == AppShortcut.TranslateSelection) {
             return ((IAppWindowHost)this).TrySetTranslateSelectionChord(HotkeyChord.Single(vk));
+        }
+        if (shortcut == AppShortcut.AddWordReplacement) {
+            return ((IAppWindowHost)this).TrySetAddWordReplacementChord(HotkeyChord.Single(vk));
         }
         if (shortcut == AppShortcut.Dictation) {
             return ((IAppWindowHost)this).TrySetDictationChord(HotkeyChord.Single(vk));
@@ -3207,6 +3316,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         UpdatePressEnterShortcutMenu();
         UpdateAskModelShortcutMenu();
         UpdateTranslateMenu();
+        UpdateAddWordReplacementMenu();
         UpdateModelWindowShortcutMenu();
         UpdateModelShortcutsMenu();
         SyncModelMenu();

@@ -10,6 +10,7 @@ internal enum AppShortcut {
     AskModel,
     Translate,
     TranslateSelection,
+    AddWordReplacement,
     PressEnter,
     AutoClean,
     ModelWindow,
@@ -61,6 +62,7 @@ internal interface IAppWindowHost {
     bool TrySetShortcut(AppShortcut shortcut, int vk);
     bool TrySetTranslateChord(HotkeyChord chord);
     bool TrySetTranslateSelectionChord(HotkeyChord chord);
+    bool TrySetAddWordReplacementChord(HotkeyChord chord);
     bool TrySetDictationChord(HotkeyChord chord);
     bool TrySetSecondDictationChord(HotkeyChord chord);
     void ToggleLoginWindow();
@@ -115,6 +117,7 @@ internal sealed class AppWindow : Form {
     private readonly HudButton _askWindowButton;
     private readonly HudHotkeyRow _translateKey;
     private readonly HudHotkeyRow _translateSelectionKey;
+    private readonly HudHotkeyRow _addWordKey;
     private readonly ComboBox _translateLanguage;
     private readonly ComboBox _translateSelectionLanguage;
     private readonly HudSettingRow _openAiRow;
@@ -310,6 +313,8 @@ internal sealed class AppWindow : Form {
         var wordsButton = MakeButton(Loc.T("Edit…"), HudButton.Kind.Ghost);
         wordsButton.Click += (_, _) => _host.EditWordReplacements();
         AddRow(voiceCard, Loc.T("Word replacements"), Loc.T("Fix dialect words in every transcript."), wordsButton, 200);
+        _addWordKey = AddHotkey(voiceCard, Loc.T("Add word shortcut"), AppShortcut.AddWordReplacement);
+        _addWordKey.MultiKey = true;
 
         // ── Settings ──────────────────────────────────────────
         var settings = AddPage(GlyphSettings, Loc.T("Settings"), Loc.T("General options, language and app controls."));
@@ -521,6 +526,9 @@ internal sealed class AppWindow : Form {
             if (_capturing != _translateSelectionKey) {
                 _translateSelectionKey.Value = HotkeyNames.For(s.TranslateSelectionChord);
             }
+            if (_capturing != _addWordKey) {
+                _addWordKey.Value = HotkeyNames.For(s.AddWordReplacementChord);
+            }
             _translateLanguage.SelectedIndex = IndexOfLanguage(_translateLanguage, s.TranslateTargetLanguage);
             _translateSelectionLanguage.SelectedIndex = IndexOfLanguage(_translateSelectionLanguage, s.TranslateSelectionTargetLanguage);
             bool hasKey = !string.IsNullOrWhiteSpace(s.OpenAiApiKey);
@@ -533,7 +541,7 @@ internal sealed class AppWindow : Form {
             _enterKey.Value = HotkeyLabel(s.PressEnterToggleVk);
             _cleanKey.Value = HotkeyLabel(s.AutoCleanToggleVk);
             _windowKey.Value = HotkeyLabel(s.OpenModelWindowVk);
-            foreach (var row in new[] { _dictationKey, _secondDictationKey, _askModelKey, _translateKey, _translateSelectionKey, _chatgptKey, _geminiKey, _claudeKey, _enterKey, _cleanKey, _windowKey }) {
+            foreach (var row in new[] { _dictationKey, _secondDictationKey, _askModelKey, _translateKey, _translateSelectionKey, _addWordKey, _chatgptKey, _geminiKey, _claudeKey, _enterKey, _cleanKey, _windowKey }) {
                 row.Invalidate();
             }
             _loginButton.Text = !_host.Online ? Loc.T("Retry connection")
@@ -944,7 +952,7 @@ internal sealed class AppWindow : Form {
         row.Tag = shortcut;
         _host.Hotkey.ResetCapture();
         if (shortcut is AppShortcut.Translate or AppShortcut.TranslateSelection or AppShortcut.Dictation
-            or AppShortcut.SecondDictation) {
+            or AppShortcut.SecondDictation or AppShortcut.AddWordReplacement) {
             // Dictation and the Translate shortcuts take one to three keys (e.g. Ctrl+Space);
             // they are saved once every key of the combination has been released.
             _host.Hotkey.CaptureMaxKeys = HotkeyChord.MaxKeys;
@@ -973,6 +981,9 @@ internal sealed class AppWindow : Form {
         _translateSelectionKey.CapturePreview = null;
         _translateSelectionKey.Value = HotkeyNames.For(_host.Settings.TranslateSelectionChord);
         _translateSelectionKey.Invalidate();
+        _addWordKey.CapturePreview = null;
+        _addWordKey.Value = HotkeyNames.For(_host.Settings.AddWordReplacementChord);
+        _addWordKey.Invalidate();
         _dictationKey.CapturePreview = null;
         _dictationKey.Value = HotkeyNames.For(_host.Settings.DictationChord);
         _dictationKey.Invalidate();
@@ -1003,6 +1014,8 @@ internal sealed class AppWindow : Form {
             _host.TrySetSecondDictationChord(chord);
         } else if (shortcut == AppShortcut.TranslateSelection) {
             _host.TrySetTranslateSelectionChord(chord);
+        } else if (shortcut == AppShortcut.AddWordReplacement) {
+            _host.TrySetAddWordReplacementChord(chord);
         } else {
             _host.TrySetTranslateChord(chord);
         }

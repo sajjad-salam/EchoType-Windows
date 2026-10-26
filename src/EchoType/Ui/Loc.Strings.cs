@@ -382,6 +382,18 @@ internal static partial class Loc {
         ["Translation → {0}"] = "الترجمة ← {0}",
         ["Translation failed — check your internet connection and try again."] = "فشلت الترجمة — تحقّق من اتصال الإنترنت وحاول مرة أخرى.",
 
+        // Quick add word replacement
+        ["Add word replacement…"] = "إضافة استبدال كلمة…",
+        ["Add word replacement"] = "إضافة استبدال كلمة",
+        ["Add word shortcut"] = "اختصار إضافة كلمة",
+        ["Add"] = "إضافة",
+        ["All replacements…"] = "كل الاستبدالات…",
+        ["Already replaced with \"{0}\" — saving updates it."] = "تُستبدل حاليًا بـ «{0}» — الحفظ يحدّثها.",
+        ["Whole words only. Applied to every transcript before it is pasted."] = "كلمات كاملة فقط. يُطبَّق على كل نص قبل لصقه.",
+        ["Wait until dictation finishes before adding a word."] = "انتظر حتى ينتهي الإملاء قبل إضافة كلمة.",
+        ["Added: {0} → {1}"] = "تمت الإضافة: {0} ← {1}",
+        ["Updated: {0} → {1}"] = "تم التحديث: {0} ← {1}",
+
         // Per-app profiles
         ["Per-app profiles…"] = "إعدادات حسب التطبيق…",
         ["Per-app profiles"] = "إعدادات حسب التطبيق",

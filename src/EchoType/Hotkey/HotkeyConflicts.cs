@@ -78,6 +78,14 @@ internal static class HotkeyConflicts {
                 ? "That key is already the Translate selection shortcut."
                 : "That shortcut overlaps the Translate selection shortcut.";
         }
+        var addWord = settings.AddWordReplacementChord;
+        bool ignoreAddWord = (!ignoreChord.IsEmpty && addWord.Equals(ignoreChord))
+            || (addWord.Count == 1 && ignoreVks.Contains((int)addWord.K1));
+        if (!ignoreAddWord && Conflicts(chord, addWord)) {
+            return chord.Count == 1 && addWord.Count == 1
+                ? "That key is already the Add word replacement shortcut."
+                : "That shortcut overlaps the Add word replacement shortcut.";
+        }
         if (ConflictsWithReserved(chord, settings.OpenModelWindowVk, ignoreVks)) {
             return chord.Count == 1
                 ? "That key is already the model window shortcut."
