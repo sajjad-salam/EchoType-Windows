@@ -23,6 +23,10 @@ internal sealed class HudCard : Panel {
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public bool Dividers { get; set; } = true;
 
+    /// <summary>A solid ink card (the Home hero) instead of white paper.</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool Inked { get; set; }
+
     public HudCard() {
         SetStyle(ControlStyles.AllPaintingInWmPaint
             | ControlStyles.OptimizedDoubleBuffer
@@ -33,13 +37,19 @@ internal sealed class HudCard : Panel {
 
     protected override void OnPaint(PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
-        e.Graphics.Clear(HudTheme.Window);
-        int radius = HudTheme.Dip(this, 14);
+        e.Graphics.Clear(Parent?.BackColor ?? HudTheme.Paper);
+        int radius = HudTheme.Dip(this, Inked ? 20 : 16);
         var pill = new Rectangle(0, 0, Width - 1, Height - 1);
         if (pill.Width >= 8 && pill.Height >= 8) {
-            HudTheme.DrawCard(e.Graphics, pill, radius);
+            if (Inked) {
+                using var path = HudTheme.Rounded(pill, radius);
+                using var fill = new SolidBrush(HudTheme.Ink);
+                e.Graphics.FillPath(fill, path);
+            } else {
+                HudTheme.DrawCard(e.Graphics, pill, radius);
+            }
             if (Dividers) {
-                using var line = new SolidBrush(HudTheme.Divider);
+                using var line = new SolidBrush(HudTheme.Rule);
                 Control? previous = null;
                 foreach (Control child in Controls) {
                     if (!child.Visible) {
@@ -75,6 +85,8 @@ internal sealed class HudButton : Control {
         Ghost,
         Primary,
         Danger,
+        /// <summary>White pill for ink surfaces (the Home hero card).</summary>
+        Inverse,
     }
 
     private readonly System.Windows.Forms.Timer _tick;
@@ -170,38 +182,40 @@ internal sealed class HudButton : Control {
 
     protected override void OnPaint(PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
-        e.Graphics.Clear(HudTheme.Card);
-        int radius = HudTheme.Dip(this, HudTheme.ControlRadiusDip);
+        e.Graphics.Clear(BackColor);
         var rect = new Rectangle(0, 0, Width - 1, Height - 1);
+        // Fully rounded pill, like Typeless's buttons.
+        int radius = Math.Max(4, rect.Height / 2);
+        float hover = _pressed ? 1f : _hover;
         Color fill = _kind switch {
-            Kind.Primary => Color.FromArgb(36 + (int)(20 * _hover), HudTheme.Teal),
-            Kind.Danger => Color.FromArgb(28 + (int)(18 * _hover), HudTheme.Red),
-            _ => Color.FromArgb((int)(18 + 22 * _hover), 255, 255, 255),
+            Kind.Primary => HudTheme.Lerp(HudTheme.Ink, HudTheme.InkHover, hover),
+            Kind.Inverse => HudTheme.Lerp(HudTheme.Surface, HudTheme.Well, hover),
+            Kind.Danger => HudTheme.Lerp(HudTheme.NegativeWash, Color.FromArgb(255, 252, 222, 222), hover),
+            _ => HudTheme.Lerp(HudTheme.Surface, HudTheme.Well, hover),
         };
-        if (_pressed) {
-            fill = Color.FromArgb(Math.Min(255, fill.A + 18), fill);
-        }
-        Color border = _kind switch {
-            Kind.Primary => Color.FromArgb(90 + (int)(40 * _hover), HudTheme.Teal),
-            Kind.Danger => Color.FromArgb(80 + (int)(40 * _hover), HudTheme.Red),
-            _ => HudTheme.Border,
+        Color? border = _kind switch {
+            Kind.Ghost => HudTheme.Lerp(HudTheme.Hairline, HudTheme.HairlineStrong, hover),
+            Kind.Danger => Color.FromArgb(255, 250, 205, 205),
+            _ => null,
         };
         using (var path = HudTheme.Rounded(rect, radius))
-        using (var brush = new SolidBrush(fill))
-        using (var pen = new Pen(border, 1f)) {
+        using (var brush = new SolidBrush(fill)) {
             e.Graphics.FillPath(brush, path);
-            e.Graphics.DrawPath(pen, path);
+            if (border is { } b) {
+                using var pen = new Pen(b, 1f);
+                e.Graphics.DrawPath(pen, path);
+            }
         }
-        if (Focused) {
+        if (Focused && ShowFocusCues) {
             var ring = Rectangle.Inflate(rect, -2, -2);
-            using var path = HudTheme.Rounded(ring, Math.Max(4, radius - 2));
-            using var pen = new Pen(Color.FromArgb(140, HudTheme.Teal), 1.5f);
+            using var path = HudTheme.Rounded(ring, Math.Max(4, ring.Height / 2));
+            using var pen = new Pen(_kind == Kind.Primary ? HudTheme.OnInkMuted : HudTheme.InkMuted, 1.5f);
             e.Graphics.DrawPath(pen, path);
         }
         Color text = _kind switch {
-            Kind.Primary => HudTheme.Teal,
-            Kind.Danger => HudTheme.Red,
-            _ => HudTheme.Body,
+            Kind.Primary => HudTheme.OnInk,
+            Kind.Danger => HudTheme.Negative,
+            _ => HudTheme.Ink,
         };
         TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, text,
             Loc.Flags(TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis));
@@ -309,8 +323,8 @@ internal sealed class HudToggleRow : Control {
 
     protected override void OnPaint(PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
-        e.Graphics.Clear(HudTheme.Card);
-        int trackW = HudTheme.Dip(this, 44);
+        e.Graphics.Clear(HudTheme.Surface);
+        int trackW = HudTheme.Dip(this, 42);
         int trackH = HudTheme.Dip(this, 24);
         int gap = HudTheme.Dip(this, 12);
         var track = new Rectangle(Width - trackW, (Height - trackH) / 2, trackW, trackH);
@@ -320,8 +334,8 @@ internal sealed class HudToggleRow : Control {
         label = Loc.Mirror(label, Width);
         HudTheme.DrawRowText(e.Graphics, label, Text, Description);
 
-        Color off = HudTheme.Track;
-        Color on = Color.FromArgb(255, 28, 78, 72);
+        Color off = HudTheme.ToggleOff;
+        Color on = HudTheme.Ink;
         using (var path = HudTheme.Rounded(track, trackH / 2))
         using (var brush = new SolidBrush(HudTheme.Lerp(off, on, _knob))) {
             e.Graphics.FillPath(brush, path);
@@ -331,12 +345,15 @@ internal sealed class HudToggleRow : Control {
         float offX = Loc.Rtl ? track.Right - pad - knob : track.Left + pad;
         float onX = Loc.Rtl ? track.Left + pad : track.Right - pad - knob;
         float x = HudTheme.Lerp(offX, onX, HudTheme.EaseOutCubic(_knob));
-        using (var knobBrush = new SolidBrush(HudTheme.Body)) {
+        using (var shadow = new SolidBrush(Color.FromArgb(28, 0, 0, 0))) {
+            e.Graphics.FillEllipse(shadow, x, track.Top + pad + HudTheme.DipF(this, 1), knob, knob);
+        }
+        using (var knobBrush = new SolidBrush(HudTheme.Surface)) {
             e.Graphics.FillEllipse(knobBrush, x, track.Top + pad, knob, knob);
         }
-        if (Focused) {
+        if (Focused && ShowFocusCues) {
             using var path = HudTheme.Rounded(Rectangle.Inflate(track, 3, 3), trackH / 2 + 3);
-            using var pen = new Pen(Color.FromArgb(140, HudTheme.Teal), 1.5f);
+            using var pen = new Pen(HudTheme.InkMuted, 1.5f);
             e.Graphics.DrawPath(pen, path);
         }
     }
@@ -479,41 +496,44 @@ internal sealed class HudSegmented : Control {
 
     protected override void OnPaint(PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
-        e.Graphics.Clear(HudTheme.Card);
+        e.Graphics.Clear(BackColor);
         if (_items.Length == 0) {
             return;
         }
-        int radius = HudTheme.Dip(this, 12);
         var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
+        int radius = Math.Max(4, bounds.Height / 2);
         using (var path = HudTheme.Rounded(bounds, radius))
-        using (var fill = new SolidBrush(HudTheme.Track))
-        using (var border = new Pen(HudTheme.Border, 1f)) {
+        using (var fill = new SolidBrush(HudTheme.Well)) {
             e.Graphics.FillPath(fill, path);
-            e.Graphics.DrawPath(border, path);
         }
 
         int pad = HudTheme.Dip(this, 4);
         float slot = (Width - pad * 2) / (float)_items.Length;
         float thumbX = pad + Slot(_slide) * slot;
         var thumb = new RectangleF(thumbX, pad, slot, Height - pad * 2 - 1);
-        using (var path = HudTheme.Rounded(thumb, radius - 2))
-        using (var fill = new SolidBrush(Color.FromArgb(255, 28, 31, 36)))
-        using (var border = new Pen(Color.FromArgb(70, HudTheme.Teal), 1f)) {
+        float thumbRadius = thumb.Height / 2f;
+        using (var shadowPath = HudTheme.Rounded(new RectangleF(thumb.X, thumb.Y + HudTheme.DipF(this, 1), thumb.Width, thumb.Height), thumbRadius))
+        using (var shadow = new SolidBrush(Color.FromArgb(20, 0, 0, 0))) {
+            e.Graphics.FillPath(shadow, shadowPath);
+        }
+        using (var path = HudTheme.Rounded(thumb, thumbRadius))
+        using (var fill = new SolidBrush(HudTheme.Surface))
+        using (var border = new Pen(HudTheme.Hairline, 1f)) {
             e.Graphics.FillPath(fill, path);
             e.Graphics.DrawPath(border, path);
         }
 
         for (int i = 0; i < _items.Length; i++) {
             var cell = new Rectangle((int)Math.Round(pad + Slot(i) * slot), 0, (int)Math.Round(slot), Height);
-            Color color = i == _index ? HudTheme.Teal : i == _hover ? HudTheme.Body : HudTheme.Muted;
+            Color color = i == _index || i == _hover ? HudTheme.Ink : HudTheme.InkMuted;
             // Items may be in either script (e.g. "English | العربية"); pick a font that fits each.
             Font font = ArabicFont.HasArabic(_items[i]) && !Loc.Arabic ? ArabicItemFont : HudTheme.SmallBold;
             TextRenderer.DrawText(e.Graphics, _items[i], font, cell, color,
                 Loc.Flags(TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis));
         }
-        if (Focused) {
-            using var path = HudTheme.Rounded(Rectangle.Inflate(bounds, -2, -2), Math.Max(4, radius - 2));
-            using var pen = new Pen(Color.FromArgb(120, HudTheme.Teal), 1.5f);
+        if (Focused && ShowFocusCues) {
+            using var path = HudTheme.Rounded(Rectangle.Inflate(bounds, -1, -1), Math.Max(4, radius - 1));
+            using var pen = new Pen(HudTheme.InkMuted, 1.5f);
             e.Graphics.DrawPath(pen, path);
         }
     }
@@ -625,7 +645,7 @@ internal sealed class HudHotkeyRow : Control {
 
     protected override void OnPaint(PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
-        e.Graphics.Clear(HudTheme.Card);
+        e.Graphics.Clear(HudTheme.Surface);
         var chip = ChipBounds();
         int gap = HudTheme.Dip(this, 12);
         var label = Loc.Rtl
@@ -633,13 +653,12 @@ internal sealed class HudHotkeyRow : Control {
             : new Rectangle(0, 0, Math.Max(0, chip.Left - gap), Height);
         HudTheme.DrawRowText(e.Graphics, label, Title,
             Loc.T(_capturing ? (MultiKey ? "Press up to 3 keys…" : "Press a key…") : "Click to change"),
-            _capturing ? HudTheme.Teal : null);
+            _capturing ? HudTheme.Ink : null);
 
-        Color fill = _capturing
-            ? Color.FromArgb(40, HudTheme.Teal)
-            : Color.FromArgb(_hover || Focused ? 32 : 22, 255, 255, 255);
-        Color border = _capturing ? Color.FromArgb(160, HudTheme.Teal) : HudTheme.Border;
-        using (var path = HudTheme.Rounded(chip, HudTheme.Dip(this, 10)))
+        // A keycap: light well with a hairline, solid ink while listening for keys.
+        Color fill = _capturing ? HudTheme.Ink : _hover || Focused ? HudTheme.WellHover : HudTheme.Well;
+        Color border = _capturing ? HudTheme.Ink : HudTheme.Hairline;
+        using (var path = HudTheme.Rounded(chip, chip.Height / 2))
         using (var brush = new SolidBrush(fill))
         using (var pen = new Pen(border, 1f)) {
             e.Graphics.FillPath(brush, path);
@@ -658,12 +677,12 @@ internal sealed class HudHotkeyRow : Control {
             }
         }
         TextRenderer.DrawText(e.Graphics, text, Font, textRect,
-            _capturing ? HudTheme.Teal : HudTheme.Body,
+            _capturing ? HudTheme.OnInk : HudTheme.Ink,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
         if (Optional && !_capturing) {
             var clear = ClearBounds();
-            using var pen = new Pen(HudTheme.Muted, 1.4f);
+            using var pen = new Pen(HudTheme.InkMuted, 1.4f);
             e.Graphics.DrawLine(pen, clear.Left + 4, clear.Top + 4, clear.Right - 4, clear.Bottom - 4);
             e.Graphics.DrawLine(pen, clear.Right - 4, clear.Top + 4, clear.Left + 4, clear.Bottom - 4);
         }
@@ -719,17 +738,17 @@ internal sealed class HudCaptionButton : Control {
     protected override void OnPaint(PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
         // Blend into whatever caption hosts it (main window or the Ask popup).
-        e.Graphics.Clear(Parent?.BackColor ?? HudTheme.Window);
+        e.Graphics.Clear(Parent?.BackColor ?? HudTheme.Paper);
         var rect = new Rectangle(0, 0, Width - 1, Height - 1);
         if (_hover || _pressed) {
             Color fill = Icon == Glyph.Close
-                ? Color.FromArgb(_pressed ? 70 : 48, 248, 113, 113)
-                : Color.FromArgb(_pressed ? 40 : 28, 255, 255, 255);
+                ? (_pressed ? Color.FromArgb(255, 252, 222, 222) : HudTheme.NegativeWash)
+                : (_pressed ? HudTheme.WellHover : HudTheme.Well);
             using var path = HudTheme.Rounded(rect, HudTheme.Dip(this, 8));
             using var brush = new SolidBrush(fill);
             e.Graphics.FillPath(brush, path);
         }
-        using var pen = new Pen(Icon == Glyph.Close && _hover ? HudTheme.Red : HudTheme.Title, 1.4f) {
+        using var pen = new Pen(Icon == Glyph.Close && _hover ? HudTheme.Negative : HudTheme.InkSoft, 1.4f) {
             StartCap = LineCap.Round,
             EndCap = LineCap.Round,
         };
@@ -767,10 +786,10 @@ internal sealed class HudCommandList : Control {
 
     protected override void OnPaint(PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
-        e.Graphics.Clear(HudTheme.Card);
+        e.Graphics.Clear(HudTheme.Surface);
         if (Items.Count == 0) {
             TextRenderer.DrawText(e.Graphics, Loc.T("No custom commands yet."), HudTheme.Small, ClientRectangle,
-                HudTheme.Muted, Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding));
+                HudTheme.InkMuted, Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding));
             return;
         }
         int row = HudTheme.Dip(this, 28);
@@ -783,10 +802,10 @@ internal sealed class HudCommandList : Control {
             }
             var y = i * row;
             TextRenderer.DrawText(e.Graphics, name, HudTheme.BodyBold,
-                Loc.Mirror(new Rectangle(0, y, Width / 2, row), Width), HudTheme.Body,
+                Loc.Mirror(new Rectangle(0, y, Width / 2, row), Width), HudTheme.Ink,
                 Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
             TextRenderer.DrawText(e.Graphics, shortcut, HudTheme.Small,
-                Loc.Mirror(new Rectangle(Width / 2, y, Width / 2, row), Width), HudTheme.Muted,
+                Loc.Mirror(new Rectangle(Width / 2, y, Width / 2, row), Width), HudTheme.InkMuted,
                 Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.Right | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
         }
     }
@@ -843,7 +862,7 @@ internal sealed class HudSettingRow : Control {
 
     protected override void OnPaint(PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
-        e.Graphics.Clear(HudTheme.Card);
+        e.Graphics.Clear(HudTheme.Surface);
         int w = TrailingWidth();
         int gap = w > 0 ? HudTheme.Dip(this, 16) : 0;
         var label = Loc.Mirror(new Rectangle(0, 0, Math.Max(0, Width - w - gap), Height), Width);
@@ -864,9 +883,9 @@ internal sealed class HudSectionLabel : Control {
 
     protected override void OnPaint(PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
-        e.Graphics.Clear(HudTheme.Window);
-        var text = new Rectangle(HudTheme.Dip(this, 4), 0, Math.Max(0, Width - HudTheme.Dip(this, 8)), Height - HudTheme.Dip(this, 8));
-        TextRenderer.DrawText(e.Graphics, Text, HudTheme.SmallBold, Loc.Mirror(text, Width), HudTheme.Title,
+        e.Graphics.Clear(HudTheme.Paper);
+        var text = new Rectangle(HudTheme.Dip(this, 4), 0, Math.Max(0, Width - HudTheme.Dip(this, 8)), Height - HudTheme.Dip(this, 10));
+        TextRenderer.DrawText(e.Graphics, Text, HudTheme.SmallBold, Loc.Mirror(text, Width), HudTheme.InkMuted,
             Loc.Flags(TextFormatFlags.Bottom | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix));
     }
 }
@@ -951,38 +970,42 @@ internal sealed class HudNavItem : Control {
 
     protected override void OnPaint(PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
-        e.Graphics.Clear(Parent?.BackColor ?? HudTheme.Sidebar);
+        Color back = Parent?.BackColor ?? HudTheme.PaperSide;
+        e.Graphics.Clear(back);
         var rect = new Rectangle(0, 0, Width - 1, Height - 1);
-        int radius = HudTheme.Dip(this, 9);
-        int alpha = _selected ? 20 : (int)(11 * _hover);
-        if (alpha > 0) {
-            using var path = HudTheme.Rounded(rect, radius);
-            using var fill = new SolidBrush(Color.FromArgb(alpha, 255, 255, 255));
-            e.Graphics.FillPath(fill, path);
-        }
+        int radius = HudTheme.Dip(this, 10);
         if (_selected) {
-            int barH = HudTheme.Dip(this, 18);
-            var bar = Loc.Mirror(new RectangleF(0, (Height - barH) / 2f, HudTheme.DipF(this, 3), barH), Width);
-            using var path = HudTheme.Rounded(bar, HudTheme.DipF(this, 1.5f));
-            using var fill = new SolidBrush(HudTheme.Teal);
+            // The current page sits on a white card with a hairline and a whisper of shadow.
+            using (var shadowPath = HudTheme.Rounded(new Rectangle(rect.X, rect.Y + 1, rect.Width, rect.Height), radius))
+            using (var shadow = new SolidBrush(Color.FromArgb(14, 0, 0, 0))) {
+                e.Graphics.FillPath(shadow, shadowPath);
+            }
+            using var path = HudTheme.Rounded(rect, radius);
+            using var fill = new SolidBrush(HudTheme.Surface);
+            using var pen = new Pen(HudTheme.Hairline, 1f);
+            e.Graphics.FillPath(fill, path);
+            e.Graphics.DrawPath(pen, path);
+        } else if (_hover > 0.01f) {
+            using var path = HudTheme.Rounded(rect, radius);
+            using var fill = new SolidBrush(HudTheme.Lerp(back, HudTheme.WellHover, _hover));
             e.Graphics.FillPath(fill, path);
         }
         if (Focused && ShowFocusCues && !_selected) {
             using var path = HudTheme.Rounded(Rectangle.Inflate(rect, -1, -1), radius);
-            using var pen = new Pen(Color.FromArgb(120, HudTheme.Teal), 1.5f);
+            using var pen = new Pen(HudTheme.InkMuted, 1.5f);
             e.Graphics.DrawPath(pen, path);
         }
 
         int textLeft = HudTheme.Dip(this, 16);
         if (HudTheme.Icons is { } icons && Glyph.Length > 0) {
             var icon = new Rectangle(HudTheme.Dip(this, 14), 0, HudTheme.Dip(this, 22), Height);
-            Color iconColor = _selected ? HudTheme.Teal : HudTheme.Lerp(HudTheme.Muted, HudTheme.Body, _hover);
+            Color iconColor = _selected ? HudTheme.Ink : HudTheme.Lerp(HudTheme.InkMuted, HudTheme.Ink, _hover);
             TextRenderer.DrawText(e.Graphics, Glyph, icons, Loc.Mirror(icon, Width), iconColor,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
             textLeft = HudTheme.Dip(this, 46);
         }
         var label = new Rectangle(textLeft, 0, Math.Max(0, Width - textLeft - HudTheme.Dip(this, 8)), Height);
-        Color textColor = _selected ? HudTheme.Body : HudTheme.Lerp(HudTheme.Muted, HudTheme.Body, _hover);
+        Color textColor = _selected ? HudTheme.Ink : HudTheme.Lerp(HudTheme.InkSoft, HudTheme.Ink, _hover);
         TextRenderer.DrawText(e.Graphics, Text, _selected ? HudTheme.BodyBold : HudTheme.BodyText, Loc.Mirror(label, Width), textColor,
             Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix));
     }

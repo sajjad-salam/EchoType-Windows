@@ -92,8 +92,8 @@ internal sealed partial class AskReplyForm : Form {
         ShowInTaskbar = false;
         TopMost = true;
         KeyPreview = true;
-        BackColor = HudTheme.Card;
-        ForeColor = HudTheme.Body;
+        BackColor = HudTheme.Surface;
+        ForeColor = HudTheme.Ink;
         Font = HudTheme.BodyText;
         Padding = new Padding(1);
 
@@ -102,7 +102,7 @@ internal sealed partial class AskReplyForm : Form {
         int width = content.KeepLayout ? LayoutWidth(_text, _bodyFont, screen) : WidthDip;
         Width = width;
 
-        _caption = new Panel { Dock = DockStyle.Top, Height = 52, BackColor = HudTheme.Card };
+        _caption = new Panel { Dock = DockStyle.Top, Height = 52, BackColor = HudTheme.Surface };
         _caption.Paint += OnCaptionPaint;
         _caption.MouseDown += (_, e) => {
             if (e.Button == MouseButtons.Left) {
@@ -127,7 +127,7 @@ internal sealed partial class AskReplyForm : Form {
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
             AutoScroll = true,
-            BackColor = HudTheme.Card,
+            BackColor = HudTheme.Surface,
             Padding = new Padding(20, 4, 20, 16),
         };
 
@@ -137,8 +137,8 @@ internal sealed partial class AskReplyForm : Form {
             AutoSize = false,
             Width = inner,
             Font = HudTheme.ContentFont(9.5f, content.Question),
-            ForeColor = HudTheme.Muted,
-            BackColor = HudTheme.Card,
+            ForeColor = HudTheme.InkMuted,
+            BackColor = HudTheme.Surface,
             Text = Truncate(content.Question, 220),
             // With RightToLeft on, WinForms mirrors TextAlign: TopLeft already means "start at the right".
             RightToLeft = questionRtl ? RightToLeft.Yes : RightToLeft.No,
@@ -155,8 +155,8 @@ internal sealed partial class AskReplyForm : Form {
             _body = new RichTextBox {
                 ReadOnly = true,
                 BorderStyle = BorderStyle.None,
-                BackColor = HudTheme.Card,
-                ForeColor = HudTheme.Body,
+                BackColor = HudTheme.Surface,
+                ForeColor = HudTheme.Ink,
                 Font = _bodyFont,
                 Width = inner,
                 DetectUrls = true,
@@ -181,7 +181,7 @@ internal sealed partial class AskReplyForm : Form {
                 SizeMode = PictureBoxSizeMode.Zoom,
                 Width = inner,
                 Height = Math.Max(80, (int)(content.Image.Height * scale)),
-                BackColor = HudTheme.Window,
+                BackColor = HudTheme.Well,
                 Cursor = Cursors.Hand,
                 Margin = new Padding(0, 0, 0, 10),
             };
@@ -199,8 +199,8 @@ internal sealed partial class AskReplyForm : Form {
                 AutoSize = false,
                 Width = inner,
                 Font = HudTheme.Small,
-                ForeColor = HudTheme.Amber,
-                BackColor = HudTheme.Card,
+                ForeColor = HudTheme.Caution,
+                BackColor = HudTheme.Surface,
                 Text = note,
                 Margin = new Padding(0, 0, 0, 8),
                 UseMnemonic = false,
@@ -214,8 +214,8 @@ internal sealed partial class AskReplyForm : Form {
             Width = inner,
             Height = 22,
             Font = HudTheme.Small,
-            ForeColor = HudTheme.Mint,
-            BackColor = HudTheme.Card,
+            ForeColor = HudTheme.Positive,
+            BackColor = HudTheme.Surface,
             Text = content.DeliveryNote,
             Margin = new Padding(0, 0, 0, 6),
             UseMnemonic = false,
@@ -227,7 +227,7 @@ internal sealed partial class AskReplyForm : Form {
             WrapContents = true,
             Width = inner,
             MaximumSize = new Size(inner, 0),
-            BackColor = HudTheme.Card,
+            BackColor = HudTheme.Surface,
             Margin = new Padding(0),
         };
         if (_text.Length > 0) {
@@ -251,7 +251,7 @@ internal sealed partial class AskReplyForm : Form {
         _statusReset = new System.Windows.Forms.Timer { Interval = 2200 };
         _statusReset.Tick += (_, _) => {
             _statusReset.Stop();
-            _status.ForeColor = HudTheme.Mint;
+            _status.ForeColor = HudTheme.Positive;
             _status.Text = _content.DeliveryNote;
             if (_copyText != null) {
                 _copyText.Text = Loc.T("Copy text");
@@ -295,12 +295,12 @@ internal sealed partial class AskReplyForm : Form {
 
     protected override void OnHandleCreated(EventArgs e) {
         base.OnHandleCreated(e);
-        HudTheme.ApplyChrome(this);
+        HudTheme.ApplyChrome(this, paper: true);
     }
 
     protected override void OnPaint(PaintEventArgs e) {
         base.OnPaint(e);
-        using var pen = new Pen(HudTheme.Border);
+        using var pen = new Pen(HudTheme.HairlineStrong);
         e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
     }
 
@@ -381,13 +381,13 @@ internal sealed partial class AskReplyForm : Form {
     private void OnCaptionPaint(object? sender, PaintEventArgs e) {
         HudTheme.Prepare(e.Graphics);
         var dot = Loc.Mirror(new Rectangle(22, _caption.Height / 2 - 4, 8, 8), _caption.Width);
-        using (var brush = new SolidBrush(HudTheme.Teal)) {
+        using (var brush = new SolidBrush(HudTheme.Ink)) {
             e.Graphics.FillEllipse(brush, dot);
         }
         var title = Loc.Mirror(new Rectangle(40, 0, _caption.Width - 40 - 60, _caption.Height), _caption.Width);
-        TextRenderer.DrawText(e.Graphics, CaptionText, HudTheme.Caption, title, HudTheme.Body,
+        TextRenderer.DrawText(e.Graphics, CaptionText, HudTheme.Caption, title, HudTheme.Ink,
             Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
-        using var hair = new Pen(HudTheme.Border);
+        using var hair = new Pen(HudTheme.HairlineStrong);
         e.Graphics.DrawLine(hair, 16, _caption.Height - 1, _caption.Width - 16, _caption.Height - 1);
     }
 
@@ -452,14 +452,14 @@ internal sealed partial class AskReplyForm : Form {
         if (button != null) {
             button.Text = Loc.T("Copied ✓");
         }
-        _status.ForeColor = HudTheme.Mint;
+        _status.ForeColor = HudTheme.Positive;
         _status.Text = message;
         _statusReset.Stop();
         _statusReset.Start();
     }
 
     private void ShowError(string message) {
-        _status.ForeColor = HudTheme.Red;
+        _status.ForeColor = HudTheme.Negative;
         _status.Text = message;
         _statusReset.Stop();
         _statusReset.Start();

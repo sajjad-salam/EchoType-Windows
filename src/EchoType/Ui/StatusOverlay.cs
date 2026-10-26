@@ -820,7 +820,7 @@ internal sealed class StatusOverlay : Form {
         TextRenderer.DrawText(g, _title, _listenFont, labelBounds,
             HudTheme.Body,
             Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
-        HudTheme.DrawWave(g, wave, _bars, HudTheme.Teal, Dip(18));
+        HudTheme.DrawWave(g, wave, _bars, Color.White, Dip(18));
     }
 
     private void DrawCloseButton(Graphics g) {
