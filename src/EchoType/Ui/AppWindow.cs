@@ -9,6 +9,7 @@ internal enum AppShortcut {
     SecondDictation,
     AskModel,
     Translate,
+    TranslateSelection,
     PressEnter,
     AutoClean,
     ModelWindow,
@@ -56,6 +57,7 @@ internal interface IAppWindowHost {
     void SetStartWithWindows(bool value);
     bool TrySetShortcut(AppShortcut shortcut, int vk);
     bool TrySetTranslateChord(HotkeyChord chord);
+    bool TrySetTranslateSelectionChord(HotkeyChord chord);
     bool TrySetDictationChord(HotkeyChord chord);
     bool TrySetSecondDictationChord(HotkeyChord chord);
     void ToggleLoginWindow();
@@ -109,6 +111,7 @@ internal sealed class AppWindow : Form {
     private readonly HudToggleRow _askPopupToggle;
     private readonly HudButton _askWindowButton;
     private readonly HudHotkeyRow _translateKey;
+    private readonly HudHotkeyRow _translateSelectionKey;
     private readonly ComboBox _translateLanguage;
     private readonly HudSettingRow _openAiRow;
     private readonly HudButton _openAiButton;
@@ -223,6 +226,8 @@ internal sealed class AppWindow : Form {
         _dictationKey.MultiKey = true;
         _secondDictationKey = AddHotkey(dictation, Loc.T("Second dictation key"), AppShortcut.SecondDictation);
         _secondDictationKey.MultiKey = true;
+        _muteToggle = AddToggle(dictation, Loc.T("Pause or mute other apps while dictating"), null,
+            toggle => _host.SetMuteOthers(toggle.Checked));
 
         // ── Clean & Ask ───────────────────────────────────────
         var ai = AddPage(GlyphChat, Loc.T("Clean & Ask"), Loc.T("Models that tidy your dictation and answer your questions."));
@@ -254,10 +259,12 @@ internal sealed class AppWindow : Form {
         AddRow(ask, Loc.T("Model window"), Loc.T("Sign in, or continue the conversation."), _askWindowButton, 200);
 
         // ── Translate ─────────────────────────────────────────
-        var translate = AddPage(GlyphGlobe, Loc.T("Translate"), Loc.T("Speak in one language, paste in another."));
+        var translate = AddPage(GlyphGlobe, Loc.T("Translate"), Loc.T("Speak in one language, paste in another — or translate selected text."));
         var translateCard = AddCard(translate);
         _translateKey = AddHotkey(translateCard, Loc.T("Translate shortcut"), AppShortcut.Translate);
         _translateKey.MultiKey = true;
+        _translateSelectionKey = AddHotkey(translateCard, Loc.T("Translate selection shortcut"), AppShortcut.TranslateSelection);
+        _translateSelectionKey.MultiKey = true;
         _translateLanguage = new ComboBox {
             DropDownStyle = ComboBoxStyle.DropDownList,
             FlatStyle = FlatStyle.Standard,
@@ -293,7 +300,6 @@ internal sealed class AppWindow : Form {
         AddSection(shortcuts, Loc.T("Other shortcuts"));
         var otherKeys = AddCard(shortcuts);
         _windowKey = AddHotkey(otherKeys, Loc.T("Open model window"), AppShortcut.ModelWindow);
-        _enterKey = AddHotkey(otherKeys, Loc.T("Auto Enter shortcut"), AppShortcut.PressEnter);
 
         // ── Commands ──────────────────────────────────────────
         var commands = AddPage(GlyphCommand, Loc.T("Commands"), Loc.T("Custom commands, workspace modes and word replacements."));
@@ -316,16 +322,13 @@ internal sealed class AppWindow : Form {
 
         // ── Settings ──────────────────────────────────────────
         var settings = AddPage(GlyphSettings, Loc.T("Settings"), Loc.T("General options, language and app controls."));
-        AddSection(settings, Loc.T("General"));
-        var general = AddCard(settings);
-        _muteToggle = AddToggle(general, Loc.T("Pause or mute other apps while dictating"), null,
-            toggle => _host.SetMuteOthers(toggle.Checked));
-        _enterToggle = AddToggle(general, Loc.T("Press Enter after paste"), null,
+        AddSection(settings, Loc.T("Paste"));
+        var paste = AddCard(settings);
+        _enterToggle = AddToggle(paste, Loc.T("Press Enter after paste"), null,
             toggle => _host.SetPressEnterAfterPaste(toggle.Checked));
-        _clipboardToggle = AddToggle(general, Loc.T("Keep transcript on clipboard"), null,
+        _enterKey = AddHotkey(paste, Loc.T("Auto Enter shortcut"), AppShortcut.PressEnter);
+        _clipboardToggle = AddToggle(paste, Loc.T("Keep transcript on clipboard"), null,
             toggle => _host.SetKeepTranscriptOnClipboard(toggle.Checked));
-        _startupToggle = AddToggle(general, Loc.T("Start EchoType with Windows"), null,
-            toggle => _host.SetStartWithWindows(toggle.Checked));
 
         AddSection(settings, Loc.T("Language") + (Loc.Arabic ? "" : " · اللغة"));
         var languageCard = AddCard(settings);
@@ -340,6 +343,8 @@ internal sealed class AppWindow : Form {
 
         AddSection(settings, Loc.T("App"));
         var about = AddCard(settings);
+        _startupToggle = AddToggle(about, Loc.T("Start EchoType with Windows"), null,
+            toggle => _host.SetStartWithWindows(toggle.Checked));
         var openLog = MakeButton(Loc.T("Open log"), HudButton.Kind.Ghost);
         openLog.Click += (_, _) => _host.OpenLog();
         AddRow(about, Loc.T("Diagnostics log"), Loc.T("Open the log when something goes wrong."), openLog, 160);
@@ -518,6 +523,9 @@ internal sealed class AppWindow : Form {
             if (_capturing != _translateKey) {
                 _translateKey.Value = HotkeyNames.For(s.TranslateChord);
             }
+            if (_capturing != _translateSelectionKey) {
+                _translateSelectionKey.Value = HotkeyNames.For(s.TranslateSelectionChord);
+            }
             _translateLanguage.SelectedIndex = IndexOfLanguage(s.TranslateTargetLanguage);
             bool hasKey = !string.IsNullOrWhiteSpace(s.OpenAiApiKey);
             _openAiRow.Description = Loc.T(hasKey ? "Set — translating with OpenAI." : "Not set — translating with Google.");
@@ -529,7 +537,7 @@ internal sealed class AppWindow : Form {
             _enterKey.Value = HotkeyLabel(s.PressEnterToggleVk);
             _cleanKey.Value = HotkeyLabel(s.AutoCleanToggleVk);
             _windowKey.Value = HotkeyLabel(s.OpenModelWindowVk);
-            foreach (var row in new[] { _dictationKey, _secondDictationKey, _askModelKey, _translateKey, _chatgptKey, _geminiKey, _claudeKey, _enterKey, _cleanKey, _windowKey }) {
+            foreach (var row in new[] { _dictationKey, _secondDictationKey, _askModelKey, _translateKey, _translateSelectionKey, _chatgptKey, _geminiKey, _claudeKey, _enterKey, _cleanKey, _windowKey }) {
                 row.Invalidate();
             }
             _loginButton.Text = !_host.Online ? Loc.T("Retry connection")
@@ -938,8 +946,9 @@ internal sealed class AppWindow : Form {
         row.Capturing = true;
         row.Tag = shortcut;
         _host.Hotkey.ResetCapture();
-        if (shortcut is AppShortcut.Translate or AppShortcut.Dictation or AppShortcut.SecondDictation) {
-            // Dictation and Translate take one to three keys (e.g. Ctrl+Space);
+        if (shortcut is AppShortcut.Translate or AppShortcut.TranslateSelection or AppShortcut.Dictation
+            or AppShortcut.SecondDictation) {
+            // Dictation and the Translate shortcuts take one to three keys (e.g. Ctrl+Space);
             // they are saved once every key of the combination has been released.
             _host.Hotkey.CaptureMaxKeys = HotkeyChord.MaxKeys;
             _host.Hotkey.ChordCaptured += OnChordCaptured;
@@ -964,6 +973,9 @@ internal sealed class AppWindow : Form {
         _translateKey.CapturePreview = null;
         _translateKey.Value = HotkeyNames.For(_host.Settings.TranslateChord);
         _translateKey.Invalidate();
+        _translateSelectionKey.CapturePreview = null;
+        _translateSelectionKey.Value = HotkeyNames.For(_host.Settings.TranslateSelectionChord);
+        _translateSelectionKey.Invalidate();
         _dictationKey.CapturePreview = null;
         _dictationKey.Value = HotkeyNames.For(_host.Settings.DictationChord);
         _dictationKey.Invalidate();
@@ -992,6 +1004,8 @@ internal sealed class AppWindow : Form {
             _host.TrySetDictationChord(chord);
         } else if (shortcut == AppShortcut.SecondDictation) {
             _host.TrySetSecondDictationChord(chord);
+        } else if (shortcut == AppShortcut.TranslateSelection) {
+            _host.TrySetTranslateSelectionChord(chord);
         } else {
             _host.TrySetTranslateChord(chord);
         }

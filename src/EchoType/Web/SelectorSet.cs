@@ -2,9 +2,10 @@ namespace EchoType.Web;
 
 /// <summary>
 /// DOM hooks for one chat site. Rendered into the injected <c>__echotype</c> script
-/// so ChatGPT, Gemini and Claude can share DictationDriver.
+/// so ChatGPT, Gemini and Claude can share DictationDriver. A record so
+/// <see cref="SelectorOverrides"/> can patch it with <c>with</c>.
 /// </summary>
-internal sealed class SelectorSet {
+internal sealed record SelectorSet {
 
     public required string[] Composer { get; init; }
     public required string LoggedOutMarker { get; init; }

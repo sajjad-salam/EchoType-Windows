@@ -4,7 +4,11 @@ using EchoType.Native;
 
 namespace EchoType.Ui;
 
-/// <summary>What the Ask model popup shows.</summary>
+/// <summary>
+/// What the Ask model popup shows. <paramref name="Title"/> replaces "Ask {model}" in the
+/// caption; <paramref name="KeepLayout"/> shows <paramref name="Text"/> exactly as given
+/// (blank lines, indentation, spacing) in a popup wide enough for its longest line.
+/// </summary>
 internal sealed record AskReplyContent(
     string ModelName,
     string Question,
@@ -12,7 +16,9 @@ internal sealed record AskReplyContent(
     Image? Image,
     int ImageCount,
     IReadOnlyList<string> Videos,
-    string DeliveryNote);
+    string DeliveryNote,
+    string? Title = null,
+    bool KeepLayout = false);
 
 /// <summary>
 /// Popup with the Ask model's complete reply: the text (copyable, selectable), the
@@ -23,10 +29,11 @@ internal sealed record AskReplyContent(
 internal sealed partial class AskReplyForm : Form {
 
     private const int WidthDip = 560;
+    private const int MaxLayoutWidthDip = 960;
     private static AskReplyForm? _current;
 
     private readonly AskReplyContent _content;
-    private readonly Action _openModelWindow;
+    private readonly Action? _openModelWindow;
     private readonly string _text;
     private readonly Panel _caption;
     private readonly HudCaptionButton _close;
@@ -44,8 +51,11 @@ internal sealed partial class AskReplyForm : Form {
     private int _dragY;
     private bool _dragging;
 
-    /// <summary>Shows <paramref name="content"/>, closing any previous Ask popup.</summary>
-    public static void ShowReply(AskReplyContent content, Action openModelWindow) {
+    /// <summary>
+    /// Shows <paramref name="content"/>, closing any previous popup. Without
+    /// <paramref name="openModelWindow"/> there is no "Open in …" button.
+    /// </summary>
+    public static void ShowReply(AskReplyContent content, Action? openModelWindow) {
         try {
             if (_current is { IsDisposed: false } old) {
                 old.Close();
@@ -70,12 +80,12 @@ internal sealed partial class AskReplyForm : Form {
         _current = null;
     }
 
-    private AskReplyForm(AskReplyContent content, Action openModelWindow) {
+    private AskReplyForm(AskReplyContent content, Action? openModelWindow) {
         _content = content;
         _openModelWindow = openModelWindow;
-        _text = CleanText(content.Text);
+        _text = content.KeepLayout ? content.Text : CleanText(content.Text);
 
-        Text = Loc.F("Ask {0}", content.ModelName);
+        Text = CaptionText;
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -86,9 +96,11 @@ internal sealed partial class AskReplyForm : Form {
         ForeColor = HudTheme.Body;
         Font = HudTheme.BodyText;
         Padding = new Padding(1);
-        Width = WidthDip;
 
         _bodyFont = HudTheme.ContentFont(11f, _text);
+        var screen = Screen.FromPoint(Cursor.Position).WorkingArea;
+        int width = content.KeepLayout ? LayoutWidth(_text, _bodyFont, screen) : WidthDip;
+        Width = width;
 
         _caption = new Panel { Dock = DockStyle.Top, Height = 52, BackColor = HudTheme.Card };
         _caption.Paint += OnCaptionPaint;
@@ -119,7 +131,7 @@ internal sealed partial class AskReplyForm : Form {
             Padding = new Padding(20, 4, 20, 16),
         };
 
-        int inner = WidthDip - 40 - 2;
+        int inner = width - 40 - 2;
         bool questionRtl = ArabicFont.StartsRightToLeft(content.Question);
         _question = new Label {
             AutoSize = false,
@@ -138,7 +150,6 @@ internal sealed partial class AskReplyForm : Form {
             new Size(inner, 200), TextFormatFlags.WordBreak).Height + 4);
         content_.Controls.Add(_question);
 
-        var screen = Screen.FromPoint(Cursor.Position).WorkingArea;
         if (_text.Length > 0) {
             bool rtl = ArabicFont.StartsRightToLeft(_text);
             _body = new RichTextBox {
@@ -157,7 +168,7 @@ internal sealed partial class AskReplyForm : Form {
             };
             _body.LinkClicked += (_, e) => OpenUrl(e.LinkText ?? "");
             int textHeight = TextRenderer.MeasureText(_text, _bodyFont, new Size(inner - 24, 10_000),
-                TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height + 12;
+                TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.ExpandTabs).Height + 12;
             int maxText = content.Image != null ? screen.Height / 4 : screen.Height / 2;
             _body.Height = Math.Clamp(textHeight, 40, Math.Max(120, maxText));
             content_.Controls.Add(_body);
@@ -229,7 +240,9 @@ internal sealed partial class AskReplyForm : Form {
         foreach (string url in content.Videos.Where(IsWebUrl).Take(1)) {
             AddButton(Loc.T("Open video"), HudButton.Kind.Ghost, 120, () => OpenUrl(url));
         }
-        AddButton(Loc.F("Open in {0}", content.ModelName), HudButton.Kind.Ghost, 150, () => _openModelWindow());
+        if (_openModelWindow != null) {
+            AddButton(Loc.F("Open in {0}", content.ModelName), HudButton.Kind.Ghost, 150, _openModelWindow);
+        }
         content_.Controls.Add(_buttons);
 
         Controls.Add(content_);
@@ -339,6 +352,19 @@ internal sealed partial class AskReplyForm : Form {
         return button;
     }
 
+    private string CaptionText => _content.Title ?? Loc.F("Ask {0}", _content.ModelName);
+
+    /// <summary>Wide enough that the longest line fits unwrapped, within the screen.</summary>
+    private static int LayoutWidth(string text, Font font, Rectangle screen) {
+        int longest = 0;
+        foreach (string line in text.Split('\n')) {
+            longest = Math.Max(longest, TextRenderer.MeasureText(line.TrimEnd('\r'), font, Size.Empty,
+                TextFormatFlags.NoPadding | TextFormatFlags.ExpandTabs).Width);
+        }
+        int max = Math.Min(MaxLayoutWidthDip, screen.Width - 80);
+        return Math.Clamp(longest + 40 + 2 + 40, Math.Min(WidthDip, max), max);
+    }
+
     private void PlaceNearBottom() {
         var area = Screen.FromPoint(Cursor.Position).WorkingArea;
         Location = new Point(
@@ -359,7 +385,7 @@ internal sealed partial class AskReplyForm : Form {
             e.Graphics.FillEllipse(brush, dot);
         }
         var title = Loc.Mirror(new Rectangle(40, 0, _caption.Width - 40 - 60, _caption.Height), _caption.Width);
-        TextRenderer.DrawText(e.Graphics, Loc.F("Ask {0}", _content.ModelName), HudTheme.Caption, title, HudTheme.Body,
+        TextRenderer.DrawText(e.Graphics, CaptionText, HudTheme.Caption, title, HudTheme.Body,
             Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding));
         using var hair = new Pen(HudTheme.Border);
         e.Graphics.DrawLine(hair, 16, _caption.Height - 1, _caption.Width - 16, _caption.Height - 1);

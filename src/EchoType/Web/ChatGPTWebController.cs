@@ -12,6 +12,8 @@ internal enum ReadyOutcome {
     Timeout,
     NotReady,
     RuntimeMissing,
+    /// <summary>Page loaded, but the selectors find no composer and no sign-in button.</summary>
+    UiChanged,
 }
 
 internal sealed class WebView2RuntimeMissingException : Exception {
@@ -124,7 +126,7 @@ internal sealed class ChatGPTWebController : IDisposable {
         """ + "\n" + MicCapture.HookScript;
 
     private ChatSite _site;
-    private readonly WebViewHostForm _form = new();
+    private WebViewHostForm _form = new();
     private CoreWebView2Environment? _env;
     private CoreWebView2Controller? _controller;
     private CoreWebView2? _webview;
@@ -143,16 +145,37 @@ internal sealed class ChatGPTWebController : IDisposable {
     private Task? _initTask;
     private readonly List<Form> _popups = [];
 
-    public ChatGPTWebController(ChatSite? site = null) {
+    // Standby page: a second, already-loaded copy of the chat site in the same profile.
+    // Cancel swaps to it instantly and reloads the old page in the background, so the
+    // next recording never waits on a reload.
+    private readonly bool _keepStandby;
+    private WebViewHostForm? _standbyForm;
+    private CoreWebView2Controller? _standbyController;
+    private CoreWebView2? _standbyWebview;
+    private DictationDriver? _standbyDriver;
+    private bool _standbyReady;
+    private bool _standbyCreating;
+    private int _standbyGeneration;
+
+    public ChatGPTWebController(ChatSite? site = null, bool keepStandby = false) {
         _site = site ?? ChatSite.ChatGpt;
-        _form.Text = _site.LoginTitle;
+        _keepStandby = keepStandby;
         _isOnline = NetworkInterface.GetIsNetworkAvailable();
         NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
-        _form.FormClosing += OnHostFormClosing;
-        _form.Resize += OnHostFormResize;
-        _form.LocationChanged += OnHostFormLocationChanged;
-        _form.Activated += OnFormActivated;
+        HookHostForm(_form);
+        if (_keepStandby) {
+            _standbyForm = new WebViewHostForm();
+            HookHostForm(_standbyForm);
+        }
+    }
+
+    private void HookHostForm(WebViewHostForm form) {
+        form.Text = _site.LoginTitle;
+        form.FormClosing += OnHostFormClosing;
+        form.Resize += OnHostFormResize;
+        form.LocationChanged += OnHostFormLocationChanged;
+        form.Activated += OnFormActivated;
     }
 
     public DictationDriver? Driver => _driver;
@@ -176,8 +199,12 @@ internal sealed class ChatGPTWebController : IDisposable {
         _ensureTask = null; // don't reuse the previous model's in-flight load
         _site = site;
         _form.Text = _site.LoginTitle;
+        if (_standbyForm != null) {
+            _standbyForm.Text = _site.LoginTitle;
+        }
         ChatThreadSends = 0;
         ForceNewChatThread = false;
+        SetMissingUiPart(null);
     }
 
     /// <summary>True once a webview exists to start dictation on (decides Waking vs Engaging).</summary>
@@ -193,9 +220,16 @@ internal sealed class ChatGPTWebController : IDisposable {
 
     public bool IsLoginWindowVisible => _loginVisible;
 
+    /// <summary>
+    /// What the selectors couldn't find after the last page load
+    /// (<see cref="SelectorHealth.ComposerPart"/> / <see cref="SelectorHealth.MicPart"/>), or null.
+    /// </summary>
+    public string? MissingUiPart { get; private set; }
+
     public event Action<bool>? LoginStateChanged;
     public event Action<bool>? ReachabilityChanged;
     public event Action<bool>? InteractiveChanged;
+    public event Action<string?>? MissingUiPartChanged;
 
     // ------------------------------------------------------------------
     // Readiness (mac ensureReady / waitUntilInteractive parity)
@@ -257,6 +291,7 @@ internal sealed class ChatGPTWebController : IDisposable {
             if (st.IsChatReady) {
                 SetInteractive(true);
                 LoginStateChanged?.Invoke(true);
+                EnsureStandbyLoaded();
                 return ReadyOutcome.Ready;
             }
             if (st.LoginMarker && !st.ComposerPresent) {
@@ -287,10 +322,15 @@ internal sealed class ChatGPTWebController : IDisposable {
     /// <summary>
     /// Reloads ChatGPT/Gemini after the user cancels. Cancel often leaves the site's
     /// mic UI wedged, so the next recording would otherwise fail until a later
-    /// self-heal reload. The next hotkey joins EnsureReadyAsync and waits here.
+    /// self-heal reload. With a ready standby page this swaps to it instantly and
+    /// reloads the wedged page in the background; otherwise the next hotkey joins
+    /// EnsureReadyAsync and waits for the reload.
     /// </summary>
     public void ReloadAfterCancel() {
         if (_disposed) {
+            return;
+        }
+        if (TrySwapToStandby()) {
             return;
         }
         Log.Write("webview: reloading " + _site.DisplayName + " after cancel");
@@ -380,6 +420,8 @@ internal sealed class ChatGPTWebController : IDisposable {
                     if (_loginVisible) {
                         HideLoginWindow(); // logged in while the login window was up
                     }
+                    _ = CheckUiHealthAsync();
+                    EnsureStandbyLoaded();
                     return ReadyOutcome.Ready;
                 }
                 if (st.LoggedIn) {
@@ -405,7 +447,16 @@ internal sealed class ChatGPTWebController : IDisposable {
                         _loading = false;
                         SetInteractive(true);
                         LoginStateChanged?.Invoke(true);
+                        _ = CheckUiHealthAsync();
                         return ReadyOutcome.Ready;
+                    }
+                    // No composer and no sign-in button on a fully loaded page is a
+                    // UI change, not a logout — don't send the user to a login window.
+                    if (!st.LoginMarker && await CheckUiHealthAsync() == SelectorHealth.ComposerPart) {
+                        Log.Write("webview: load timeout (no composer and no sign-in button — UI changed?)");
+                        _loading = false;
+                        SetInteractive(false);
+                        return ReadyOutcome.UiChanged;
                     }
                     Log.Write("webview: ready but logged OUT");
                     _loading = false;
@@ -425,11 +476,207 @@ internal sealed class ChatGPTWebController : IDisposable {
         }
     }
 
+    /// <summary>
+    /// Health check after a page load settles: can the selectors still find the
+    /// composer and the mic button? A miss logs the page's buttons (so selectors.json
+    /// can be patched from the log) and raises <see cref="MissingUiPartChanged"/>.
+    /// </summary>
+    private async Task<string?> CheckUiHealthAsync() {
+        var driver = _driver;
+        if (driver == null) {
+            return MissingUiPart;
+        }
+        SelectorHealth health;
+        try {
+            health = await driver.HealthAsync();
+        } catch (DriverException ex) {
+            Log.Write("selectors: health check failed: " + ex.Message);
+            return MissingUiPart;
+        }
+        if (!ReferenceEquals(driver, _driver)) {
+            return MissingUiPart; // unloaded or switched site meanwhile
+        }
+        string? missing = health.MissingPart;
+        if (missing != null) {
+            Log.Write($"selectors: {_site.DisplayName} UI changed? can't find the {missing} ({health}). "
+                + "Patch it in " + SelectorOverrides.FilePath + ". Buttons on page: "
+                + Truncate(await driver.DumpButtonsAsync(), 2000));
+        } else if (health.Composer && !health.ComposerExact && !health.Dictating) {
+            Log.Write($"selectors: {_site.DisplayName} composer found only by the generic fallback — its composer selectors may be stale");
+        } else if (MissingUiPart != null) {
+            Log.Write($"selectors: {_site.DisplayName} health ok again");
+        }
+        if (!health.LoginMarker && health.DocReady) {
+            SetMissingUiPart(missing);
+        }
+        return missing;
+    }
+
+    private void SetMissingUiPart(string? part) {
+        if (part == MissingUiPart) {
+            return;
+        }
+        MissingUiPart = part;
+        MissingUiPartChanged?.Invoke(part);
+    }
+
+    private static string Truncate(string s, int n) => s.Length <= n ? s : s[..n];
+
     /// <summary>Fire-and-forget variant used by the login window path.</summary>
     private async Task WaitAndLogInteractiveAsync() {
         var outcome = await WaitUntilInteractiveAsync(TimeSpan.FromSeconds(25));
         Log.Write("webview: login-window load -> " + outcome);
     }
+
+    // ------------------------------------------------------------------
+    // Standby page
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Makes the ready standby page the active one and sends the old (possibly wedged)
+    /// page to the background to reload as the next standby. False when no standby is
+    /// ready — the caller falls back to an in-place reload.
+    /// </summary>
+    private bool TrySwapToStandby() {
+        if (!_standbyReady || _loginVisible || !_isOnline
+            || _standbyForm == null || _standbyController == null || _standbyWebview == null || _standbyDriver == null
+            || _controller == null || _webview == null || _driver == null) {
+            return false;
+        }
+        (_form, _standbyForm) = (_standbyForm, _form);
+        (_controller, _standbyController) = (_standbyController, _controller);
+        (_webview, _standbyWebview) = (_standbyWebview, _webview);
+        (_driver, _standbyDriver) = (_standbyDriver, _driver);
+        _navGeneration++;
+        _navCompletedGeneration = _navGeneration; // the new active page is already loaded
+        _loading = false;
+        _showingOfflinePage = false;
+        // The standby page sits on a fresh chat, not the old page's thread.
+        ChatThreadSends = 0;
+        ForceNewChatThread = false;
+        SetInteractive(true);
+        Log.Write("webview: cancel -> switched to the standby " + _site.DisplayName
+            + " page, reloading the old one in the background");
+        LoadStandby();
+        _ = EnsureReadyAsync(); // quick probe: still signed in, mic still there
+        return true;
+    }
+
+    /// <summary>Creates or loads the standby page once the active page is ready.</summary>
+    private void EnsureStandbyLoaded() {
+        if (!_keepStandby || _disposed || _standbyCreating) {
+            return;
+        }
+        if (_standbyWebview == null) {
+            _ = CreateStandbyAsync();
+        } else if (!_standbyReady && _standbyGeneration == 0) {
+            LoadStandby(); // created but never loaded, or dropped after a timeout
+        }
+    }
+
+    private async Task CreateStandbyAsync() {
+        var env = _env;
+        var form = _standbyForm;
+        if (env == null || form == null) {
+            return;
+        }
+        _standbyCreating = true;
+        CoreWebView2Controller? controller = null;
+        try {
+            if (!form.Visible) {
+                // Like the main window, the compositor must start on a real monitor.
+                // ShowWithoutActivation keeps focus where the user is typing.
+                PlaceOnPrimaryMonitor(form);
+                form.Show();
+            }
+            controller = await env.CreateCoreWebView2ControllerAsync(form.Handle);
+            ApplyHiddenMode(form, controller);
+            controller.DefaultBackgroundColor = Color.White;
+            controller.IsVisible = true;
+            var webview = controller.CoreWebView2;
+            ApplyChromeIdentity(webview);
+            var driver = new DictationDriver(webview, SelectorOverrides.Apply(_site.Id, _site.SelectorSet), _site.ChatUrl);
+            await webview.AddScriptToExecuteOnDocumentCreatedAsync(VisibilitySpoofScript);
+            await webview.AddScriptToExecuteOnDocumentCreatedAsync(driver.UserScript);
+            if (_disposed || !ReferenceEquals(env, _env) || !ReferenceEquals(form, _standbyForm)) {
+                controller.Close(); // unloaded or switched site meanwhile
+                return;
+            }
+            HookWebView(webview);
+            _standbyController = controller;
+            _standbyWebview = webview;
+            _standbyDriver = driver;
+            Log.Write("webview: standby page created");
+            LoadStandby();
+        } catch (Exception ex) {
+            Log.Write("webview: standby page failed: " + ex.Message);
+            if (controller != null && !ReferenceEquals(controller, _standbyController)) {
+                try { controller.Close(); } catch { /* best effort */ }
+            }
+        } finally {
+            _standbyCreating = false;
+        }
+    }
+
+    private void LoadStandby() {
+        var webview = _standbyWebview;
+        if (webview == null || _standbyDriver == null) {
+            return;
+        }
+        int gen = ++_standbyGeneration;
+        _standbyReady = false;
+        Log.Write("webview: loading standby " + _site.ChatUrl);
+        try {
+            webview.Navigate(_site.ChatUrl);
+        } catch (Exception ex) {
+            Log.Write("webview: standby navigate failed: " + ex.Message);
+            _standbyGeneration = 0;
+            return;
+        }
+        _ = WatchStandbyAsync(gen);
+    }
+
+    /// <summary>Polls the standby page until its composer and mic are up.</summary>
+    private async Task WatchStandbyAsync(int gen) {
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(45);
+        await Task.Delay(1500);
+        while (gen == _standbyGeneration && _standbyDriver is { } driver) {
+            try {
+                var st = await driver.StateAsync();
+                if (gen != _standbyGeneration) {
+                    return;
+                }
+                if (st.IsChatReady) {
+                    _standbyReady = true;
+                    Log.Write("webview: standby page ready");
+                    return;
+                }
+            } catch (DriverException) {
+                // mid-navigation — keep polling
+            }
+            if (DateTime.UtcNow > deadline) {
+                Log.Write("webview: standby page not ready in time — cancel will reload in place");
+                _standbyGeneration = 0; // the next ready load retries it
+                return;
+            }
+            await Task.Delay(1000);
+        }
+    }
+
+    private void CloseStandby() {
+        _standbyGeneration = 0;
+        _standbyReady = false;
+        _standbyDriver = null;
+        if (_standbyWebview != null) {
+            UnhookWebView(_standbyWebview);
+            _standbyWebview = null;
+        }
+        try { _standbyController?.Close(); } catch { /* best effort */ }
+        _standbyController = null;
+    }
+
+    private bool IsStandby(object? sender) =>
+        sender != null && ReferenceEquals(sender, _standbyWebview);
 
     // ------------------------------------------------------------------
     // Init / teardown
@@ -495,16 +742,11 @@ internal sealed class ChatGPTWebController : IDisposable {
         _webview = _controller.CoreWebView2;
 
         ApplyChromeIdentity(_webview);
-        _driver = new DictationDriver(_webview, _site.SelectorSet, _site.ChatUrl);
+        _driver = new DictationDriver(_webview, SelectorOverrides.Apply(_site.Id, _site.SelectorSet), _site.ChatUrl);
         _ = _webview.AddScriptToExecuteOnDocumentCreatedAsync(VisibilitySpoofScript);
         _ = _webview.AddScriptToExecuteOnDocumentCreatedAsync(_driver.UserScript);
 
-        _webview.PermissionRequested += OnPermissionRequested;
-        _webview.NavigationStarting += OnNavigationStarting;
-        _webview.NavigationCompleted += OnNavigationCompleted;
-        _webview.WebMessageReceived += OnWebMessageReceived;
-        _webview.ProcessFailed += OnProcessFailed;
-        _webview.NewWindowRequested += OnNewWindowRequested;
+        HookWebView(_webview);
 
         _inited = true;
         Log.Write("webview: initialized " + _site.Id + " (runtime " + version
@@ -516,6 +758,24 @@ internal sealed class ChatGPTWebController : IDisposable {
         } else {
             ApplyLoginMode();
         }
+    }
+
+    private void HookWebView(CoreWebView2 webview) {
+        webview.PermissionRequested += OnPermissionRequested;
+        webview.NavigationStarting += OnNavigationStarting;
+        webview.NavigationCompleted += OnNavigationCompleted;
+        webview.WebMessageReceived += OnWebMessageReceived;
+        webview.ProcessFailed += OnProcessFailed;
+        webview.NewWindowRequested += OnNewWindowRequested;
+    }
+
+    private void UnhookWebView(CoreWebView2 webview) {
+        webview.PermissionRequested -= OnPermissionRequested;
+        webview.NavigationStarting -= OnNavigationStarting;
+        webview.NavigationCompleted -= OnNavigationCompleted;
+        webview.WebMessageReceived -= OnWebMessageReceived;
+        webview.ProcessFailed -= OnProcessFailed;
+        webview.NewWindowRequested -= OnNewWindowRequested;
     }
 
     /// <summary>Chrome UA without the Edg/ token that makes Google/ChatGPT refuse embedded browsers.</summary>
@@ -549,14 +809,10 @@ internal sealed class ChatGPTWebController : IDisposable {
         SetInteractive(false);
         _driver = null;
         if (_webview != null) {
-            _webview.PermissionRequested -= OnPermissionRequested;
-            _webview.NavigationStarting -= OnNavigationStarting;
-            _webview.NavigationCompleted -= OnNavigationCompleted;
-            _webview.WebMessageReceived -= OnWebMessageReceived;
-            _webview.ProcessFailed -= OnProcessFailed;
-            _webview.NewWindowRequested -= OnNewWindowRequested;
+            UnhookWebView(_webview);
             _webview = null;
         }
+        CloseStandby();
         foreach (var popup in _popups.ToArray()) {
             try { popup.Close(); } catch { /* best effort */ }
         }
@@ -615,18 +871,20 @@ internal sealed class ChatGPTWebController : IDisposable {
         Log.Write("webview: login window hidden");
     }
 
-    private void ApplyHiddenMode() {
+    private void ApplyHiddenMode() => ApplyHiddenMode(_form, _controller);
+
+    private static void ApplyHiddenMode(WebViewHostForm form, CoreWebView2Controller? controller) {
         // Park fully offscreen; occlusion calculation is disabled so Chromium keeps
         // rendering. WS_EX_NOACTIVATE + WS_EX_TOOLWINDOW keep it out of Alt+Tab and
         // unable to steal focus.
-        _form.SuppressActivation = true;
-        _form.Location = new Point(-32000, -32000);
-        long ex = Native.NativeMethods.GetWindowLongPtrW(_form.Handle, Native.NativeMethods.GWL_EXSTYLE);
-        Native.NativeMethods.SetWindowLongPtrW(_form.Handle, Native.NativeMethods.GWL_EXSTYLE,
+        form.SuppressActivation = true;
+        form.Location = new Point(-32000, -32000);
+        long ex = Native.NativeMethods.GetWindowLongPtrW(form.Handle, Native.NativeMethods.GWL_EXSTYLE);
+        Native.NativeMethods.SetWindowLongPtrW(form.Handle, Native.NativeMethods.GWL_EXSTYLE,
             ex | Native.NativeMethods.WS_EX_NOACTIVATE | Native.NativeMethods.WS_EX_TOOLWINDOW);
-        if (_controller != null) {
-            _controller.IsVisible = true;
-            SyncWebViewBounds();
+        if (controller != null) {
+            controller.IsVisible = true;
+            SyncWebViewBounds(form, controller);
         }
     }
 
@@ -650,34 +908,38 @@ internal sealed class ChatGPTWebController : IDisposable {
         Log.Write("webview: login window shown");
     }
 
-    private void PlaceOnPrimaryMonitor() {
+    private void PlaceOnPrimaryMonitor() => PlaceOnPrimaryMonitor(_form);
+
+    private static void PlaceOnPrimaryMonitor(Form form) {
         var area = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1200, 800);
-        _form.Location = new Point(
-            area.Left + Math.Max(0, (area.Width - _form.Width) / 2),
-            area.Top + Math.Max(0, (area.Height - _form.Height) / 2));
+        form.Location = new Point(
+            area.Left + Math.Max(0, (area.Width - form.Width) / 2),
+            area.Top + Math.Max(0, (area.Height - form.Height) / 2));
     }
 
-    private void SyncWebViewBounds() {
-        if (_controller == null || _form.IsDisposed) {
+    private void SyncWebViewBounds() => SyncWebViewBounds(_form, _controller);
+
+    private static void SyncWebViewBounds(Form form, CoreWebView2Controller? controller) {
+        if (controller == null || form.IsDisposed) {
             return;
         }
-        var size = _form.ClientSize;
-        _controller.Bounds = new Rectangle(0, 0, Math.Max(1, size.Width), Math.Max(1, size.Height));
+        var size = form.ClientSize;
+        controller.Bounds = new Rectangle(0, 0, Math.Max(1, size.Width), Math.Max(1, size.Height));
         try {
-            _controller.NotifyParentWindowPositionChanged();
+            controller.NotifyParentWindowPositionChanged();
         } catch (Exception ex) {
             Log.Write("webview: position notify failed: " + ex.Message);
         }
     }
 
     private void OnHostFormResize(object? sender, EventArgs e) {
-        if (_loginVisible) {
+        if (_loginVisible && ReferenceEquals(sender, _form)) {
             SyncWebViewBounds();
         }
     }
 
     private void OnHostFormLocationChanged(object? sender, EventArgs e) {
-        if (_loginVisible) {
+        if (_loginVisible && ReferenceEquals(sender, _form)) {
             SyncWebViewBounds();
         }
     }
@@ -689,7 +951,9 @@ internal sealed class ChatGPTWebController : IDisposable {
             return;
         }
         e.Cancel = true;
-        HideLoginWindow();
+        if (ReferenceEquals(sender, _form)) {
+            HideLoginWindow();
+        }
     }
 
     /// <summary>True when the embedded browser is still on about:blank or some other non-chat host.</summary>
@@ -716,7 +980,7 @@ internal sealed class ChatGPTWebController : IDisposable {
     }
 
     private void OnFormActivated(object? sender, EventArgs e) {
-        if (_loginVisible) {
+        if (_loginVisible && ReferenceEquals(sender, _form)) {
             _controller?.MoveFocus(CoreWebView2MoveFocusReason.Programmatic);
         }
     }
@@ -782,10 +1046,13 @@ internal sealed class ChatGPTWebController : IDisposable {
     }
 
     private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e) {
-        Log.Write("webview: navigate " + e.Uri);
+        Log.Write("webview: " + (IsStandby(sender) ? "standby " : "") + "navigate " + e.Uri);
     }
 
     private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e) {
+        if (IsStandby(sender)) {
+            return; // WatchStandbyAsync tracks the standby page's readiness
+        }
         _navCompletedGeneration = _navGeneration;
         Log.Write($"webview: navigation completed ok={e.IsSuccess}");
         if (e.IsSuccess) {
@@ -834,13 +1101,18 @@ internal sealed class ChatGPTWebController : IDisposable {
     }
 
     private void OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e) {
-        if (e.TryGetWebMessageAsString() == "retry") {
+        if (!IsStandby(sender) && e.TryGetWebMessageAsString() == "retry") {
             Log.Write("webview: retry from offline page");
             RetryLoad();
         }
     }
 
     private void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs e) {
+        if (IsStandby(sender)) {
+            Log.Write($"webview: standby process failed ({e.ProcessFailedKind}) — dropping it");
+            CloseStandby(); // recreated on the next ready load
+            return;
+        }
         Log.Write($"webview: process failed ({e.ProcessFailedKind}) — unloading");
         Unload(); // next hotkey press does a fresh EnsureReadyAsync
     }
@@ -913,6 +1185,9 @@ internal sealed class ChatGPTWebController : IDisposable {
         if (_inited && !_loginVisible) {
             ApplyHiddenMode();
         }
+        if (_standbyForm != null && _standbyController != null) {
+            ApplyHiddenMode(_standbyForm, _standbyController);
+        }
     }
 
     private void BeginPageLoad() {
@@ -961,6 +1236,7 @@ internal sealed class ChatGPTWebController : IDisposable {
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         Unload();
         _form.Dispose();
+        _standbyForm?.Dispose();
     }
 
     /// <summary>Login host: title bar + close box. FormBorderStyle is fixed for the

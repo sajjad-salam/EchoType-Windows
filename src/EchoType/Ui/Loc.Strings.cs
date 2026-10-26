@@ -20,6 +20,7 @@ internal static partial class Loc {
         ["Ask model (answers the Ask shortcut)"] = "نموذج السؤال (يجيب على اختصار السؤال)",
         ["Open Ask model window…"] = "فتح نافذة نموذج السؤال…",
         ["Custom Commands"] = "الأوامر المخصصة",
+        ["Paste"] = "اللصق",
         ["Press Enter after paste"] = "الضغط على Enter بعد اللصق",
         ["Pause or mute other apps while dictating"] = "إيقاف التطبيقات الأخرى مؤقتًا أو كتمها أثناء الإملاء",
         ["Hold to talk"] = "اضغط مطولًا للتحدث",
@@ -96,6 +97,10 @@ internal static partial class Loc {
         ["Couldn't send the prompt — try again"] = "تعذّر إرسال الطلب — حاول مرة أخرى",
         ["Couldn't start a new chat — try again"] = "تعذّر بدء محادثة جديدة — حاول مرة أخرى",
         ["Dictation didn't start — try again"] = "لم يبدأ الإملاء — حاول مرة أخرى",
+        ["{0}'s page changed — EchoType can't find its mic button. Details are in the log."] =
+            "تغيّرت صفحة {0} — لا يجد EchoType زر الميكروفون. التفاصيل في السجل.",
+        ["{0}'s page changed — EchoType can't find its message box. Details are in the log."] =
+            "تغيّرت صفحة {0} — لا يجد EchoType مربع الرسالة. التفاصيل في السجل.",
         ["{0} isn't ready yet"] = "{0} ليس جاهزًا بعد",
         ["Page error: "] = "خطأ في الصفحة: ",
         [" Transcript copied to clipboard."] = " نُسخ النص المفرَّغ إلى الحافظة.",
@@ -196,7 +201,7 @@ internal static partial class Loc {
         ["Ask model shortcut"] = "اختصار سؤال النموذج",
         ["When off, the reply is pasted into the field you started in."] = "عند الإيقاف، يُلصق الرد في الحقل الذي بدأت منه.",
         ["Sign in, or continue the conversation."] = "سجّل الدخول، أو تابع المحادثة.",
-        ["Speak in one language, paste in another."] = "تحدّث بلغة، والصق بلغة أخرى.",
+        ["Speak in one language, paste in another — or translate selected text."] = "تحدّث بلغة، والصق بلغة أخرى — أو ترجم النص المحدد.",
         ["Translate shortcut"] = "اختصار الترجمة",
         ["Translate to"] = "الترجمة إلى",
         ["OpenAI API key"] = "مفتاح OpenAI API",
@@ -355,5 +360,19 @@ internal static partial class Loc {
         ["Restore defaults"] = "استعادة الافتراضيات",
         ["\"{0}\": shortcut \"{1}\" is not valid. Use e.g. Ctrl+Shift+F6."] = "«{0}»: الاختصار «{1}» غير صالح. استخدم مثلًا Ctrl+Shift+F6.",
         ["→ no mode (would paste as text)"] = "← لا يوجد وضع (سيُلصق كنص)",
+
+        // Translate selection
+        ["Translate selection shortcut"] = "اختصار ترجمة النص المحدد",
+        ["Set Translate selection shortcut…"] = "تعيين اختصار ترجمة النص المحدد…",
+        ["Translate selection shortcut: "] = "اختصار ترجمة النص المحدد: ",
+        ["EchoType — Translate selection shortcut"] = "EchoType — اختصار ترجمة النص المحدد",
+        ["Shortcut (1–3 keys)"] = "الاختصار (1–3 مفاتيح)",
+        ["Click the box, then press one to three keys together (for example Ctrl+Shift+Y). Select text in any app and press the shortcut: EchoType translates it to {0} and shows it in a popup, keeping its lines, blank lines and spacing. Clear removes the shortcut."] =
+            "انقر المربع، ثم اضغط من مفتاح إلى ثلاثة مفاتيح معًا (مثل Ctrl+Shift+Y). حدّد نصًا في أي تطبيق واضغط الاختصار: يترجمه EchoType إلى {0} ويعرضه في نافذة منبثقة مع الحفاظ على أسطره والأسطر الفارغة والمسافات. «مسح» يزيل الاختصار.",
+        ["Wait until dictation finishes before translating."] = "انتظر حتى ينتهي الإملاء قبل الترجمة.",
+        ["Select some text first, then press {0}."] = "حدّد نصًا أولًا، ثم اضغط {0}.",
+        ["Use Copy text to copy the translation."] = "استخدم «نسخ النص» لنسخ الترجمة.",
+        ["Translation → {0}"] = "الترجمة ← {0}",
+        ["Translation failed — check your internet connection and try again."] = "فشلت الترجمة — تحقّق من اتصال الإنترنت وحاول مرة أخرى.",
     };
 }

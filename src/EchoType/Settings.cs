@@ -141,6 +141,21 @@ internal sealed class Settings {
         TranslateVk = chord.LegacyVk;
     }
 
+    /// <summary>
+    /// One to three keys that translate the text selected in any app into
+    /// <see cref="TranslateTargetLanguage"/> and show it in a popup, keeping the original
+    /// line breaks, blank lines, indentation and spacing. Default Ctrl+Shift+Y; empty = off.
+    /// </summary>
+    [JsonPropertyName("translateSelectionVks")]
+    public List<int> TranslateSelectionVks { get; set; } = [0x11, 0x10, 0x59];
+
+    [JsonIgnore]
+    public HotkeyChord TranslateSelectionChord => HotkeyChord.FromVks(TranslateSelectionVks);
+
+    public void SetTranslateSelectionChord(HotkeyChord chord) {
+        TranslateSelectionVks = chord.ToIntArray().ToList();
+    }
+
     /// <summary>Google Translate target language code for <see cref="TranslateVk"/> (e.g. "en", "ar").</summary>
     [JsonPropertyName("translateTargetLanguage")]
     public string TranslateTargetLanguage { get; set; } = "en";
@@ -323,6 +338,7 @@ internal sealed class Settings {
             loaded.HotkeyVks ??= [];
             loaded.SecondHotkeyVks ??= [];
             loaded.TranslateVks ??= [];
+            loaded.TranslateSelectionVks ??= [];
             loaded.OpenAiApiKey ??= "";
             loaded.OpenAiTranslationModel ??= "";
             loaded.WordReplacements ??= [];

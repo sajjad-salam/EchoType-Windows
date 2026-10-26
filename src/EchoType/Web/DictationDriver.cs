@@ -13,6 +13,8 @@ internal enum DriverFailure {
     Timeout,
     Offline,
     JavaScript,
+    /// <summary>The site's UI no longer matches the selectors; Message is a <see cref="SelectorHealth"/> part.</summary>
+    UiChanged,
 }
 
 internal sealed class DriverException : Exception {
@@ -67,6 +69,29 @@ internal sealed record PageState(
 {
     /// <summary>Composer (or live dictation) is up and the mic control is on screen.</summary>
     public bool IsChatReady => LoggedIn && (CanDictate || Dictating);
+}
+
+/// <summary>
+/// Whether the selectors still find what dictation needs on a loaded page, from
+/// window.__echotype.health(). A miss with no sign-in button means the site changed its UI.
+/// </summary>
+internal sealed record SelectorHealth(
+    bool Composer,
+    bool ComposerExact,
+    bool Mic,
+    bool Dictating,
+    bool LoginMarker,
+    bool DocReady)
+{
+    public const string ComposerPart = "composer";
+    public const string MicPart = "mic button";
+
+    /// <summary><see cref="ComposerPart"/>, <see cref="MicPart"/>, or null when healthy or not judgeable.</summary>
+    public string? MissingPart =>
+        LoginMarker || !DocReady || Dictating ? null
+        : !Composer ? ComposerPart
+        : !Mic ? MicPart
+        : null;
 }
 
 /// <summary>Whether the model's page is still actually capturing audio.</summary>
@@ -198,8 +223,19 @@ internal sealed class DictationDriver {
             return out;
           };
           const label = (b) => (b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('data-testid') || '') + ' ' + (b.getAttribute('data-test-id') || '');
+          // A bad pattern from selectors.json must not throw out of every probe.
+          const regexCache = new Map();
+          const regexFor = (pattern) => {
+            if (!regexCache.has(pattern)) {
+              let re = null;
+              try { re = new RegExp(pattern, 'i'); } catch (e) {}
+              regexCache.set(pattern, re);
+            }
+            return regexCache.get(pattern);
+          };
           const matches = (b, pattern) => {
-            const re = new RegExp(pattern, 'i');
+            const re = regexFor(pattern);
+            if (!re) return false;
             if (re.test(label(b))) return true;
             const text = String(b.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80);
             return !!text && re.test(text);
@@ -370,7 +406,10 @@ internal sealed class DictationDriver {
           };
           // The composer leaves the DOM while dictation is active, so "logged in"
           // must accept the dictating state too.
-          E.loggedIn = () => !document.querySelector(S.loggedOutMarker) && (!!E.composer() || E.isDictating());
+          E.loginMarker = () => {
+            try { return !!document.querySelector(S.loggedOutMarker); } catch (e) { return false; }
+          };
+          E.loggedIn = () => !E.loginMarker() && (!!E.composer() || E.isDictating());
           E.queryAll = (sels) => {
             const out = [];
             const seen = new Set();
@@ -1100,13 +1139,23 @@ internal sealed class DictationDriver {
             dictating: E.isDictating(),
             composerPresent: !!E.composer(),
             canDictate: !!(E.findCss(S.startCss) || E.findButton(S.start, true) || E.isDictating()),
-            loginMarker: !!document.querySelector(S.loggedOutMarker),
+            loginMarker: E.loginMarker(),
             text: E.composerText(),
             gum: window.__etGUM || 'none',
             ua: navigator.userActivation
               ? (navigator.userActivation.isActive ? 'active' : (navigator.userActivation.hasBeenActive ? 'had' : 'none'))
               : 'unsupported',
             lastClick: window.__etLastClick || null
+          });
+          // Can the selectors still find the parts dictation needs? composerExact is
+          // false when only the generic contenteditable fallback found the composer.
+          E.health = () => JSON.stringify({
+            composer: !!E.composer(),
+            composerExact: S.composer.some(q => deepQueryAll(q).some(el => !E.inSideChrome(el))),
+            mic: !!(E.findCss(S.startCss) || E.findButton(S.start, true)),
+            dictating: E.isDictating(),
+            loginMarker: E.loginMarker(),
+            docReady: document.readyState === 'complete'
           });
           E.dump = () => JSON.stringify(
             buttons().map(b => ({ a: b.getAttribute('aria-label'), t: b.getAttribute('data-testid') || b.getAttribute('data-test-id') }))
@@ -1209,6 +1258,23 @@ internal sealed class DictationDriver {
             throw;
         } catch (Exception ex) {
             throw new DriverException(DriverFailure.JavaScript, "bad state JSON: " + ex.Message);
+        }
+    }
+
+    public async Task<SelectorHealth> HealthAsync() {
+        string json = await EvalAsync("__echotype.health()");
+        try {
+            using var doc = JsonDocument.Parse(json);
+            var r = doc.RootElement;
+            return new SelectorHealth(
+                Composer: Flag(r, "composer"),
+                ComposerExact: Flag(r, "composerExact"),
+                Mic: Flag(r, "mic"),
+                Dictating: Flag(r, "dictating"),
+                LoginMarker: Flag(r, "loginMarker"),
+                DocReady: Flag(r, "docReady"));
+        } catch (Exception ex) {
+            throw new DriverException(DriverFailure.JavaScript, "bad health JSON (" + json + "): " + ex.Message);
         }
     }
 
@@ -1477,6 +1543,11 @@ internal sealed class DictationDriver {
         InvalidateWaits();
         var st = await StateAsync();
         if (!st.LoggedIn) {
+            // No composer but no sign-in button either: the composer selectors are stale.
+            if (!st.LoginMarker && (await HealthAsync()).MissingPart == SelectorHealth.ComposerPart) {
+                await LogButtons("no-composer");
+                throw new DriverException(DriverFailure.UiChanged, SelectorHealth.ComposerPart);
+            }
             throw new DriverException(DriverFailure.LoggedOut, "logged out");
         }
         if (st.Dictating) {
@@ -1510,7 +1581,13 @@ internal sealed class DictationDriver {
             Log.Write("driver: starting via CDP click (no dictation shortcut)");
         }
 
-        await CdpClickButtonAsync("start");
+        try {
+            await CdpClickButtonAsync("start");
+        } catch (DriverException ex) when (ex.Kind == DriverFailure.ButtonNotFound) {
+            // Signed in with a composer, but neither the CSS nor the label patterns
+            // find the mic: the site changed it (the button dump is already logged).
+            throw new DriverException(DriverFailure.UiChanged, SelectorHealth.MicPart);
+        }
         if (await AwaitEngagementAsync(TimeSpan.FromSeconds(1.5), forensics: false)) {
             return;
         }

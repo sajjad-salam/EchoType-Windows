@@ -47,6 +47,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private readonly ToolStripMenuItem _pressEnterShortcutItem;
     private readonly ToolStripMenuItem _askModelShortcutItem;
     private readonly ToolStripMenuItem _translateShortcutItem;
+    private readonly ToolStripMenuItem _translateSelectionShortcutItem;
     private readonly ToolStripMenuItem _translateLanguageRoot;
     private readonly ToolStripMenuItem _modelWindowShortcutItem;
     private readonly ToolStripMenuItem _muteOthersItem;
@@ -103,6 +104,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     /// <summary>Image files named by the selection (Obsidian embeds, paths) to attach to the Ask model prompt.</summary>
     private IReadOnlyList<string> _askImages = [];
     private bool _translate;
+    /// <summary>Set while the Translate selection shortcut copies and translates a selection.</summary>
+    private CancellationTokenSource? _selectionTranslateCts;
     private HotkeyChord _sessionChord;
     private PasteTarget? _pasteTarget;
     private string? _selectedText;
@@ -117,7 +120,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _settings = Settings.Load();
         // Before any font or window exists: HudTheme builds its fonts from the language.
         Loc.Apply(_settings.UiLanguage);
-        _web = new ChatGPTWebController(ChatSite.For(_settings.TranscriptionProvider));
+        // keepStandby: cancel swaps to a second preloaded page instead of waiting on a reload.
+        _web = new ChatGPTWebController(ChatSite.For(_settings.TranscriptionProvider), keepStandby: true);
         _hotkey = new HotkeyMonitor();
 
         _statusItem = new ToolStripMenuItem { Enabled = false };
@@ -172,6 +176,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         UpdateAskModelShortcutMenu();
         _translateShortcutItem = new ToolStripMenuItem();
         _translateShortcutItem.Click += (_, _) => OpenTranslateShortcutUi();
+        _translateSelectionShortcutItem = new ToolStripMenuItem();
+        _translateSelectionShortcutItem.Click += (_, _) => OpenTranslateSelectionShortcutUi();
         _translateLanguageRoot = new ToolStripMenuItem();
         foreach (var (code, name) in GoogleTranslation.Languages) {
             string c = code;
@@ -195,35 +201,53 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _recordingModeRoot.DropDownItems.Add(_toggleModeItem);
         SyncRecordingModeMenu();
 
+        // One submenu per topic, in the same order as the main window's sidebar pages.
+        var dictationRoot = new ToolStripMenuItem(Loc.T("Dictation"));
+        dictationRoot.DropDownItems.Add(modelRoot);
+        dictationRoot.DropDownItems.Add(_recordingModeRoot);
+        dictationRoot.DropDownItems.Add(_muteOthersItem);
+        dictationRoot.DropDownItems.Add(new ToolStripSeparator());
+        dictationRoot.DropDownItems.Add(_loginItem);
+        dictationRoot.DropDownItems.Add(closeLoginItem);
+        dictationRoot.DropDownItems.Add(_modelWindowShortcutItem);
+#if DEBUG
+        dictationRoot.DropDownItems.Add(new ToolStripSeparator());
+        dictationRoot.DropDownItems.Add(new ToolStripMenuItem("Start dictation (debug)", null, (_, _) => DebugStart()));
+#endif
+
+        var cleanAskRoot = new ToolStripMenuItem(Loc.T("Clean & Ask"));
+        cleanAskRoot.DropDownItems.Add(_autoCleanItem);
+        cleanAskRoot.DropDownItems.Add(cleanRoot);
+        cleanAskRoot.DropDownItems.Add(new ToolStripSeparator());
+        cleanAskRoot.DropDownItems.Add(askRoot);
+        cleanAskRoot.DropDownItems.Add(_askModelShortcutItem);
+
+        var translateRoot = new ToolStripMenuItem(Loc.T("Translate"));
+        translateRoot.DropDownItems.Add(_translateLanguageRoot);
+        translateRoot.DropDownItems.Add(_translateShortcutItem);
+        translateRoot.DropDownItems.Add(_translateSelectionShortcutItem);
+        translateRoot.DropDownItems.Add(Loc.T("OpenAI API key (translation)…"), null, (_, _) => EditOpenAiKey());
+
+        var commandsRoot = new ToolStripMenuItem(Loc.T("Commands"));
+        commandsRoot.DropDownItems.Add(_commandsRoot);
+        commandsRoot.DropDownItems.Add(Loc.T("Workspace modes…"), null, (_, _) => EditWorkspaceModes());
+        commandsRoot.DropDownItems.Add(Loc.T("Word replacements…"), null, (_, _) => EditWordReplacements());
+
+        var pasteRoot = new ToolStripMenuItem(Loc.T("Paste"));
+        pasteRoot.DropDownItems.Add(_pressEnterItem);
+        pasteRoot.DropDownItems.Add(_pressEnterShortcutItem);
+
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusItem);
         menu.Items.Add(Loc.T("Open EchoType"), null, (_, _) => ShowAppWindow());
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(modelRoot);
-        menu.Items.Add(_loginItem);
-        menu.Items.Add(closeLoginItem);
-        menu.Items.Add(_modelWindowShortcutItem);
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(_autoCleanItem);
-        menu.Items.Add(Loc.T("Word replacements…"), null, (_, _) => EditWordReplacements());
-        menu.Items.Add(Loc.T("Workspace modes…"), null, (_, _) => EditWorkspaceModes());
-        menu.Items.Add(cleanRoot);
-        menu.Items.Add(_commandsRoot);
-        menu.Items.Add(askRoot);
-        menu.Items.Add(_askModelShortcutItem);
-        menu.Items.Add(_translateShortcutItem);
-        menu.Items.Add(_translateLanguageRoot);
-        menu.Items.Add(Loc.T("OpenAI API key (translation)…"), null, (_, _) => EditOpenAiKey());
-        menu.Items.Add(_recordingModeRoot);
-        menu.Items.Add(_pressEnterItem);
-        menu.Items.Add(_pressEnterShortcutItem);
-        menu.Items.Add(_muteOthersItem);
-#if DEBUG
-        menu.Items.Add(new ToolStripMenuItem("Start dictation (debug)", null, (_, _) => DebugStart()));
-#endif
+        menu.Items.Add(dictationRoot);
+        menu.Items.Add(cleanAskRoot);
+        menu.Items.Add(translateRoot);
+        menu.Items.Add(commandsRoot);
+        menu.Items.Add(pasteRoot);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(Loc.T("Open log"), null, (_, _) => OpenLog());
-        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(Loc.T("Quit EchoType"), null, (_, _) => ExitThread());
         Loc.ApplyTo(menu);
         RebuildCommandsMenu();
@@ -245,12 +269,14 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _web.LoginStateChanged += OnLoginStateChanged;
         _web.ReachabilityChanged += OnReachabilityChanged;
         _web.InteractiveChanged += OnInteractiveChanged;
+        _web.MissingUiPartChanged += OnMissingUiPartChanged;
 
         // BeginInvoke on this control is how the keyboard hook reaches the UI
         // thread. A Control with no HWND throws, which kills the hook — Right
         // Ctrl then appears to do nothing. Force the handle before installing.
         _ = _marshal.Handle;
 
+        DropTranslateSelectionChordIfTaken();
         if (!_hotkey.Start(CollectHotkeys(), CollectTapHotkeys(), _marshal)) {
             MessageBox.Show(Loc.T("EchoType could not install its global keyboard hook."), "EchoType",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -261,7 +287,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkey.CancelRequested += OnCancelRequested;
         StatusOverlay.CancelClicked += OnHudCancelClicked;
 
-        Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey={HotkeyNames.For(_settings.DictationChord)}, askModelVk=0x{_settings.AskModelVk:X2}, askModel={_settings.AskProviderName}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateTo={_settings.TranslateTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating})");
+        Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey={HotkeyNames.For(_settings.DictationChord)}, askModelVk=0x{_settings.AskModelVk:X2}, askModel={_settings.AskProviderName}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateSelection={HotkeyNames.For(_settings.TranslateSelectionChord)}, translateTo={_settings.TranslateTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating})");
         StartupRegistration.Apply(_settings.StartWithWindows);
         // Stay in the tray on launch. Double-click the icon (or Open EchoType) to show the window.
         _ = WarmupAsync(); // alwaysReady: load the selected model at launch (mac applyPolicyAtLaunch)
@@ -601,6 +627,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (_commandsUiOpen) {
             return;
         }
+        if (IsTranslateSelectionChord(chord)) {
+            _ = TranslateSelectionAsync();
+            return;
+        }
         bool isDictation = IsDictationChord(chord);
         if (isDictation && ConsumeCancelDoubleTap()) {
             // In toggle mode the second press of the same recording key stops
@@ -671,6 +701,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     }
 
     private void OnHoldEnd(HotkeyChord chord) {
+        if (IsTranslateSelectionChord(chord)) {
+            return;
+        }
         if (_settings.ToggleRecording) {
             // Release does not stop recording; the next press of the same key does.
             return;
@@ -710,6 +743,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private void OnHudCancelClicked() {
         if (_phase != AppPhase.Idle) {
             _ = CancelAndResetAsync("cancelled with the HUD ✕");
+        } else if (_selectionTranslateCts != null) {
+            Log.Write("translate-selection: cancelled with the HUD ✕");
+            _selectionTranslateCts.Cancel();
+            StatusOverlay.HideWorking();
         }
     }
 
@@ -796,6 +833,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             case ReadyOutcome.RuntimeMissing:
                 ChatGPTWebController.ShowRuntimeMissingDialog();
                 ResetToIdle();
+                return;
+            case ReadyOutcome.UiChanged:
+                HandleFailure(ToDriverException(outcome));
                 return;
             default:
                 HandleFailure(new DriverException(
@@ -1361,6 +1401,116 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         return (await GoogleTranslation.TranslateAsync(transcript, target)).Trim();
     }
 
+    // ------------------------------------------------------------------
+    // Translate selection (popup)
+    // ------------------------------------------------------------------
+
+    private bool IsTranslateSelectionChord(HotkeyChord chord) =>
+        !_settings.TranslateSelectionChord.IsEmpty && chord.Equals(_settings.TranslateSelectionChord);
+
+    /// <summary>
+    /// Translate selection shortcut: copies the text selected in the foreground app,
+    /// translates it to the Translate language and shows it in a popup with its layout
+    /// kept — lines, blank lines, indentation, bullets and spacing as in the original.
+    /// Nothing is pasted and the clipboard is restored. Runs beside the dictation state
+    /// machine, so it only starts while EchoType is idle.
+    /// </summary>
+    private async Task TranslateSelectionAsync() {
+        if (_selectionTranslateCts != null) {
+            Log.Write("translate-selection: already running");
+            return;
+        }
+        if (_phase != AppPhase.Idle) {
+            ShowBalloon(Loc.T("Wait until dictation finishes before translating."), OverlayKind.Warning);
+            return;
+        }
+        using var cts = new CancellationTokenSource();
+        _selectionTranslateCts = cts;
+        try {
+            // Copy once the shortcut's modifiers are up: with Shift still held the app would
+            // get Ctrl+Shift+C (DevTools in browsers) instead of Ctrl+C.
+            var wait = Stopwatch.StartNew();
+            while (NativeMethods.AnyModifierDown() && wait.ElapsedMilliseconds < 1500) {
+                await Task.Delay(15);
+            }
+            string? selected = await SelectionCapture.CaptureAsync();
+            if (cts.IsCancellationRequested) {
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(selected)) {
+                Log.Write("translate-selection: no selection");
+                ShowBalloon(Loc.F("Select some text first, then press {0}.",
+                    HotkeyNames.For(_settings.TranslateSelectionChord)), OverlayKind.Warning);
+                return;
+            }
+
+            string target = _settings.TranslateTargetLanguage;
+            string engine = OpenAiTranslation.ResolveKey(_settings).Length > 0 ? "OpenAI" : "Google Translate";
+            Log.Write("translate-selection: " + selected.Length + " chars to " + target);
+            StatusOverlay.ShowWorking(WorkStage.Translating, engine, cap: 0.94f, restart: true);
+            string translated = await LayoutPreservingTranslation.TranslateAsync(
+                selected, pieces => TranslatePiecesAsync(pieces, target));
+            if (cts.IsCancellationRequested) {
+                return;
+            }
+            // Dictation may have started meanwhile; its HUD owns the overlay then.
+            if (_phase == AppPhase.Idle) {
+                StatusOverlay.CompleteWorking();
+            }
+            Log.Write("translate-selection: showing " + translated.Length + " chars");
+            Sounds.Pasted();
+            AskReplyForm.ShowReply(
+                new AskReplyContent(engine, selected, translated, null, 0, [],
+                    Loc.T("Use Copy text to copy the translation."),
+                    Title: Loc.F("Translation → {0}", GoogleTranslation.NameFor(target)),
+                    KeepLayout: true),
+                openModelWindow: null);
+        } catch (Exception ex) {
+            if (cts.IsCancellationRequested) {
+                return;
+            }
+            Log.Write("translate-selection: failed: " + ex.Message);
+            if (_phase == AppPhase.Idle) {
+                StatusOverlay.HideWorking();
+            }
+            Sounds.Error();
+            ShowBalloon(Loc.T("Translation failed — check your internet connection and try again."), OverlayKind.Error);
+        } finally {
+            _selectionTranslateCts = null;
+        }
+    }
+
+    /// <summary>OpenAI when a key is set (falls back to Google Translate on failure), else Google Translate.</summary>
+    private async Task<IReadOnlyList<string>> TranslatePiecesAsync(IReadOnlyList<string> pieces, string target) {
+        string apiKey = OpenAiTranslation.ResolveKey(_settings);
+        if (apiKey.Length > 0) {
+            Log.Write("translate-selection: sending " + pieces.Count + " piece(s) to OpenAI");
+            try {
+                return await OpenAiTranslation.TranslatePiecesAsync(
+                    pieces, target, apiKey, _settings.OpenAiTranslationModel);
+            } catch (Exception ex) {
+                Log.Write("translate-selection: OpenAI failed (" + ex.Message + "), falling back to Google Translate");
+            }
+        }
+        Log.Write("translate-selection: sending " + pieces.Count + " piece(s) to Google Translate");
+        return await GoogleTranslation.TranslatePiecesAsync(pieces, target);
+    }
+
+    /// <summary>
+    /// The default Translate selection shortcut (Ctrl+Shift+Y) reaches older configs too;
+    /// drop it if another shortcut already uses the same keys.
+    /// </summary>
+    private void DropTranslateSelectionChordIfTaken() {
+        var chord = _settings.TranslateSelectionChord;
+        if (chord.IsEmpty || CollectHotkeys().Count(c => c.Equals(chord)) <= 1) {
+            return;
+        }
+        Log.Write("settings: translate-selection " + HotkeyNames.For(chord) + " already in use, cleared");
+        _settings.SetTranslateSelectionChord(default);
+        _settings.Save();
+        UpdateTranslateMenu();
+    }
+
     private void DeliverPaste(string text, string logLabel) {
         Paster.DeliverResult result = Paster.Deliver(
             text, _settings.KeepTranscriptOnClipboard, _settings.PressEnterAfterPaste, _pasteTarget);
@@ -1648,8 +1798,15 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         ReadyOutcome.LoggedOut => new DriverException(DriverFailure.LoggedOut, "logged out"),
         ReadyOutcome.Offline => new DriverException(DriverFailure.Offline, "offline"),
         ReadyOutcome.Timeout => new DriverException(DriverFailure.Timeout, _web.Site.DisplayName + " didn't respond in time"),
+        ReadyOutcome.UiChanged => new DriverException(DriverFailure.UiChanged, SelectorHealth.ComposerPart),
         _ => new DriverException(DriverFailure.NotReady, outcome.ToString()),
     };
+
+    /// <summary>"ChatGPT's page changed" — shown instead of a generic start failure.</summary>
+    private static string UiChangedMessage(string siteName, string missingPart) =>
+        missingPart == SelectorHealth.MicPart
+            ? Loc.F("{0}'s page changed — EchoType can't find its mic button. Details are in the log.", siteName)
+            : Loc.F("{0}'s page changed — EchoType can't find its message box. Details are in the log.", siteName);
 
     private Task CancelAndResetAsync(string reason) {
         if (_phase == AppPhase.Idle) {
@@ -1717,6 +1874,13 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                             ? Loc.T("Couldn't start a new chat — try again")
                             : Loc.T("Dictation didn't start — try again");
                 }
+                break;
+            case DriverFailure.UiChanged:
+                message = UiChangedMessage(web.Site.DisplayName, ex.Message);
+                // Retrying the same selectors won't help, but a fresh load re-reads
+                // selectors.json, so a patched selector takes effect on the next try.
+                _engagementFailures = 0;
+                _ = web.ReloadInBackgroundAsync();
                 break;
             case DriverFailure.NotReady:
                 message = Loc.F("{0} isn't ready yet", web.Site.DisplayName);
@@ -2048,6 +2212,14 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         UpdateStatusText();
     }
 
+    /// <summary>Page-load health check found the selectors stale; warn before the first failed dictation.</summary>
+    private void OnMissingUiPartChanged(string? missingPart) {
+        if (missingPart == null || _phase != AppPhase.Idle) {
+            return;
+        }
+        ShowBalloon(UiChangedMessage(_web.Site.DisplayName, missingPart), OverlayKind.Warning);
+    }
+
     private void UpdateLoginMenuItem() {
         string name = _web.Site.DisplayName;
         _loginItem.Text = !_online ? Loc.T("No internet connection — retry")
@@ -2171,6 +2343,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _translateShortcutItem.Text = chord.IsEmpty
             ? Loc.T("Set Translate shortcut…")
             : Loc.T("Translate shortcut: ") + HotkeyNames.For(chord) + " → " + language;
+        var selectionChord = _settings.TranslateSelectionChord;
+        _translateSelectionShortcutItem.Text = selectionChord.IsEmpty
+            ? Loc.T("Set Translate selection shortcut…")
+            : Loc.T("Translate selection shortcut: ") + HotkeyNames.For(selectionChord) + " → " + language;
         _translateLanguageRoot.Text = Loc.T("Translate to: ") + language;
         foreach (ToolStripItem item in _translateLanguageRoot.DropDownItems) {
             if (item is ToolStripMenuItem mi) {
@@ -2199,6 +2375,42 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
         Log.Write("settings: translate=" + HotkeyNames.For(chord));
         NotifyUi();
+    }
+
+    private void ApplyTranslateSelectionChord(HotkeyChord chord) {
+        _settings.SetTranslateSelectionChord(chord);
+        _settings.Save();
+        UpdateTranslateMenu();
+        _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
+        Log.Write("settings: translate-selection=" + (chord.IsEmpty ? "(none)" : HotkeyNames.For(chord)));
+        NotifyUi();
+    }
+
+    private void OpenTranslateSelectionShortcutUi() {
+        if (_commandsUiOpen) {
+            return;
+        }
+        _commandsUiOpen = true;
+        try {
+            using var form = new ShortcutPickerForm(
+                _settings.TranslateSelectionChord,
+                _hotkey,
+                _settings,
+                Loc.T("EchoType — Translate selection shortcut"),
+                Loc.T("Shortcut (1–3 keys)"),
+                Loc.F("Click the box, then press one to three keys together (for example Ctrl+Shift+Y). Select text in any app and press the shortcut: EchoType translates it to {0} and shows it in a popup, keeping its lines, blank lines and spacing. Clear removes the shortcut.",
+                    GoogleTranslation.NameFor(_settings.TranslateTargetLanguage)));
+            if (form.ShowDialog() == DialogResult.OK) {
+                ApplyTranslateSelectionChord(form.Chord);
+            }
+        } catch (Exception ex) {
+            Log.Write("translate-selection shortcut ui: " + ex);
+            MessageBox.Show("Could not open Translate selection shortcut settings: " + ex.Message, "EchoType",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        } finally {
+            _commandsUiOpen = false;
+            _hotkey.CaptureKeys = false;
+        }
     }
 
     private void OpenTranslateShortcutUi() {
@@ -2419,6 +2631,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (!_settings.TranslateChord.IsEmpty) {
             chords.Add(_settings.TranslateChord);
         }
+        if (!_settings.TranslateSelectionChord.IsEmpty) {
+            chords.Add(_settings.TranslateSelectionChord);
+        }
         foreach (var cmd in _settings.ActiveCommands) {
             var chord = cmd.Chord;
             if (!chord.IsEmpty) {
@@ -2616,6 +2831,16 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         return true;
     }
 
+    bool IAppWindowHost.TrySetTranslateSelectionChord(HotkeyChord chord) {
+        string? conflict = HotkeyConflicts.Message(chord, _settings, _settings.TranslateSelectionChord);
+        if (conflict != null) {
+            ShowBalloon(conflict, OverlayKind.Warning);
+            return false;
+        }
+        ApplyTranslateSelectionChord(chord);
+        return true;
+    }
+
     bool IAppWindowHost.TrySetDictationChord(HotkeyChord chord) {
         if (chord.IsEmpty) {
             ShowBalloon(Loc.T("Pick a dictation key — EchoType needs one to record."), OverlayKind.Warning);
@@ -2653,6 +2878,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     bool IAppWindowHost.TrySetShortcut(AppShortcut shortcut, int vk) {
         if (shortcut == AppShortcut.Translate) {
             return ((IAppWindowHost)this).TrySetTranslateChord(HotkeyChord.Single(vk));
+        }
+        if (shortcut == AppShortcut.TranslateSelection) {
+            return ((IAppWindowHost)this).TrySetTranslateSelectionChord(HotkeyChord.Single(vk));
         }
         if (shortcut == AppShortcut.Dictation) {
             return ((IAppWindowHost)this).TrySetDictationChord(HotkeyChord.Single(vk));
@@ -2755,6 +2983,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         StopMicLevelPump();
         RestoreOtherApps();
         _micMeter.Dispose();
+        _selectionTranslateCts?.Cancel();
         AskReplyForm.CloseCurrent();
         StatusOverlay.Shutdown();
         _hotkey.Dispose();

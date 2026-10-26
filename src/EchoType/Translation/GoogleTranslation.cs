@@ -80,6 +80,53 @@ internal static class GoogleTranslation {
         }
     }
 
+    // Google rejects long requests; stay well under its limit per call.
+    private const int MaxBatchChars = 4000;
+
+    /// <summary>
+    /// Translates each of <paramref name="pieces"/> (single-line parts of one text) and returns
+    /// one translation per piece, in order. Pieces go one per line in as few requests as
+    /// possible, so Google sees the surrounding lines; a batch whose line count comes back
+    /// different is retried piece by piece.
+    /// </summary>
+    public static async Task<IReadOnlyList<string>> TranslatePiecesAsync(IReadOnlyList<string> pieces, string toLanguage) {
+        var batches = new List<List<string>>();
+        int chars = 0;
+        foreach (string piece in pieces) {
+            if (batches.Count == 0 || (chars + piece.Length + 1 > MaxBatchChars && batches[^1].Count > 0)) {
+                batches.Add([]);
+                chars = 0;
+            }
+            batches[^1].Add(piece);
+            chars += piece.Length + 1;
+        }
+
+        using var gate = new SemaphoreSlim(4);
+        string[][] results = await Task.WhenAll(batches.Select(async batch => {
+            await gate.WaitAsync();
+            try {
+                string translated = await TranslateAsync(string.Join("\n", batch), toLanguage);
+                string[] lines = translated.Replace("\r\n", "\n").Split('\n');
+                if (lines.Length == batch.Count) {
+                    return lines;
+                }
+                Log.Write("translate: batch of " + batch.Count + " lines came back as " + lines.Length
+                    + ", translating line by line");
+            } finally {
+                gate.Release();
+            }
+            return await Task.WhenAll(batch.Select(async piece => {
+                await gate.WaitAsync();
+                try {
+                    return await TranslateAsync(piece, toLanguage);
+                } finally {
+                    gate.Release();
+                }
+            }));
+        }));
+        return results.SelectMany(r => r).ToArray();
+    }
+
     private static async Task<string> TranslateOnceAsync(string text, string toLanguage, string? fromLanguage = null) {
         try {
             var result = await Primary.TranslateAsync(text, toLanguage, fromLanguage).WaitAsync(Timeout);
@@ -96,11 +143,13 @@ internal static class GoogleTranslation {
     private const string ArabicLetters = @"\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF";
 
     // A run of words in one script, joined by spaces/hyphens/apostrophes (keeps "machine learning" together).
+    // Never across a line break, so replacing a run keeps the text's lines.
+    private const string Space = @"[^\S\r\n]+";
     private static readonly Regex LatinRun = new(
-        "[" + LatinLetters + "]+(?:['’\\-][" + LatinLetters + "]+)*(?:\\s+[" + LatinLetters + "]+(?:['’\\-][" + LatinLetters + "]+)*)*",
+        "[" + LatinLetters + "]+(?:['’\\-][" + LatinLetters + "]+)*(?:" + Space + "[" + LatinLetters + "]+(?:['’\\-][" + LatinLetters + "]+)*)*",
         RegexOptions.Compiled);
     private static readonly Regex ArabicRun = new(
-        "[" + ArabicLetters + "]+(?:\\s+[" + ArabicLetters + "]+)*",
+        "[" + ArabicLetters + "]+(?:" + Space + "[" + ArabicLetters + "]+)*",
         RegexOptions.Compiled);
 
     private static readonly HashSet<string> ArabicScriptTargets = new(StringComparer.OrdinalIgnoreCase) {

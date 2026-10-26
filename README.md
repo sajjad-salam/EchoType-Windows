@@ -67,6 +67,7 @@ Your audio never touches this app: the selected model's page captures it via `ge
 4. Optional: **Recording** → **Hold to talk** (default) or **Press to start/stop**. The choice applies to dictation, selection rewrite, Ask model, and custom commands, and is saved.
 5. Focus any text field anywhere. In hold mode, **hold Right Ctrl**, talk, **release**. In press-to-start/stop mode, **press Right Ctrl**, talk, **press it again**. The tray icon turns red while listening, blue while transcribing, then EchoType switches back to that window (and virtual desktop, if you left it) and pastes. You'll hear a confirmation sound. If Gemini or ChatGPT cuts the recording off while you are still speaking (silence detection or a max clip length), EchoType plays a warning tone, shows a “Recording stopped” toast, and transcribes only what was captured. Other apps that are playing sound (YouTube, Spotify, …) are paused when they support it, or muted otherwise, so they don't leak into the microphone; they resume when you stop. **Pause or mute other apps while dictating** turns this off. Highlight text first, then record an instruction (for example “make this shorter” or “translate to Arabic”) to rewrite that selection instead of pasting the raw transcript.
 6. Optional: set a **Translate** shortcut of one to three keys, for example **Ctrl+Shift+T** (window → **Recording**: click the box, press the keys together, then release; or tray → **Set Translate shortcut…**) and pick the language under **Translate to**. Record with that key the same way as dictation: ChatGPT or Gemini only transcribes, then EchoType translates the transcript with free Google Translate (the [GTranslate](https://github.com/d4n3436/GTranslate) package, no API key) and pastes the translation. This skips waiting for a model reply, so it is faster than a custom "translate" prompt. If translation fails, the original transcript is left on the clipboard. For better results with mixed text (Arabic speech with English terms, or the other way round), add an **OpenAI API key** (window → **Recording** → **OpenAI API key…**, or the tray menu; **Test** checks it). Translation then goes through OpenAI (`gpt-4o-mini` by default, change it with `openAiTranslationModel` in the settings file), which translates every term into the target language; Google Translate is used if the OpenAI call fails. Without a key, Google Translate also runs a second pass over words it left in another script.
+   **Translate selected text:** select text in any app and press **Ctrl+Shift+Y** (change it under window → **Translate** → **Translate selection shortcut**, or tray → **Translate**). EchoType copies the selection, translates it to the **Translate to** language and shows the result in a popup with a **Copy text** button. Nothing is pasted and your clipboard is restored. The translation keeps the original's shape: every line break, blank line, indentation, bullet or number (`- `, `1. `, `a) `), tab and run of spaces stays where it was, because only the words between them are translated (all in one request, so they keep their context) and then put back into the same layout. Uses OpenAI when a key is set, otherwise Google Translate. Saved as `translateSelectionVks` in `config.json`.
 7. Optional: **Custom commands → Add or edit…** to add more recording keys. Each command can be a single button or a group of buttons (for example three rewrite actions on one key). EchoType dictates the same way (hold or press-to-start/stop), then runs a single button immediately or shows the group so you can pick. The chosen prompt plus the transcript go to the selected model, and the reply is pasted.
 
 Tray icon states: **black = loading ChatGPT/Gemini** · gray = ready · amber = waking/starting · **red = listening** · blue = transcribing / waiting for a reply · orange (slashed) = offline · red (ring) = logged out.
@@ -190,11 +191,28 @@ Global hotkey: a low-level keyboard hook (`WH_KEYBOARD_LL`) that swallows the di
 ## Troubleshooting
 
 - **Log file**: window → *Open log*, or tray menu → *Open log*. Also written to `EchoType.log` in the project root, next to the EXE, and `%LOCALAPPDATA%\EchoType\Logs\EchoType.log`. Every dictation step, failure, and the page's real button labels are logged there.
+- **"ChatGPT's page changed — EchoType can't find its mic button / message box"** — after every page load EchoType checks that its selectors still find the composer and the dictation mic. When one is missing (and no sign-in button is showing), the site changed its UI; the log line starting `selectors:` names the missing part and lists the page's real buttons. Patch it without a new build — see *Patching selectors* below.
 - **"Dictation didn't start"** — check the log: if the button dump shows different labels than `Selectors.cs` (ChatGPT) or `GeminiSelectors.cs` (Gemini) or `ClaudeSelectors.cs` (Claude), that site changed its UI (patch the selectors).
 - **Mic never picks up sound** (`gum=err:...` in the log) — check the Windows microphone privacy switch above, and that the right input device is the Windows default.
 - **Login window shows "No internet connection"** — its Retry button works once the network is back.
 - **Pasting into an elevated (admin) app doesn't work** — Windows blocks input injection from a non-elevated process (UIPI). Run EchoType as administrator if you dictate into admin apps.
 - **Paste went to the wrong window** — EchoType remembers the window, input field, and virtual desktop from when you started recording, then switches back there before pasting. If that window was closed, the text stays on the clipboard.
+
+### Patching selectors
+
+Create `%APPDATA%\EchoType\selectors.json` with one object per site (`chatgpt`, `gemini`, `claude`). Keys use the same names as the built-in selector files: CSS lists such as `composer`, `startCss`, `submitCss`, `sendCss`, and button-label regex lists such as `start`, `submit`, `cancel`, `send`, `neverClick`. Your entries go ahead of the built-in ones, so they are tried first and the built-ins stay as fallbacks. Add `"mode": "replace"` to a site to use only your lists.
+
+```jsonc
+{
+  "chatgpt": {
+    // a button from the log's dump: {"a":"Dictate","t":"composer-dictate-button"}
+    "startCss": ["button[data-testid=\"composer-dictate-button\"]"],
+    "start": ["^dictate$"]
+  }
+}
+```
+
+Flags (`hasDictationShortcut`, `liveTranscript`, …), `loggedOutMarker` and `transcriptSettlePolls` can be overridden too. The file is read whenever a chat page's WebView is created: at launch, on a model switch, and on the reload EchoType does after a "page changed" error. Restarting EchoType also works. Comments and trailing commas are allowed. Mistakes such as invalid JSON, an invalid regex or an unknown key are logged and skipped.
 
 ## Differences from the macOS version (MVP)
 

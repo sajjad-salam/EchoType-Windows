@@ -134,6 +134,22 @@ internal static partial class NativeMethods {
         SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
     }
 
+    public const uint VK_LWIN = 0x5B;
+    public const uint VK_RWIN = 0x5C;
+
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int vKey);
+
+    /// <summary>True while Ctrl, Shift, Alt or Win is physically down.</summary>
+    public static bool AnyModifierDown() {
+        foreach (uint vk in new[] { VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN }) {
+            if ((GetAsyncKeyState((int)vk) & 0x8000) != 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // ---- Foreground window inspection / restore ----
 
     public const int SW_SHOW = 5;

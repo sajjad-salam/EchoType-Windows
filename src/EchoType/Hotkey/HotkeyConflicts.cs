@@ -70,6 +70,14 @@ internal static class HotkeyConflicts {
                 ? "That key is already the Translate shortcut."
                 : "That shortcut overlaps the Translate shortcut.";
         }
+        var translateSelection = settings.TranslateSelectionChord;
+        bool ignoreSelection = (!ignoreChord.IsEmpty && translateSelection.Equals(ignoreChord))
+            || (translateSelection.Count == 1 && ignoreVks.Contains((int)translateSelection.K1));
+        if (!ignoreSelection && Conflicts(chord, translateSelection)) {
+            return chord.Count == 1 && translateSelection.Count == 1
+                ? "That key is already the Translate selection shortcut."
+                : "That shortcut overlaps the Translate selection shortcut.";
+        }
         if (ConflictsWithReserved(chord, settings.OpenModelWindowVk, ignoreVks)) {
             return chord.Count == 1
                 ? "That key is already the model window shortcut."
