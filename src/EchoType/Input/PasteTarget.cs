@@ -17,14 +17,18 @@ internal sealed class PasteTarget {
     private readonly uint _threadId;
     private readonly string _description;
 
-    private PasteTarget(IntPtr hwnd, IntPtr focusHwnd, uint threadId, string description) {
+    private PasteTarget(IntPtr hwnd, IntPtr focusHwnd, uint threadId, string processName, string description) {
         _hwnd = hwnd;
         _focusHwnd = focusHwnd;
         _threadId = threadId;
+        ProcessName = processName;
         _description = description;
     }
 
     public string Description => _description;
+
+    /// <summary>Process name without ".exe" (e.g. "Telegram"), used to pick an <see cref="AppProfile"/>.</summary>
+    public string ProcessName { get; }
 
     public bool StillExists => NativeMethods.IsWindow(_hwnd);
 
@@ -221,11 +225,11 @@ internal sealed class PasteTarget {
 
         string className = ClassName(hwnd);
         string title = WindowTitle(hwnd);
-        string process = ProcessName(pid);
+        string process = ProcessNameOf(pid);
         VirtualDesktops.TryGetDesktopId(hwnd, out Guid desktop);
         string description = $"{process} hwnd=0x{hwnd.ToInt64():X} class={className} title=\"{Truncate(title, 40)}\" desktop={desktop:N}";
         Log.Write("paste: " + logPrefix + " " + description);
-        return new PasteTarget(hwnd, focus, threadId, description);
+        return new PasteTarget(hwnd, focus, threadId, process, description);
     }
 
     /// <summary>
@@ -262,7 +266,7 @@ internal sealed class PasteTarget {
         return sb.ToString();
     }
 
-    private static string ProcessName(uint pid) {
+    private static string ProcessNameOf(uint pid) {
         try {
             using var process = Process.GetProcessById((int)pid);
             return process.ProcessName;

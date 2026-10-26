@@ -84,6 +84,10 @@ internal static class SelectionCapture {
         string? copied = ReadIfClipboardChanged(sentinel, seq);
         if (copied != null) {
             RestoreClipboardText(previous);
+            if (copied.Length == 0) {
+                Log.Write("selection: none (editor copied the current line, nothing selected)");
+                return null;
+            }
             Log.Write("selection: WM_COPY capture, " + copied.Length + " chars");
             return copied;
         }
@@ -103,6 +107,10 @@ internal static class SelectionCapture {
             copied = ReadIfClipboardChanged(sentinel, seq);
             if (copied != null) {
                 RestoreClipboardText(previous);
+                if (copied.Length == 0) {
+                    Log.Write("selection: none (editor copied the current line, nothing selected)");
+                    return null;
+                }
                 Log.Write("selection: clipboard capture, " + copied.Length + " chars");
                 return copied;
             }
@@ -113,6 +121,10 @@ internal static class SelectionCapture {
         return null;
     }
 
+    /// <summary>
+    /// The copied text once the clipboard changed, null while it hasn't, or "" when the
+    /// copy came from an editor that copies the whole line when nothing is selected.
+    /// </summary>
     private static string? ReadIfClipboardChanged(string sentinel, uint seq) {
         if (NativeMethods.GetClipboardSequenceNumber() == seq) {
             return null;
@@ -120,9 +132,55 @@ internal static class SelectionCapture {
 
         string? current = TryGetClipboardText();
         if (current != null && current != sentinel && current.Trim().Length > 0) {
-            return current;
+            return IsEmptySelectionLineCopy() ? "" : current;
         }
         return null;
+    }
+
+    /// <summary>
+    /// VS Code (and other Monaco/Electron editors), Visual Studio and similar editors copy
+    /// the current line on Ctrl+C with no selection. Treating that as a selection turns plain
+    /// dictation into a rewrite of the line, so detect their clipboard markers:
+    /// VS Code's "vscode-editor-data" metadata (stored in Chromium's custom MIME format)
+    /// with isFromEmptySelection=true, and Visual Studio's line-copy tag format.
+    /// </summary>
+    private static bool IsEmptySelectionLineCopy() {
+        try {
+            IDataObject? data = Clipboard.GetDataObject();
+            if (data == null) {
+                return false;
+            }
+            foreach (string format in data.GetFormats(autoConvert: false)) {
+                if (format.Contains("LineCutCopy", StringComparison.OrdinalIgnoreCase)) {
+                    return true;
+                }
+                if (!format.Contains("Custom MIME", StringComparison.OrdinalIgnoreCase)
+                    && !format.Contains("vscode-editor-data", StringComparison.OrdinalIgnoreCase)) {
+                    continue;
+                }
+                string payload = ReadFormatText(data.GetData(format, autoConvert: false));
+                if (payload.Contains("\"isFromEmptySelection\":true", StringComparison.Ordinal)) {
+                    return true;
+                }
+            }
+        } catch (Exception ex) {
+            Log.Write("selection: line-copy check failed: " + ex.Message);
+        }
+        return false;
+    }
+
+    /// <summary>Decodes a raw clipboard payload; Chromium pickles custom data as UTF-16.</summary>
+    private static string ReadFormatText(object? value) {
+        switch (value) {
+            case string s:
+                return s;
+            case MemoryStream ms: {
+                byte[] bytes = ms.ToArray();
+                return Encoding.Unicode.GetString(bytes) + "\n" + Encoding.UTF8.GetString(bytes);
+            }
+            default:
+                return "";
+        }
     }
 
     private static IntPtr FocusedControl() {

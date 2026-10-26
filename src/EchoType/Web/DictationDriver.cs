@@ -1660,6 +1660,24 @@ internal sealed class DictationDriver {
     }
 
     /// <summary>
+    /// After the site ended a recording on its own: submit only if its dictation UI is still
+    /// up. Sending the dictation shortcut to a page that already stopped would start a new one.
+    /// </summary>
+    public async Task SettleCutoffAsync() {
+        await MarkListeningAsync(false);
+        bool dictating;
+        try {
+            dictating = (await StateAsync()).Dictating;
+        } catch (DriverException ex) {
+            Log.Write("driver: state probe failed after cutoff (" + ex.Message + ")");
+            return;
+        }
+        if (dictating) {
+            await SubmitDictationAsync();
+        }
+    }
+
+    /// <summary>
     /// True once listening has stopped or the transcript is already in the composer.
     /// Probe failures count as finished (mac pollWhileDictating parity).
     /// </summary>

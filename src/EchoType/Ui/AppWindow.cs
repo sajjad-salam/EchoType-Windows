@@ -39,6 +39,7 @@ internal interface IAppWindowHost {
     void EditOpenAiKey();
     void EditWordReplacements();
     void EditWorkspaceModes();
+    void EditAppProfiles();
     bool LoginWindowVisible { get; }
     float MicLevel { get; }
     /// <summary>Fills the live voice spectrum (0–1 per bar); false when none is available.</summary>
@@ -51,7 +52,9 @@ internal interface IAppWindowHost {
     void SelectModel(TranscriptionProvider provider);
     void SetToggleRecording(bool toggle);
     void SetMuteOthers(bool value);
+    void SetLongDictation(bool value);
     void SetTranslateLanguage(string code);
+    void SetTranslateSelectionLanguage(string code);
     void SetPressEnterAfterPaste(bool value);
     void SetKeepTranscriptOnClipboard(bool value);
     void SetStartWithWindows(bool value);
@@ -113,6 +116,7 @@ internal sealed class AppWindow : Form {
     private readonly HudHotkeyRow _translateKey;
     private readonly HudHotkeyRow _translateSelectionKey;
     private readonly ComboBox _translateLanguage;
+    private readonly ComboBox _translateSelectionLanguage;
     private readonly HudSettingRow _openAiRow;
     private readonly HudButton _openAiButton;
     private readonly HudHotkeyRow _chatgptKey;
@@ -122,6 +126,7 @@ internal sealed class AppWindow : Form {
     private readonly HudHotkeyRow _windowKey;
     private readonly HudCommandList _commands;
     private readonly HudToggleRow _muteToggle;
+    private readonly HudToggleRow _longDictationToggle;
     private readonly HudToggleRow _enterToggle;
     private readonly HudToggleRow _clipboardToggle;
     private readonly HudToggleRow _startupToggle;
@@ -228,6 +233,9 @@ internal sealed class AppWindow : Form {
         _secondDictationKey.MultiKey = true;
         _muteToggle = AddToggle(dictation, Loc.T("Pause or mute other apps while dictating"), null,
             toggle => _host.SetMuteOthers(toggle.Checked));
+        _longDictationToggle = AddToggle(dictation, Loc.T("Long dictation"),
+            Loc.T("If the model cuts the recording off while you're still talking, EchoType restarts it and pastes everything as one text."),
+            toggle => _host.SetLongDictation(toggle.Checked));
 
         // ── Clean & Ask ───────────────────────────────────────
         var ai = AddPage(GlyphChat, Loc.T("Clean & Ask"), Loc.T("Models that tidy your dictation and answer your questions."));
@@ -263,29 +271,12 @@ internal sealed class AppWindow : Form {
         var translateCard = AddCard(translate);
         _translateKey = AddHotkey(translateCard, Loc.T("Translate shortcut"), AppShortcut.Translate);
         _translateKey.MultiKey = true;
+        _translateLanguage = MakeLanguageCombo(code => _host.SetTranslateLanguage(code));
+        AddRow(translateCard, Loc.T("Translate speech to"), null, _translateLanguage, 220, heightDip: 0);
         _translateSelectionKey = AddHotkey(translateCard, Loc.T("Translate selection shortcut"), AppShortcut.TranslateSelection);
         _translateSelectionKey.MultiKey = true;
-        _translateLanguage = new ComboBox {
-            DropDownStyle = ComboBoxStyle.DropDownList,
-            FlatStyle = FlatStyle.Standard,
-            MaxDropDownItems = 12,
-            DrawMode = DrawMode.OwnerDrawFixed,
-            ItemHeight = 28,
-            BackColor = HudTheme.Track,
-            ForeColor = HudTheme.Body,
-            Font = HudTheme.BodyText,
-            RightToLeft = Loc.Rtl ? RightToLeft.Yes : RightToLeft.No,
-        };
-        _translateLanguage.DrawItem += OnLanguageDrawItem;
-        foreach (var (code, name) in GoogleTranslation.Languages) {
-            _translateLanguage.Items.Add(new LanguageItem(code, name));
-        }
-        _translateLanguage.SelectedIndexChanged += (_, _) => {
-            if (!_syncing && _translateLanguage.SelectedItem is LanguageItem item) {
-                _host.SetTranslateLanguage(item.Code);
-            }
-        };
-        AddRow(translateCard, Loc.T("Translate to"), null, _translateLanguage, 220, heightDip: 0);
+        _translateSelectionLanguage = MakeLanguageCombo(code => _host.SetTranslateSelectionLanguage(code));
+        AddRow(translateCard, Loc.T("Translate selection to"), null, _translateSelectionLanguage, 220, heightDip: 0);
         _openAiButton = MakeButton(Loc.T("Add key…"), HudButton.Kind.Ghost);
         _openAiButton.Click += (_, _) => _host.EditOpenAiKey();
         _openAiRow = AddRow(translateCard, Loc.T("OpenAI API key"), null, _openAiButton, 200);
@@ -329,6 +320,9 @@ internal sealed class AppWindow : Form {
         _enterKey = AddHotkey(paste, Loc.T("Auto Enter shortcut"), AppShortcut.PressEnter);
         _clipboardToggle = AddToggle(paste, Loc.T("Keep transcript on clipboard"), null,
             toggle => _host.SetKeepTranscriptOnClipboard(toggle.Checked));
+        var profilesButton = MakeButton(Loc.T("Edit…"), HudButton.Kind.Ghost);
+        profilesButton.Click += (_, _) => _host.EditAppProfiles();
+        AddRow(paste, Loc.T("Per-app profiles"), Loc.T("Auto Enter, Auto Clean and Translate per app."), profilesButton, 200);
 
         AddSection(settings, Loc.T("Language") + (Loc.Arabic ? "" : " · اللغة"));
         var languageCard = AddCard(settings);
@@ -508,6 +502,7 @@ internal sealed class AppWindow : Form {
             _askWindowButton.Text = Loc.F(_host.AskWindowVisible ? "Close {0} window" : "Open {0} window", _host.AskModelName);
             _modeSeg.SetSilent(s.ToggleRecording ? 1 : 0);
             _muteToggle.SetSilent(s.MuteOtherAppsWhileDictating);
+            _longDictationToggle.SetSilent(s.LongDictation);
             _enterToggle.SetSilent(s.PressEnterAfterPaste);
             _clipboardToggle.SetSilent(s.KeepTranscriptOnClipboard);
             _startupToggle.SetSilent(s.StartWithWindows);
@@ -526,7 +521,8 @@ internal sealed class AppWindow : Form {
             if (_capturing != _translateSelectionKey) {
                 _translateSelectionKey.Value = HotkeyNames.For(s.TranslateSelectionChord);
             }
-            _translateLanguage.SelectedIndex = IndexOfLanguage(s.TranslateTargetLanguage);
+            _translateLanguage.SelectedIndex = IndexOfLanguage(_translateLanguage, s.TranslateTargetLanguage);
+            _translateSelectionLanguage.SelectedIndex = IndexOfLanguage(_translateSelectionLanguage, s.TranslateSelectionTargetLanguage);
             bool hasKey = !string.IsNullOrWhiteSpace(s.OpenAiApiKey);
             _openAiRow.Description = Loc.T(hasKey ? "Set — translating with OpenAI." : "Not set — translating with Google.");
             _openAiButton.Text = Loc.T(hasKey ? "Change…" : "Add key…");
@@ -718,6 +714,7 @@ internal sealed class AppWindow : Form {
         _sidebar.Width = HudTheme.Dip(this, SidebarWidthDip);
         _header.Height = HudTheme.Dip(this, HeaderHeightDip);
         _translateLanguage.ItemHeight = HudTheme.Dip(this, 28);
+        _translateSelectionLanguage.ItemHeight = HudTheme.Dip(this, 28);
         PlaceCaptionButtons();
     }
 
@@ -1025,8 +1022,32 @@ internal sealed class AppWindow : Form {
         }
     }
 
+    private ComboBox MakeLanguageCombo(Action<string> onPick) {
+        var combo = new ComboBox {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            FlatStyle = FlatStyle.Standard,
+            MaxDropDownItems = 12,
+            DrawMode = DrawMode.OwnerDrawFixed,
+            ItemHeight = 28,
+            BackColor = HudTheme.Track,
+            ForeColor = HudTheme.Body,
+            Font = HudTheme.BodyText,
+            RightToLeft = Loc.Rtl ? RightToLeft.Yes : RightToLeft.No,
+        };
+        combo.DrawItem += OnLanguageDrawItem;
+        foreach (var (code, name) in GoogleTranslation.Languages) {
+            combo.Items.Add(new LanguageItem(code, name));
+        }
+        combo.SelectedIndexChanged += (_, _) => {
+            if (!_syncing && combo.SelectedItem is LanguageItem item) {
+                onPick(item.Code);
+            }
+        };
+        return combo;
+    }
+
     private void OnLanguageDrawItem(object? sender, DrawItemEventArgs e) {
-        if (e.Index < 0) {
+        if (e.Index < 0 || sender is not ComboBox combo) {
             return;
         }
         // The closed box and the hovered list item get a soft highlight; the rest stay dark.
@@ -1035,14 +1056,14 @@ internal sealed class AppWindow : Form {
             e.Graphics.FillRectangle(fill, e.Bounds);
         }
         var text = Rectangle.Inflate(e.Bounds, -HudTheme.Dip(this, 8), 0);
-        TextRenderer.DrawText(e.Graphics, _translateLanguage.Items[e.Index]?.ToString(),_translateLanguage.Font, text,
+        TextRenderer.DrawText(e.Graphics, combo.Items[e.Index]?.ToString(), combo.Font, text,
             hot ? HudTheme.Teal : HudTheme.Body,
             Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix));
     }
 
-    private int IndexOfLanguage(string code) {
-        for (int i = 0; i < _translateLanguage.Items.Count; i++) {
-            if (_translateLanguage.Items[i] is LanguageItem item
+    private static int IndexOfLanguage(ComboBox combo, string code) {
+        for (int i = 0; i < combo.Items.Count; i++) {
+            if (combo.Items[i] is LanguageItem item
                 && string.Equals(item.Code, code, StringComparison.OrdinalIgnoreCase)) {
                 return i;
             }

@@ -49,8 +49,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private readonly ToolStripMenuItem _translateShortcutItem;
     private readonly ToolStripMenuItem _translateSelectionShortcutItem;
     private readonly ToolStripMenuItem _translateLanguageRoot;
+    private readonly ToolStripMenuItem _translateSelectionLanguageRoot;
     private readonly ToolStripMenuItem _modelWindowShortcutItem;
     private readonly ToolStripMenuItem _muteOthersItem;
+    private readonly ToolStripMenuItem _longDictationItem;
     private readonly ToolStripMenuItem _recordingModeRoot;
     private readonly ToolStripMenuItem _holdModeItem;
     private readonly ToolStripMenuItem _toggleModeItem;
@@ -81,6 +83,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private bool _openAiKeyUiOpen;
     private bool _wordReplacementsUiOpen;
     private bool _workspaceModesUiOpen;
+    private bool _appProfilesUiOpen;
     private readonly HotkeyMonitor _hotkey;
     private readonly BackgroundAudioMuter _audioMuter = new();
     private readonly MicLevelMeter _micMeter = new();
@@ -108,12 +111,20 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private CancellationTokenSource? _selectionTranslateCts;
     private HotkeyChord _sessionChord;
     private PasteTarget? _pasteTarget;
+    /// <summary>The <see cref="AppProfile"/> for the app the session started in, or null for the global settings.</summary>
+    private AppProfile? _profile;
     private string? _selectedText;
     private Task<string?> _selectionTask = Task.FromResult<string?>(null);
     private bool _commandsUiOpen;
     private CancellationTokenSource? _listenWatchCts;
     private CancellationTokenSource? _micLevelCts;
     private int _listenFinishGate;
+    /// <summary>Long dictation: transcripts of the pieces the site already cut off this session.</summary>
+    private readonly List<string> _longPieces = [];
+    /// <summary>Long dictation: set while a cut-off piece is collected and the page's dictation restarted.</summary>
+    private bool _longContinuing;
+    private int _longEmptyPieces; // consecutive; 3 stops restarting
+    private DateTime _pieceStartedAt;
     private int _warmupEpoch;
 
     public TrayAppContext() {
@@ -179,9 +190,13 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _translateSelectionShortcutItem = new ToolStripMenuItem();
         _translateSelectionShortcutItem.Click += (_, _) => OpenTranslateSelectionShortcutUi();
         _translateLanguageRoot = new ToolStripMenuItem();
+        _translateSelectionLanguageRoot = new ToolStripMenuItem();
         foreach (var (code, name) in GoogleTranslation.Languages) {
             string c = code;
             _translateLanguageRoot.DropDownItems.Add(new ToolStripMenuItem(name, null, (_, _) => SetTranslateLanguage(c)) {
+                Tag = c,
+            });
+            _translateSelectionLanguageRoot.DropDownItems.Add(new ToolStripMenuItem(name, null, (_, _) => SetTranslateSelectionLanguage(c)) {
                 Tag = c,
             });
         }
@@ -194,6 +209,11 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             Checked = _settings.MuteOtherAppsWhileDictating,
         };
         _muteOthersItem.CheckedChanged += OnMuteOthersChanged;
+        _longDictationItem = new ToolStripMenuItem(Loc.T("Long dictation (continue when the model cuts off)")) {
+            CheckOnClick = true,
+            Checked = _settings.LongDictation,
+        };
+        _longDictationItem.CheckedChanged += OnLongDictationChanged;
         _holdModeItem = new ToolStripMenuItem(Loc.T("Hold to talk"), null, (_, _) => SetToggleRecording(false));
         _toggleModeItem = new ToolStripMenuItem(Loc.T("Press to start/stop"), null, (_, _) => SetToggleRecording(true));
         _recordingModeRoot = new ToolStripMenuItem(Loc.T("Recording mode"));
@@ -206,6 +226,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         dictationRoot.DropDownItems.Add(modelRoot);
         dictationRoot.DropDownItems.Add(_recordingModeRoot);
         dictationRoot.DropDownItems.Add(_muteOthersItem);
+        dictationRoot.DropDownItems.Add(_longDictationItem);
         dictationRoot.DropDownItems.Add(new ToolStripSeparator());
         dictationRoot.DropDownItems.Add(_loginItem);
         dictationRoot.DropDownItems.Add(closeLoginItem);
@@ -225,7 +246,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         var translateRoot = new ToolStripMenuItem(Loc.T("Translate"));
         translateRoot.DropDownItems.Add(_translateLanguageRoot);
         translateRoot.DropDownItems.Add(_translateShortcutItem);
+        translateRoot.DropDownItems.Add(new ToolStripSeparator());
+        translateRoot.DropDownItems.Add(_translateSelectionLanguageRoot);
         translateRoot.DropDownItems.Add(_translateSelectionShortcutItem);
+        translateRoot.DropDownItems.Add(new ToolStripSeparator());
         translateRoot.DropDownItems.Add(Loc.T("OpenAI API key (translation)…"), null, (_, _) => EditOpenAiKey());
 
         var commandsRoot = new ToolStripMenuItem(Loc.T("Commands"));
@@ -236,6 +260,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         var pasteRoot = new ToolStripMenuItem(Loc.T("Paste"));
         pasteRoot.DropDownItems.Add(_pressEnterItem);
         pasteRoot.DropDownItems.Add(_pressEnterShortcutItem);
+        pasteRoot.DropDownItems.Add(new ToolStripSeparator());
+        pasteRoot.DropDownItems.Add(Loc.T("Per-app profiles…"), null, (_, _) => EditAppProfiles());
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusItem);
@@ -287,7 +313,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkey.CancelRequested += OnCancelRequested;
         StatusOverlay.CancelClicked += OnHudCancelClicked;
 
-        Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey={HotkeyNames.For(_settings.DictationChord)}, askModelVk=0x{_settings.AskModelVk:X2}, askModel={_settings.AskProviderName}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateSelection={HotkeyNames.For(_settings.TranslateSelectionChord)}, translateTo={_settings.TranslateTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating})");
+        Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey={HotkeyNames.For(_settings.DictationChord)}, askModelVk=0x{_settings.AskModelVk:X2}, askModel={_settings.AskProviderName}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateSelection={HotkeyNames.For(_settings.TranslateSelectionChord)}, translateTo={_settings.TranslateTargetLanguage}, translateSelectionTo={_settings.TranslateSelectionTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating}, longDictation={_settings.LongDictation})");
         StartupRegistration.Apply(_settings.StartWithWindows);
         // Stay in the tray on launch. Double-click the icon (or Open EchoType) to show the window.
         _ = WarmupAsync(); // alwaysReady: load the selected model at launch (mac applyPolicyAtLaunch)
@@ -584,6 +610,31 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
     }
 
+    private void EditAppProfiles() {
+        if (_appProfilesUiOpen) {
+            return;
+        }
+        _appProfilesUiOpen = true;
+        try {
+            using var form = new AppProfilesForm(_settings.AppProfiles, _settings.AutoCleanPrompt, Gen.Site.DisplayName);
+            IWin32Window? owner = _window is { Visible: true, IsDisposed: false } ? _window : null;
+            if (form.ShowDialog(owner) != DialogResult.OK) {
+                return;
+            }
+            _settings.AppProfiles = form.Result;
+            _settings.Save();
+            Log.Write("settings: appProfiles=" + form.Result.Count);
+            ShowBalloon(Loc.F("Per-app profiles saved ({0}).", form.Result.Count), OverlayKind.Success);
+            NotifyUi();
+        } catch (Exception ex) {
+            Log.Write("app profiles ui: " + ex);
+            MessageBox.Show("Could not open Per-app profiles: " + ex.Message, "EchoType",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        } finally {
+            _appProfilesUiOpen = false;
+        }
+    }
+
     /// <summary>
     /// A short dictation like "coding mode" presses that mode's shortcut instead of pasting, so
     /// the user's workspace app can switch. The transcript stays on the clipboard.
@@ -649,6 +700,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 _holdStartedAt = DateTime.UtcNow;
                 _releasedAt = default;
                 _pasteTarget = PasteTarget.Capture();
+                _profile = AppProfile.Match(_pasteTarget?.ProcessName, _settings.AppProfiles);
+                if (_profile != null) {
+                    Log.Write("app-profile: " + _pasteTarget!.ProcessName + " → " + _profile.DisplayName);
+                }
                 _activeCommand = FindCommand(chord);
                 _askModel = _activeCommand == null
                     && !isDictation
@@ -713,6 +768,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         double held = HeldSeconds();
 
         switch (_phase) {
+            case AppPhase.Listening when _longContinuing:
+                // ContinueLongDictationAsync sees the release and finishes instead of restarting.
+                Log.Write("dictation: released while long dictation restarts");
+                break;
             case AppPhase.Listening:
                 if (held >= TapThresholdSeconds) {
                     _ = FinishListeningAsync(_session);
@@ -732,6 +791,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _releasedAt = DateTime.UtcNow;
         double held = HeldSeconds();
         Log.Write($"dictation: toggle stop (held {held:F2}s)");
+        if (_longContinuing) {
+            return; // ContinueLongDictationAsync finishes instead of restarting
+        }
         if (held >= TapThresholdSeconds) {
             _ = FinishListeningAsync(_session);
         } else {
@@ -880,6 +942,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         EnsureMicAtFullVolume();
         _engagementFailures = 0;
         Sounds.Start();
+        _longPieces.Clear();
+        _longEmptyPieces = 0;
+        _pieceStartedAt = default; // first piece is timed from key-down, like a normal take
         SetPhase(AppPhase.Listening);
         _listenFinishGate = 0;
         _hotkey.EscSwallowActive = true;
@@ -900,7 +965,11 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
     }
 
-    private async Task FinishListeningAsync(int session) {
+    /// <param name="micOpen">
+    /// False when Long dictation already collected the last piece and the page isn't recording,
+    /// so only the collected pieces are delivered.
+    /// </param>
+    private async Task FinishListeningAsync(int session, bool micOpen = true) {
         if (!IsLive(session)) {
             return;
         }
@@ -919,31 +988,38 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return;
         }
 
-        string transcript;
-        try {
-            await driver.SubmitDictationAsync();
+        string transcript = "";
+        if (micOpen) {
+            try {
+                await driver.SubmitDictationAsync();
+                if (!IsLive(session)) {
+                    return;
+                }
+                transcript = await driver.AwaitTranscriptAsync(TimeSpan.FromSeconds(PieceSeconds()));
+                if (!IsLive(session)) {
+                    return;
+                }
+                await driver.ClearComposerAsync();
+            } catch (DriverException ex) {
+                if (!IsLive(session)) {
+                    return;
+                }
+                string earlier = JoinLongPieces("");
+                // mac collectTranscript failure parity: cancel + clear, then report.
+                try { await driver.CancelDictationAsync(); } catch { /* best effort */ }
+                try { await driver.ClearComposerAsync(); } catch { /* best effort */ }
+                if (IsLive(session)) {
+                    HandleFailure(ex, earlier.Length > 0 ? earlier : null);
+                }
+                return;
+            }
             if (!IsLive(session)) {
                 return;
             }
-            transcript = await driver.AwaitTranscriptAsync(TimeSpan.FromSeconds(HeldSeconds()));
-            if (!IsLive(session)) {
-                return;
-            }
-            await driver.ClearComposerAsync();
-        } catch (DriverException ex) {
-            if (!IsLive(session)) {
-                return;
-            }
-            // mac collectTranscript failure parity: cancel + clear, then report.
-            try { await driver.CancelDictationAsync(); } catch { /* best effort */ }
-            try { await driver.ClearComposerAsync(); } catch { /* best effort */ }
-            if (IsLive(session)) {
-                HandleFailure(ex);
-            }
-            return;
         }
-        if (!IsLive(session)) {
-            return;
+        if (_longPieces.Count > 0) {
+            Log.Write($"dictation: long dictation joined {_longPieces.Count + (transcript.Trim().Length > 0 ? 1 : 0)} pieces");
+            transcript = JoinLongPieces(transcript);
         }
 
         try {
@@ -1045,7 +1121,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return;
         }
 
-        if (_settings.AutoClean && !string.IsNullOrWhiteSpace(_settings.AutoCleanPrompt)) {
+        if (AutoCleanHere) {
             await DeliverCleanedAsync(transcript, session);
             return;
         }
@@ -1066,7 +1142,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         SetPhase(AppPhase.Generating);
         ShowProgress(WorkStage.Cleaning, Gen.Site.DisplayName);
         CopyTranscript(transcript);
-        string message = _settings.AutoCleanPrompt.Trim() + "\n\n" + transcript;
+        string message = CleanPromptHere.Trim() + "\n\n" + transcript;
         Log.Write("auto-clean: sending " + message.Length + " chars to " + Gen.Site.DisplayName);
         string? cleaned = null;
         try {
@@ -1289,13 +1365,13 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         // Paste: the image when there is one (that is what was asked for), else the text.
         Paster.Outcome? outcome = null;
         if (image != null) {
-            var result = Paster.DeliverImage(image, _settings.PressEnterAfterPaste, _pasteTarget);
+            var result = Paster.DeliverImage(image, PressEnterHere, _pasteTarget);
             if (result.Outcome is Paster.Outcome.Pasted or Paster.Outcome.CopiedToClipboard) {
                 outcome = result.Outcome;
             }
         }
         if (outcome == null && pasteText.Length > 0) {
-            outcome = Paster.Deliver(pasteText, keepTranscriptOnClipboard: true, _settings.PressEnterAfterPaste, _pasteTarget).Outcome;
+            outcome = Paster.Deliver(pasteText, keepTranscriptOnClipboard: true, PressEnterHere, _pasteTarget).Outcome;
         }
         Log.Write(label + ": delivered (" + (outcome?.ToString() ?? "popup only") + ", text "
             + text.Length + " chars, image " + (image != null) + ")");
@@ -1336,7 +1412,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         ShowProgress(WorkStage.Translating,
             OpenAiTranslation.ResolveKey(_settings).Length > 0 ? "OpenAI" : "Google Translate");
         CopyTranscript(transcript);
-        string target = _settings.TranslateTargetLanguage;
+        string target = TranslateTargetHere;
 
         string translated;
         try {
@@ -1364,7 +1440,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
         Log.Write("translate: delivering " + translated.Length + " chars");
         Paster.DeliverResult result = Paster.Deliver(
-            translated, keepTranscriptOnClipboard: true, _settings.PressEnterAfterPaste, _pasteTarget);
+            translated, keepTranscriptOnClipboard: true, PressEnterHere, _pasteTarget);
         switch (result.Outcome) {
             case Paster.Outcome.Pasted:
                 // The original transcript was copied first; the translation stays last on the
@@ -1444,7 +1520,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 return;
             }
 
-            string target = _settings.TranslateTargetLanguage;
+            string target = _settings.TranslateSelectionTargetLanguage;
             string engine = OpenAiTranslation.ResolveKey(_settings).Length > 0 ? "OpenAI" : "Google Translate";
             Log.Write("translate-selection: " + selected.Length + " chars to " + target);
             StatusOverlay.ShowWorking(WorkStage.Translating, engine, cap: 0.94f, restart: true);
@@ -1513,7 +1589,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
     private void DeliverPaste(string text, string logLabel) {
         Paster.DeliverResult result = Paster.Deliver(
-            text, _settings.KeepTranscriptOnClipboard, _settings.PressEnterAfterPaste, _pasteTarget);
+            text, _settings.KeepTranscriptOnClipboard, PressEnterHere, _pasteTarget);
         switch (result.Outcome) {
             case Paster.Outcome.Pasted:
                 Sounds.Pasted();
@@ -1539,7 +1615,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     /// </summary>
     private void DeliverGeneratedPaste(string reply, string logLabel, string transcript) {
         Paster.DeliverResult result = Paster.Deliver(
-            reply, keepTranscriptOnClipboard: true, _settings.PressEnterAfterPaste, _pasteTarget);
+            reply, keepTranscriptOnClipboard: true, PressEnterHere, _pasteTarget);
         switch (result.Outcome) {
             case Paster.Outcome.Pasted:
                 Sounds.Pasted();
@@ -1583,7 +1659,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
 
         using (image) {
-            Paster.DeliverResult result = Paster.DeliverImage(image, _settings.PressEnterAfterPaste, _pasteTarget);
+            Paster.DeliverResult result = Paster.DeliverImage(image, PressEnterHere, _pasteTarget);
             switch (result.Outcome) {
                 case Paster.Outcome.Pasted:
                     Sounds.Pasted();
@@ -1917,6 +1993,18 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
     }
 
+    // Global settings with the current session's app profile applied on top.
+    private bool PressEnterHere => _profile?.PressEnter ?? _settings.PressEnterAfterPaste;
+
+    private string CleanPromptHere =>
+        _profile is { CleanPrompt.Length: > 0 } ? _profile.CleanPrompt : _settings.AutoCleanPrompt;
+
+    private bool AutoCleanHere =>
+        (_profile?.AutoClean ?? _settings.AutoClean) && !string.IsNullOrWhiteSpace(CleanPromptHere);
+
+    private string TranslateTargetHere =>
+        _profile is { TranslateTo.Length: > 0 } ? _profile.TranslateTo : _settings.TranslateTargetLanguage;
+
     private void ResetToIdle() {
         StopListenWatch();
         DismissActionPicker();
@@ -1928,8 +2016,13 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _translate = false;
         _sessionChord = default;
         _pasteTarget = null;
+        _profile = null;
         _selectedText = null;
         _selectionTask = Task.FromResult<string?>(null);
+        _longPieces.Clear();
+        _longContinuing = false;
+        _longEmptyPieces = 0;
+        _pieceStartedAt = default;
         _hotkey.EscSwallowActive = false;
         NativeMethods.SetThreadExecutionState(NativeMethods.ES_CONTINUOUS);
         SetPhase(AppPhase.Idle);
@@ -2015,9 +2108,11 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         while (!cancel.IsCancellationRequested) {
             try {
                 var driver = _web.Driver;
-                if (driver != null) {
-                    string text = await driver.LiveTranscriptAsync();
-                    if (!cancel.IsCancellationRequested && text != shown) {
+                // While Long dictation collects a piece the composer holds text that is about
+                // to join the earlier pieces; keep showing what's already there.
+                if (driver != null && !_longContinuing) {
+                    string text = JoinLongPieces(await driver.LiveTranscriptAsync());
+                    if (!cancel.IsCancellationRequested && !_longContinuing && text != shown) {
                         shown = text;
                         StatusOverlay.SetLiveTranscript(text);
                     }
@@ -2051,6 +2146,11 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return;
         }
 
+        if (_settings.LongDictation && _hotkeyHeld) {
+            await ContinueLongDictationAsync(session, reason);
+            return;
+        }
+
         Log.Write("dictation: recording cut off (" + reason + ")");
         Sounds.RecordingStopped();
         ShowBalloon(
@@ -2060,6 +2160,142 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkeyHeld = false;
         _releasedAt = DateTime.UtcNow;
         await FinishListeningAsync(session);
+    }
+
+    /// <summary>
+    /// Long dictation: the site ended the recording while you're still talking. Keep the piece
+    /// it captured, restart the page's dictation, and let <see cref="FinishListeningAsync"/>
+    /// join every piece. A release (or toggle stop) meanwhile finishes with what was collected.
+    /// </summary>
+    private async Task ContinueLongDictationAsync(int session, string reason) {
+        var driver = _web.Driver;
+        if (driver == null) {
+            return;
+        }
+        Log.Write($"dictation: recording cut off ({reason}) — long dictation keeps piece {_longPieces.Count + 1} ({PieceSeconds():F1}s)");
+        _longContinuing = true;
+        StopListenWatch();
+
+        string piece;
+        try {
+            await driver.SettleCutoffAsync();
+            if (!IsLive(session)) {
+                return;
+            }
+            piece = (await driver.AwaitTranscriptAsync(TimeSpan.FromSeconds(PieceSeconds()))).Trim();
+            if (!IsLive(session)) {
+                return;
+            }
+            await driver.ClearComposerAsync();
+        } catch (DriverException ex) {
+            if (!IsLive(session)) {
+                return;
+            }
+            _longContinuing = false;
+            try { await driver.ClearComposerAsync(); } catch { /* best effort */ }
+            if (!IsLive(session)) {
+                return;
+            }
+            if (_longPieces.Count == 0) {
+                HandleFailure(ex);
+                return;
+            }
+            Log.Write("dictation: long dictation piece failed (" + ex.Message + "), delivering earlier pieces");
+            await FinishLongDictationEarlyAsync(session);
+            return;
+        }
+        if (!IsLive(session)) {
+            return;
+        }
+
+        if (piece.Length > 0) {
+            _longPieces.Add(piece);
+            _longEmptyPieces = 0;
+            StatusOverlay.SetLiveTranscript(JoinLongPieces(""));
+        } else {
+            _longEmptyPieces++;
+        }
+        Log.Write($"dictation: long dictation piece {(piece.Length > 0 ? _longPieces.Count : 0)} = {piece.Length} chars");
+
+        if (!_hotkeyHeld) {
+            _longContinuing = false;
+            await FinishListeningAsync(session, micOpen: false);
+            return;
+        }
+        if (_longEmptyPieces >= 3) {
+            // Nothing captured three times running: the page keeps stopping straight away.
+            Log.Write("dictation: long dictation gave up after 3 empty pieces");
+            _longContinuing = false;
+            await FinishLongDictationEarlyAsync(session);
+            return;
+        }
+
+        try {
+            await driver.StartDictationAsync();
+        } catch (DriverException ex) {
+            if (!IsLive(session)) {
+                return;
+            }
+            _longContinuing = false;
+            if (_longPieces.Count == 0) {
+                HandleFailure(ex);
+                return;
+            }
+            Log.Write("dictation: long dictation restart failed (" + ex.Message + "), delivering what was said");
+            await FinishLongDictationEarlyAsync(session);
+            return;
+        }
+        if (!IsLive(session)) {
+            return;
+        }
+        _longContinuing = false;
+        _pieceStartedAt = DateTime.UtcNow;
+        EnsureMicAtFullVolume();
+
+        if (!_hotkeyHeld) {
+            // Released while the page restarted: that new piece is a fraction of a second, and
+            // waiting it out would hold the paste for ~30 s. Drop it and paste the rest.
+            Log.Write("dictation: released while long dictation restarted — dropping the new piece");
+            try { await driver.CancelDictationAsync(); } catch { /* best effort */ }
+            try { await driver.ClearComposerAsync(); } catch { /* best effort */ }
+            await FinishListeningAsync(session, micOpen: false);
+            return;
+        }
+        Log.Write("dictation: long dictation restarted");
+        Sounds.Start();
+        StartListenWatch(session);
+    }
+
+    /// <summary>Long dictation couldn't go on while the key is still held: say so and paste what was collected.</summary>
+    private async Task FinishLongDictationEarlyAsync(int session) {
+        Sounds.RecordingStopped();
+        ShowBalloon(
+            Loc.F("{0} ended the audio. Only what you already said will be transcribed.", _web.Site.DisplayName),
+            OverlayKind.Warning,
+            Loc.T("Recording stopped"));
+        _hotkeyHeld = false;
+        _releasedAt = DateTime.UtcNow;
+        await FinishListeningAsync(session, micOpen: false);
+    }
+
+    /// <summary>The pieces Long dictation already collected, followed by <paramref name="current"/>.</summary>
+    private string JoinLongPieces(string current) {
+        if (_longPieces.Count == 0) {
+            return current;
+        }
+        return string.Join(" ", _longPieces.Append(current.Trim()).Where(p => p.Length > 0));
+    }
+
+    /// <summary>
+    /// Seconds in the current recording piece: the whole take until Long dictation restarts it,
+    /// then the time since the latest restart.
+    /// </summary>
+    private double PieceSeconds() {
+        if (_pieceStartedAt == default) {
+            return HeldSeconds();
+        }
+        DateTime end = _releasedAt > _pieceStartedAt ? _releasedAt : DateTime.UtcNow;
+        return Math.Max(0, (end - _pieceStartedAt).TotalSeconds);
     }
 
     /// <summary>
@@ -2187,7 +2423,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
     private bool ExpectsReplyStep() =>
         _activeCommand != null || _translate || _askModel
-        || (_settings.AutoClean && !string.IsNullOrWhiteSpace(_settings.AutoCleanPrompt))
+        || AutoCleanHere
         || (_selectionTask.IsCompletedSuccessfully && !string.IsNullOrEmpty(_selectionTask.Result));
 
     private void UpdateStatusIcon() {
@@ -2339,6 +2575,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
     private void UpdateTranslateMenu() {
         string language = GoogleTranslation.NameFor(_settings.TranslateTargetLanguage);
+        string selectionLanguage = GoogleTranslation.NameFor(_settings.TranslateSelectionTargetLanguage);
         var chord = _settings.TranslateChord;
         _translateShortcutItem.Text = chord.IsEmpty
             ? Loc.T("Set Translate shortcut…")
@@ -2346,12 +2583,17 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         var selectionChord = _settings.TranslateSelectionChord;
         _translateSelectionShortcutItem.Text = selectionChord.IsEmpty
             ? Loc.T("Set Translate selection shortcut…")
-            : Loc.T("Translate selection shortcut: ") + HotkeyNames.For(selectionChord) + " → " + language;
-        _translateLanguageRoot.Text = Loc.T("Translate to: ") + language;
-        foreach (ToolStripItem item in _translateLanguageRoot.DropDownItems) {
+            : Loc.T("Translate selection shortcut: ") + HotkeyNames.For(selectionChord) + " → " + selectionLanguage;
+        _translateLanguageRoot.Text = Loc.T("Translate speech to: ") + language;
+        _translateSelectionLanguageRoot.Text = Loc.T("Translate selection to: ") + selectionLanguage;
+        CheckLanguage(_translateLanguageRoot, _settings.TranslateTargetLanguage);
+        CheckLanguage(_translateSelectionLanguageRoot, _settings.TranslateSelectionTargetLanguage);
+    }
+
+    private static void CheckLanguage(ToolStripMenuItem root, string code) {
+        foreach (ToolStripItem item in root.DropDownItems) {
             if (item is ToolStripMenuItem mi) {
-                mi.Checked = string.Equals(mi.Tag as string, _settings.TranslateTargetLanguage,
-                    StringComparison.OrdinalIgnoreCase);
+                mi.Checked = string.Equals(mi.Tag as string, code, StringComparison.OrdinalIgnoreCase);
             }
         }
     }
@@ -2365,6 +2607,18 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _settings.Save();
         UpdateTranslateMenu();
         Log.Write("settings: translateTargetLanguage=" + code);
+        NotifyUi();
+    }
+
+    private void SetTranslateSelectionLanguage(string code) {
+        if (string.IsNullOrWhiteSpace(code)
+            || string.Equals(_settings.TranslateSelectionTargetLanguage, code, StringComparison.OrdinalIgnoreCase)) {
+            return;
+        }
+        _settings.TranslateSelectionTargetLanguage = code;
+        _settings.Save();
+        UpdateTranslateMenu();
+        Log.Write("settings: translateSelectionTargetLanguage=" + code);
         NotifyUi();
     }
 
@@ -2399,7 +2653,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 Loc.T("EchoType — Translate selection shortcut"),
                 Loc.T("Shortcut (1–3 keys)"),
                 Loc.F("Click the box, then press one to three keys together (for example Ctrl+Shift+Y). Select text in any app and press the shortcut: EchoType translates it to {0} and shows it in a popup, keeping its lines, blank lines and spacing. Clear removes the shortcut.",
-                    GoogleTranslation.NameFor(_settings.TranslateTargetLanguage)));
+                    GoogleTranslation.NameFor(_settings.TranslateSelectionTargetLanguage)));
             if (form.ShowDialog() == DialogResult.OK) {
                 ApplyTranslateSelectionChord(form.Chord);
             }
@@ -2429,7 +2683,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 (_settings.ToggleRecording
                     ? Loc.T("Click the box, then press one to three keys together (for example Ctrl+Shift+T). Press the shortcut to start, speak, and press it again to stop.")
                     : Loc.T("Click the box, then press one to three keys together (for example Ctrl+Shift+T). Hold them and speak."))
-                    + " " + Loc.F("EchoType transcribes with the selected model, translates the text to {0} with {1}, and pastes it. Change the language from Translate to. Clear removes the shortcut.",
+                    + " " + Loc.F("EchoType transcribes with the selected model, translates the text to {0} with {1}, and pastes it. Change the language from Translate speech to. Clear removes the shortcut.",
                         language, OpenAiTranslation.ResolveKey(_settings).Length > 0 ? "OpenAI" : "Google Translate"));
             if (form.ShowDialog() == DialogResult.OK) {
                 ApplyTranslateChord(form.Chord);
@@ -2786,6 +3040,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     void IAppWindowHost.EditOpenAiKey() => EditOpenAiKey();
     void IAppWindowHost.EditWordReplacements() => EditWordReplacements();
     void IAppWindowHost.EditWorkspaceModes() => EditWorkspaceModes();
+    void IAppWindowHost.EditAppProfiles() => EditAppProfiles();
 
     void IAppWindowHost.SelectModel(TranscriptionProvider provider) => SelectModel(provider);
     void IAppWindowHost.SetToggleRecording(bool toggle) => SetToggleRecording(toggle);
@@ -2795,7 +3050,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     void IAppWindowHost.Quit() => ExitThread();
 
     void IAppWindowHost.SetMuteOthers(bool value) => SetMuteOthers(value);
+    void IAppWindowHost.SetLongDictation(bool value) => SetLongDictation(value);
     void IAppWindowHost.SetTranslateLanguage(string code) => SetTranslateLanguage(code);
+    void IAppWindowHost.SetTranslateSelectionLanguage(string code) => SetTranslateSelectionLanguage(code);
 
     void IAppWindowHost.SetPressEnterAfterPaste(bool value) =>
         ApplyPressEnterAfterPaste(value, announce: false);
@@ -2957,6 +3214,25 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         RebuildCommandsMenu();
         Log.Write("settings: " + shortcut + "=0x" + vk.ToString("X2"));
         return true;
+    }
+
+    private void OnLongDictationChanged(object? sender, EventArgs e) {
+        SetLongDictation(_longDictationItem.Checked);
+    }
+
+    private void SetLongDictation(bool value) {
+        if (_settings.LongDictation == value) {
+            return;
+        }
+        _settings.LongDictation = value;
+        _settings.Save();
+        if (_longDictationItem.Checked != value) {
+            _longDictationItem.CheckedChanged -= OnLongDictationChanged;
+            _longDictationItem.Checked = value;
+            _longDictationItem.CheckedChanged += OnLongDictationChanged;
+        }
+        Log.Write("settings: longDictation=" + value);
+        NotifyUi();
     }
 
     private void SetMuteOthers(bool value) {

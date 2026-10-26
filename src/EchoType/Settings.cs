@@ -84,6 +84,14 @@ internal sealed class Settings {
     public bool MuteOtherAppsWhileDictating { get; set; } = true;
 
     /// <summary>
+    /// When the site ends the recording on its own (silence detection, max clip length) while
+    /// the key is still held (or not yet pressed again in toggle mode), keep that piece, restart
+    /// the page's dictation, and paste every piece joined as one transcript.
+    /// </summary>
+    [JsonPropertyName("longDictation")]
+    public bool LongDictation { get; set; }
+
+    /// <summary>
     /// When false (default), hold a recording shortcut to talk and release to stop.
     /// When true, press once to start and press the same key again to stop.
     /// Applies to dictation, selection rewrite, Ask model, and custom commands.
@@ -143,7 +151,7 @@ internal sealed class Settings {
 
     /// <summary>
     /// One to three keys that translate the text selected in any app into
-    /// <see cref="TranslateTargetLanguage"/> and show it in a popup, keeping the original
+    /// <see cref="TranslateSelectionTargetLanguage"/> and show it in a popup, keeping the original
     /// line breaks, blank lines, indentation and spacing. Default Ctrl+Shift+Y; empty = off.
     /// </summary>
     [JsonPropertyName("translateSelectionVks")]
@@ -159,6 +167,14 @@ internal sealed class Settings {
     /// <summary>Google Translate target language code for <see cref="TranslateVk"/> (e.g. "en", "ar").</summary>
     [JsonPropertyName("translateTargetLanguage")]
     public string TranslateTargetLanguage { get; set; } = "en";
+
+    /// <summary>
+    /// Target language code for the Translate selection shortcut, separate from
+    /// <see cref="TranslateTargetLanguage"/> (e.g. speech → "en", selected text → "ar").
+    /// Empty (older configs) = same as <see cref="TranslateTargetLanguage"/>.
+    /// </summary>
+    [JsonPropertyName("translateSelectionTargetLanguage")]
+    public string TranslateSelectionTargetLanguage { get; set; } = "";
 
     /// <summary>
     /// OpenAI API key for the Translate shortcut. When set (here or in the OPENAI_API_KEY
@@ -266,6 +282,13 @@ internal sealed class Settings {
     [JsonPropertyName("workspaceModes")]
     public List<WorkspaceMode> WorkspaceModes { get; set; } = WorkspaceMode.Defaults();
 
+    /// <summary>
+    /// Per-app overrides for Auto Enter, Auto Clean, the cleaning prompt and the Translate
+    /// language, matched on the process name of the window dictation started in. Empty = off.
+    /// </summary>
+    [JsonPropertyName("appProfiles")]
+    public List<AppProfile> AppProfiles { get; set; } = [];
+
     [JsonPropertyName("customCommands")]
     public List<CustomCommand> CustomCommands { get; set; } = [];
 
@@ -329,6 +352,7 @@ internal sealed class Settings {
         try {
             if (!File.Exists(FilePath)) {
                 var defaults = new Settings();
+                defaults.TranslateSelectionTargetLanguage = defaults.TranslateTargetLanguage;
                 defaults.Save();
                 return defaults;
             }
@@ -346,8 +370,16 @@ internal sealed class Settings {
             foreach (var mode in loaded.WorkspaceModes) {
                 mode.Keywords ??= [];
             }
+            loaded.AppProfiles ??= [];
+            loaded.AppProfiles.RemoveAll(p => p == null);
+            foreach (var profile in loaded.AppProfiles) {
+                profile.Normalize();
+            }
             if (string.IsNullOrWhiteSpace(loaded.TranslateTargetLanguage)) {
                 loaded.TranslateTargetLanguage = "en";
+            }
+            if (string.IsNullOrWhiteSpace(loaded.TranslateSelectionTargetLanguage)) {
+                loaded.TranslateSelectionTargetLanguage = loaded.TranslateTargetLanguage;
             }
             if (string.IsNullOrWhiteSpace(loaded.TranscriptionProviderName)) {
                 loaded.TranscriptionProviderName = "chatgpt";

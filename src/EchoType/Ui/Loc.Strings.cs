@@ -23,6 +23,9 @@ internal static partial class Loc {
         ["Paste"] = "اللصق",
         ["Press Enter after paste"] = "الضغط على Enter بعد اللصق",
         ["Pause or mute other apps while dictating"] = "إيقاف التطبيقات الأخرى مؤقتًا أو كتمها أثناء الإملاء",
+        ["Long dictation (continue when the model cuts off)"] = "الإملاء الطويل (المتابعة عندما يقطع النموذج التسجيل)",
+        ["Long dictation"] = "الإملاء الطويل",
+        ["If the model cuts the recording off while you're still talking, EchoType restarts it and pastes everything as one text."] = "إذا قطع النموذج التسجيل وأنت ما زلت تتكلم، يعيد EchoType تشغيله ويلصق كل ما قلته كنص واحد.",
         ["Hold to talk"] = "اضغط مطولًا للتحدث",
         ["Press to start/stop"] = "اضغط للبدء/الإيقاف",
         ["Recording mode"] = "وضع التسجيل",
@@ -129,8 +132,8 @@ internal static partial class Loc {
             "انقر على المربع، ثم اضغط من مفتاح إلى ثلاثة مفاتيح معًا (مثل Ctrl+Shift+T). اضغط الاختصار للبدء، وتحدث، ثم اضغطه مرة أخرى للإيقاف.",
         ["Click the box, then press one to three keys together (for example Ctrl+Shift+T). Hold them and speak."] =
             "انقر على المربع، ثم اضغط من مفتاح إلى ثلاثة مفاتيح معًا (مثل Ctrl+Shift+T). اضغطها مطولًا وتحدث.",
-        ["EchoType transcribes with the selected model, translates the text to {0} with {1}, and pastes it. Change the language from Translate to. Clear removes the shortcut."] =
-            "يفرّغ EchoType الكلام بالنموذج المحدد، ويترجم النص إلى {0} باستخدام {1}، ثم يلصقه. غيّر اللغة من «الترجمة إلى». «مسح» يزيل الاختصار.",
+        ["EchoType transcribes with the selected model, translates the text to {0} with {1}, and pastes it. Change the language from Translate speech to. Clear removes the shortcut."] =
+            "يفرّغ EchoType الكلام بالنموذج المحدد، ويترجم النص إلى {0} باستخدام {1}، ثم يلصقه. غيّر اللغة من «ترجمة الكلام إلى». «مسح» يزيل الاختصار.",
         ["EchoType — Model window shortcut"] = "EchoType — اختصار نافذة النموذج",
         ["Open window key"] = "مفتاح فتح النافذة",
         ["Click the box, then press the key. A tap opens the ChatGPT or Gemini window — the same window as Login in the tray. Tap again to close it. Clear removes the shortcut."] =
@@ -204,6 +207,10 @@ internal static partial class Loc {
         ["Speak in one language, paste in another — or translate selected text."] = "تحدّث بلغة، والصق بلغة أخرى — أو ترجم النص المحدد.",
         ["Translate shortcut"] = "اختصار الترجمة",
         ["Translate to"] = "الترجمة إلى",
+        ["Translate speech to"] = "ترجمة الكلام إلى",
+        ["Translate selection to"] = "ترجمة النص المحدد إلى",
+        ["Translate speech to: "] = "ترجمة الكلام إلى: ",
+        ["Translate selection to: "] = "ترجمة النص المحدد إلى: ",
         ["OpenAI API key"] = "مفتاح OpenAI API",
         ["Add key…"] = "إضافة مفتاح…",
         ["Change…"] = "تغيير…",
@@ -374,5 +381,27 @@ internal static partial class Loc {
         ["Use Copy text to copy the translation."] = "استخدم «نسخ النص» لنسخ الترجمة.",
         ["Translation → {0}"] = "الترجمة ← {0}",
         ["Translation failed — check your internet connection and try again."] = "فشلت الترجمة — تحقّق من اتصال الإنترنت وحاول مرة أخرى.",
+
+        // Per-app profiles
+        ["Per-app profiles…"] = "إعدادات حسب التطبيق…",
+        ["Per-app profiles"] = "إعدادات حسب التطبيق",
+        ["Per-app profiles saved ({0})."] = "تم حفظ إعدادات التطبيقات ({0}).",
+        ["Auto Enter, Auto Clean and Translate per app."] = "Enter التلقائي والتنظيف التلقائي والترجمة لكل تطبيق.",
+        ["Override Auto Enter, Auto Clean and the Translate language for the app you start dictating in"] =
+            "غيّر Enter التلقائي والتنظيف التلقائي ولغة الترجمة حسب التطبيق الذي تبدأ الإملاء فيه",
+        ["Apps: process names, comma separated (e.g. Telegram, WhatsApp, Code, Obsidian) — use Add running app to pick one. \"Global\" keeps the main setting. Double-click a prompt to edit it; an empty prompt uses the global one. The first row that lists the app wins."] =
+            "التطبيقات: أسماء العمليات مفصولة بفواصل (مثل Telegram, WhatsApp, Code, Obsidian) — استخدم «إضافة تطبيق مفتوح» لاختيار واحد. «عام» يُبقي الإعداد الرئيسي. انقر نقرًا مزدوجًا على التعليمات لتعديلها؛ التعليمات الفارغة تستخدم العامة. أول صف يذكر التطبيق هو المعتمد.",
+        ["Apps"] = "التطبيقات",
+        ["Auto Enter"] = "Enter التلقائي",
+        ["Cleaning prompt"] = "تعليمات التنظيف",
+        ["Translate to"] = "الترجمة إلى",
+        ["Global"] = "عام",
+        ["On"] = "تشغيل",
+        ["Off"] = "إيقاف",
+        ["(global prompt)"] = "(التعليمات العامة)",
+        ["Add running app ▾"] = "إضافة تطبيق مفتوح ▾",
+        ["Edit prompt…"] = "تعديل التعليمات…",
+        ["Add examples"] = "إضافة أمثلة",
+        ["No apps with windows found"] = "لا توجد تطبيقات مفتوحة بنوافذ",
     };
 }
