@@ -1540,6 +1540,51 @@ internal sealed class DictationDriver {
     // ------------------------------------------------------------------
 
     public async Task StartDictationAsync() {
+        await EngageDictationAsync();
+        await AwaitMicOpenAsync();
+    }
+
+    /// <summary>
+    /// Engagement can be just "getUserMedia requested" (Gemini, Claude), which is before the
+    /// mic records anything. Wait for the stream so the start cue doesn't play while speech
+    /// is still being dropped. Returns at once if no request is pending (nothing to wait on).
+    /// </summary>
+    private async Task AwaitMicOpenAsync() {
+        DateTime started = DateTime.UtcNow;
+        DateTime deadline = started + MicOpenTimeout;
+        string gum;
+        while (true) {
+            try {
+                gum = (await StateAsync()).Gum;
+            } catch (DriverException ex) {
+                Log.Write("driver: mic-open probe failed (" + ex.Message + ")");
+                return;
+            }
+            if (gum != "requested") {
+                break;
+            }
+            if (DateTime.UtcNow > deadline) {
+                Log.Write($"driver: mic still opening after {MicOpenTimeout.TotalMilliseconds:F0}ms, listening anyway");
+                return;
+            }
+            await Task.Delay(50);
+        }
+        double waited = (DateTime.UtcNow - started).TotalMilliseconds;
+        if (!gum.StartsWith("ok", StringComparison.Ordinal)) {
+            if (gum != "none") {
+                Log.Write($"driver: mic request ended as {gum} after {waited:F0}ms");
+            }
+            return;
+        }
+        Log.Write($"driver: mic open after {waited:F0}ms");
+        // The site starts its recorder/stream just after getUserMedia resolves.
+        await Task.Delay(MicOpenMargin);
+    }
+
+    private static readonly TimeSpan MicOpenTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan MicOpenMargin = TimeSpan.FromMilliseconds(200);
+
+    private async Task EngageDictationAsync() {
         InvalidateWaits();
         var st = await StateAsync();
         if (!st.LoggedIn) {
