@@ -36,7 +36,7 @@ internal static partial class Loc {
     }
 
     public static string T(string english) =>
-        Arabic && Ar.TryGetValue(english, out string? arabic) ? arabic : english;
+        Arabic && TryArabic(english, out string? arabic) ? arabic! : english;
 
     /// <summary><see cref="string.Format(string, object?[])"/> over the translated format string.</summary>
     public static string F(string englishFormat, params object?[] args) =>

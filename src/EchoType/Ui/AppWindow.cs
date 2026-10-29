@@ -1,5 +1,6 @@
 using EchoType.Hotkey;
 using EchoType.Native;
+using EchoType.Tasks;
 using EchoType.Translation;
 
 namespace EchoType.Ui;
@@ -17,6 +18,8 @@ internal enum AppShortcut {
     ChatGpt,
     Gemini,
     Claude,
+    QuickAdd,
+    TaskVoice,
 }
 
 internal interface IAppWindowHost {
@@ -69,6 +72,14 @@ internal interface IAppWindowHost {
     bool TrySetSecondDictationChord(HotkeyChord chord);
     void ToggleLoginWindow();
     void OpenCommands();
+    TasksHub Tasks { get; }
+    void OpenQuickAdd();
+    /// <summary>Gemini key and Telegram bot dialog.</summary>
+    void EditTaskSync();
+    /// <summary>Saves task settings changed in the window (time zone, Telegram switches…) and applies them.</summary>
+    void SaveTaskSettings();
+    bool TrySetQuickAddChord(HotkeyChord chord);
+    bool TrySetTaskVoiceChord(HotkeyChord chord);
     void OpenLog();
     void Quit();
 }
@@ -79,11 +90,17 @@ internal interface IAppWindowHost {
 /// only in the tray. A sidebar switches between short pages so each group
 /// of settings fits without scrolling.
 /// </summary>
-internal sealed class AppWindow : Form {
+internal sealed partial class AppWindow : Form {
 
     private const int SidebarWidthDip = 224;
     private const int HeaderHeightDip = 100;
-    private const int NavTopDip = 96;
+    private const int NavTopDip = 92;
+    private const int NavStepDip = 38;
+    private const int NavItemDip = 35;
+
+    /// <summary>Page indexes for <see cref="Reveal"/>.</summary>
+    public const int InboxPage = 0;
+    public const int NotificationsPage = 3;
     private const int PagePadDip = 28;
 
     // Segoe Fluent Icons / MDL2 Assets code points.
@@ -104,6 +121,8 @@ internal sealed class AppWindow : Form {
     private readonly HudCaptionButton _close;
     private readonly List<Page> _pages = [];
     private readonly Dictionary<Control, int> _rowHeights = [];
+    /// <summary>Section labels and cards currently left out of their page (empty task sections).</summary>
+    private readonly HashSet<Control> _hiddenBlocks = [];
     private readonly HudCard _statusCard;
     private readonly HudButton _loginButton;
     private readonly HudSegmented _modelSeg;
@@ -174,8 +193,8 @@ internal sealed class AppWindow : Form {
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
         ShowInTaskbar = true;
-        MinimumSize = new Size(760, 520);
-        Size = new Size(920, 680);
+        MinimumSize = new Size(780, 600);
+        Size = new Size(960, 740);
         BackColor = HudTheme.Paper;
         ForeColor = HudTheme.Ink;
         DoubleBuffered = true;
@@ -214,6 +233,8 @@ internal sealed class AppWindow : Form {
             TabIndex = 1,
         };
         _scrollHost.ClientSizeChanged += (_, _) => Relayout();
+
+        BuildTaskPages();
 
         // ── Home ──────────────────────────────────────────────
         var home = AddPage(GlyphHome, Loc.T("Home"), Loc.T("Status, model and how you dictate."));
@@ -333,6 +354,8 @@ internal sealed class AppWindow : Form {
         _textShortcutsRow = AddRow(textCard, Loc.T("Text shortcuts"),
             Loc.F("{0} shortcuts", _host.Settings.TextShortcuts.Count), textButton, 200);
 
+        BuildTaskSettingsPage();
+
         // ── Settings ──────────────────────────────────────────
         var settings = AddPage(GlyphSettings, Loc.T("Settings"), Loc.T("General options, language and app controls."));
         AddSection(settings, Loc.T("Paste"));
@@ -394,6 +417,8 @@ internal sealed class AppWindow : Form {
             _header.Invalidate();
         };
         Deactivate += (_, _) => StopCapture();
+        // Dates such as "Today" and overdue marks move with the clock.
+        Activated += (_, _) => SyncFromHost();
     }
 
     protected override CreateParams CreateParams {
@@ -486,9 +511,16 @@ internal sealed class AppWindow : Form {
         base.Dispose(disposing);
     }
 
-    public void Reveal() {
+    public void Reveal(int? page = null) {
         if (IsDisposed) {
             return;
+        }
+        if (page is { } index) {
+            if (IsHandleCreated) {
+                ShowPage(index);
+            } else {
+                _lastPage = index;
+            }
         }
         if (WindowState == FormWindowState.Minimized) {
             WindowState = FormWindowState.Normal;
@@ -568,6 +600,8 @@ internal sealed class AppWindow : Form {
                 : _host.LoginWindowVisible ? Loc.F("Close {0} window", _host.ModelName)
                 : _host.LoggedIn ? Loc.F("Open {0} window", _host.ModelName)
                 : Loc.F("Log in to {0}", _host.ModelName);
+            SyncTaskSettings();
+            SyncTasks();
             _commands.Reload(s.ActiveCommands.Select(c => {
                 c.Normalize();
                 return (c.DisplayName, HotkeyNames.For(c.Chord));
@@ -828,8 +862,8 @@ internal sealed class AppWindow : Form {
             int navY = HudTheme.Dip(this, NavTopDip);
             int navW = _sidebar.Width - navX * 2;
             foreach (var p in _pages) {
-                p.Nav.SetBounds(navX, navY, navW, HudTheme.Dip(this, 40));
-                navY += HudTheme.Dip(this, 44);
+                p.Nav.SetBounds(navX, navY, navW, HudTheme.Dip(this, NavItemDip));
+                navY += HudTheme.Dip(this, NavStepDip);
             }
 
             var page = _pages[_page];
@@ -852,6 +886,12 @@ internal sealed class AppWindow : Form {
         int y = 0;
         bool first = true;
         foreach (var block in page.Blocks) {
+            bool hidden = _hiddenBlocks.Contains(block);
+            // Setting the same value again is a no-op, even while the page itself is hidden.
+            block.Visible = !hidden;
+            if (hidden) {
+                continue;
+            }
             if (block is HudSectionLabel) {
                 int h = HudTheme.Dip(this, first ? 28 : 46);
                 block.SetBounds(pad, y, inner, h);
@@ -926,9 +966,12 @@ internal sealed class AppWindow : Form {
         return card;
     }
 
+    /// <param name="heightDip">Row height; 0 keeps the control's own height (lists that size themselves).</param>
     private void AddRowControl(HudCard card, Control control, int heightDip) {
         control.BackColor = HudTheme.Surface;
-        _rowHeights[control] = heightDip;
+        if (heightDip > 0) {
+            _rowHeights[control] = heightDip;
+        }
         card.Controls.Add(control);
     }
 
@@ -1012,7 +1055,8 @@ internal sealed class AppWindow : Form {
         row.Tag = shortcut;
         _host.Hotkey.ResetCapture();
         if (shortcut is AppShortcut.Translate or AppShortcut.TranslateSelection or AppShortcut.Dictation
-            or AppShortcut.SecondDictation or AppShortcut.AddWordReplacement) {
+            or AppShortcut.SecondDictation or AppShortcut.AddWordReplacement
+            or AppShortcut.QuickAdd or AppShortcut.TaskVoice) {
             // Dictation and the Translate shortcuts take one to three keys (e.g. Ctrl+Space);
             // they are saved once every key of the combination has been released.
             _host.Hotkey.CaptureMaxKeys = HotkeyChord.MaxKeys;
@@ -1050,6 +1094,7 @@ internal sealed class AppWindow : Form {
         _secondDictationKey.CapturePreview = null;
         _secondDictationKey.Value = HotkeyNames.For(_host.Settings.SecondDictationChord);
         _secondDictationKey.Invalidate();
+        ResetTaskKeyRows();
     }
 
     private void OnChordCaptured(HotkeyChord chord) {
@@ -1076,6 +1121,10 @@ internal sealed class AppWindow : Form {
             _host.TrySetTranslateSelectionChord(chord);
         } else if (shortcut == AppShortcut.AddWordReplacement) {
             _host.TrySetAddWordReplacementChord(chord);
+        } else if (shortcut == AppShortcut.QuickAdd) {
+            _host.TrySetQuickAddChord(chord);
+        } else if (shortcut == AppShortcut.TaskVoice) {
+            _host.TrySetTaskVoiceChord(chord);
         } else {
             _host.TrySetTranslateChord(chord);
         }

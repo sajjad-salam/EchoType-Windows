@@ -168,6 +168,48 @@ internal static class Sounds {
         }
     }
 
+    private static System.Media.SoundPlayer? _reminderPlayer;
+
+    /// <summary>
+    /// Rising three-note chime for a task reminder. A <c>reminder.wav</c> in
+    /// <c>%APPDATA%\EchoType\Sounds</c> replaces it.
+    /// </summary>
+    public static void Reminder() {
+        try {
+            var custom = TryLoadCustom("reminder.wav");
+            _reminderPlayer?.Dispose();
+            _reminderPlayer = custom != null
+                ? new System.Media.SoundPlayer(new MemoryStream(custom, writable: false))
+                : new System.Media.SoundPlayer(BuildThreeToneWav(660, 880, 1175));
+            _reminderPlayer.Play();
+        } catch {
+            System.Media.SystemSounds.Asterisk.Play();
+        }
+    }
+
+    private static MemoryStream BuildThreeToneWav(int hz1, int hz2, int hz3) {
+        const int sampleRate = 22050;
+        int note = MsToSamples(150, sampleRate);
+        int gap = MsToSamples(40, sampleRate);
+        int last = MsToSamples(260, sampleRate);
+        int samples = note * 2 + gap * 2 + last;
+        var ms = new MemoryStream(44 + samples * 2);
+        using (var w = new BinaryWriter(ms, System.Text.Encoding.ASCII, leaveOpen: true)) {
+            WriteWavHeader(w, sampleRate, samples);
+            WriteTone(w, hz1, note, sampleRate);
+            for (int i = 0; i < gap; i++) {
+                w.Write((short)0);
+            }
+            WriteTone(w, hz2, note, sampleRate);
+            for (int i = 0; i < gap; i++) {
+                w.Write((short)0);
+            }
+            WriteTone(w, hz3, last, sampleRate);
+        }
+        ms.Position = 0;
+        return ms;
+    }
+
     private static MemoryStream BuildTwoToneWav(
         int hz1, int ms1, int gapMs, int hz2, int ms2) {
         const int sampleRate = 22050;
