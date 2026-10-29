@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using EchoType.Native;
@@ -17,9 +18,12 @@ namespace EchoType.Input;
 /// clicks and foreground window changes. Our own windows never expand, so triggers
 /// can be typed into the editor. Injected input (including our own typing) is ignored.
 ///
-/// Like <see cref="Hotkey.HotkeyMonitor"/>, the callbacks run on the UI thread and must
-/// return quickly or Windows drops the hook (LowLevelHooksTimeout); clipboard work and
-/// logging are posted out of the callback.
+/// Both hooks live on a dedicated thread that does nothing but pump their messages.
+/// Windows waits for every low-level hook on every key and mouse move, so hooks on the
+/// busy UI thread (WebView2, paste sleeps) stall input system-wide, and Windows then
+/// silently drops them. The Backspace/typing is sent from another thread, outside any
+/// hook callback: the injected keys pass through these hooks too, and a callback that
+/// waits on them blocks the whole input queue.
 /// </summary>
 internal sealed class TextExpander : IDisposable {
 
@@ -36,7 +40,14 @@ internal sealed class TextExpander : IDisposable {
     private NativeMethods.LowLevelMouseProc? _mouseProc;
     private IntPtr _keyHook;
     private IntPtr _mouseHook;
+    private Thread? _hookThread;
+    private uint _hookThreadId;
+    private Thread? _sender;
+    private BlockingCollection<Entry>? _pending;
     private volatile Entry[] _entries = [];
+    /// <summary>Set from the UI thread; the hook thread clears the word on its next key.</summary>
+    private volatile bool _resetRequested;
+    // Only touched on the hook thread:
     private readonly char[] _buffer = new char[BufferSize];
     private int _length;
     private readonly byte[] _keyState = new byte[256];
@@ -49,19 +60,18 @@ internal sealed class TextExpander : IDisposable {
         Stop();
         Update(shortcuts, enabled);
         _ui = ui;
-        _keyProc = KeyboardCallback;
-        _mouseProc = MouseCallback;
-        _keyHook = NativeMethods.SetWindowsHookExW(NativeMethods.WH_KEYBOARD_LL, _keyProc, IntPtr.Zero, 0);
-        if (_keyHook == IntPtr.Zero) {
-            Log.Write($"text-shortcuts: hook install failed (error {Marshal.GetLastWin32Error()})");
-            _keyProc = null;
-            _mouseProc = null;
-            return false;
-        }
-        // Clicks only reset the remembered word; without this hook expansion still works.
-        _mouseHook = NativeMethods.SetWindowsHookExMouse(NativeMethods.WH_MOUSE_LL, _mouseProc, IntPtr.Zero, 0);
-        Log.Write("text-shortcuts: hook installed (" + _entries.Length + " shortcuts, enabled=" + enabled + ")");
-        return true;
+        _pending = new BlockingCollection<Entry>();
+        _sender = new Thread(SendLoop) { IsBackground = true, Name = "EchoType text shortcuts (send)" };
+        _sender.Start(_pending);
+        using var ready = new ManualResetEventSlim();
+        _hookThread = new Thread(HookLoop) {
+            IsBackground = true,
+            Priority = ThreadPriority.Highest,
+            Name = "EchoType text shortcuts (hook)",
+        };
+        _hookThread.Start(ready);
+        ready.Wait(TimeSpan.FromSeconds(5));
+        return _keyHook != IntPtr.Zero;
     }
 
     public void Update(IEnumerable<TextShortcut> shortcuts, bool enabled) {
@@ -72,23 +82,49 @@ internal sealed class TextExpander : IDisposable {
             .Select(g => g.First())
             .ToArray();
         Enabled = enabled;
-        _length = 0;
+        _resetRequested = true;
     }
 
     public void Stop() {
-        if (_keyHook != IntPtr.Zero) {
-            NativeMethods.UnhookWindowsHookEx(_keyHook);
-            _keyHook = IntPtr.Zero;
-            Log.Write("text-shortcuts: hook removed");
+        if (_hookThread != null) {
+            NativeMethods.PostThreadMessageW(_hookThreadId, NativeMethods.WM_QUIT, IntPtr.Zero, IntPtr.Zero);
+            _hookThread.Join(TimeSpan.FromSeconds(1));
+            _hookThread = null;
         }
+        if (_pending != null) {
+            _pending.CompleteAdding();
+            _sender?.Join(TimeSpan.FromSeconds(1));
+            _pending = null;
+            _sender = null;
+        }
+    }
+
+    private void HookLoop(object? state) {
+        var ready = (ManualResetEventSlim)state!;
+        _hookThreadId = NativeMethods.GetCurrentThreadId();
+        _keyProc = KeyboardCallback;
+        _mouseProc = MouseCallback;
+        _keyHook = NativeMethods.SetWindowsHookExW(NativeMethods.WH_KEYBOARD_LL, _keyProc, IntPtr.Zero, 0);
+        if (_keyHook == IntPtr.Zero) {
+            Log.Write($"text-shortcuts: hook install failed (error {Marshal.GetLastWin32Error()})");
+            ready.Set();
+            return;
+        }
+        // Clicks only reset the remembered word; without this hook expansion still works.
+        _mouseHook = NativeMethods.SetWindowsHookExMouse(NativeMethods.WH_MOUSE_LL, _mouseProc, IntPtr.Zero, 0);
+        Log.Write("text-shortcuts: hook installed on its own thread (" + _entries.Length
+            + " shortcuts, enabled=" + Enabled + ")");
+        ready.Set();
+        // Low-level hooks are called from inside GetMessage; nothing else is posted here.
+        while (NativeMethods.GetMessageW(out _, IntPtr.Zero, 0, 0) > 0) {
+        }
+        NativeMethods.UnhookWindowsHookEx(_keyHook);
         if (_mouseHook != IntPtr.Zero) {
             NativeMethods.UnhookWindowsHookEx(_mouseHook);
-            _mouseHook = IntPtr.Zero;
         }
-        _keyProc = null;
-        _mouseProc = null;
-        _length = 0;
-        _swallowSpaceUp = false;
+        _keyHook = IntPtr.Zero;
+        _mouseHook = IntPtr.Zero;
+        Log.Write("text-shortcuts: hook removed");
     }
 
     private IntPtr KeyboardCallback(int nCode, IntPtr wParam, IntPtr lParam) {
@@ -131,6 +167,10 @@ internal sealed class TextExpander : IDisposable {
         }
         if (msg is not (NativeMethods.WM_KEYDOWN or NativeMethods.WM_SYSKEYDOWN)) {
             return false;
+        }
+        if (_resetRequested) {
+            _resetRequested = false;
+            _length = 0;
         }
         if (!Enabled || _entries.Length == 0) {
             _length = 0;
@@ -236,8 +276,8 @@ internal sealed class TextExpander : IDisposable {
         if (pid == (uint)Environment.ProcessId) {
             return false; // our own editor: let the trigger be typed as-is
         }
-        Expand(best);
-        return true;
+        // Never send input from inside the callback; the sender thread types it.
+        return _pending?.TryAdd(best) == true;
     }
 
     private bool BufferEndsWith(string trigger) {
@@ -250,7 +290,18 @@ internal sealed class TextExpander : IDisposable {
         return true;
     }
 
-    private void Expand(Entry entry) {
+    private void SendLoop(object? state) {
+        var pending = (BlockingCollection<Entry>)state!;
+        foreach (var entry in pending.GetConsumingEnumerable()) {
+            try {
+                Send(entry);
+            } catch (Exception ex) {
+                Log.Write("text-shortcuts: expand failed: " + ex.Message);
+            }
+        }
+    }
+
+    private void Send(Entry entry) {
         string text = entry.Text + " ";
         bool paste = text.Length > MaxTypedLength || text.Contains('\n') || text.Contains('\r');
         if (paste) {
@@ -268,20 +319,14 @@ internal sealed class TextExpander : IDisposable {
                 inputs.Add(Key(0, c, NativeMethods.KEYEVENTF_UNICODE | NativeMethods.KEYEVENTF_KEYUP));
             }
         }
-        NativeMethods.SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<NativeMethods.INPUT>());
-        string how = paste ? "pasted" : "typed";
-        int length = text.Length;
-        try {
-            _ui?.BeginInvoke(new Action(() => {
-                if (paste) {
-                    Paster.PasteRestoringClipboard(text);
-                }
-                Log.Write("text-shortcuts: expanded a " + erase + "-char trigger, " + how + " " + length + " chars");
-            }), null);
-        } catch (Exception ex) {
-            string message = "text-shortcuts: UI marshal failed: " + ex.Message;
-            ThreadPool.QueueUserWorkItem(static state => Log.Write((string)state!), message);
+        uint sent = NativeMethods.SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<NativeMethods.INPUT>());
+        if (paste) {
+            // The clipboard needs the STA UI thread; the Backspaces above are already queued.
+            _ui?.BeginInvoke(new Action(() => Paster.PasteRestoringClipboard(text)), null);
         }
+        Log.Write("text-shortcuts: expanded a " + erase + "-char trigger, "
+            + (paste ? "pasted " : "typed ") + text.Length + " chars"
+            + (sent == inputs.Count ? "" : " (SendInput sent " + sent + "/" + inputs.Count + ")"));
     }
 
     private static NativeMethods.INPUT Key(uint vk, ushort scan, uint flags) {
