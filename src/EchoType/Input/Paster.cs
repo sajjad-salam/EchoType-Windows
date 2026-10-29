@@ -108,9 +108,10 @@ internal static class Paster {
             RestoreClipboardLater(saved, text);
         }
         if (pressEnterAfterPaste) {
-            // Give the target app a beat to apply the paste before submitting.
-            Thread.Sleep(120);
-            SynthesizeEnter();
+            // Electron targets (VS Code, the Claude Code panel/terminal) apply a long
+            // paste asynchronously; an Enter that lands mid-paste is dropped or folded
+            // into the pasted text, so wait longer the more text there is.
+            PressEnter(Math.Clamp(120 + text.Length / 4, 120, 600));
         }
 
         return HandBackFocus(resume);
@@ -141,11 +142,27 @@ internal static class Paster {
         CopyImageToClipboard(image);
         SynthesizeCtrlV();
         if (pressEnterAfterPaste) {
-            Thread.Sleep(120);
-            SynthesizeEnter();
+            PressEnter(120);
         }
 
         return HandBackFocus(resume);
+    }
+
+    /// <summary>
+    /// Waits for the paste to settle, then submits with Enter. A modifier still held
+    /// from the hotkey (Shift in Ctrl+Shift+Space) would turn this into Shift+Enter,
+    /// which inserts a newline in chat boxes instead of sending — so wait it out.
+    /// </summary>
+    private static void PressEnter(int delayMs) {
+        Thread.Sleep(delayMs);
+        var wait = System.Diagnostics.Stopwatch.StartNew();
+        while (NativeMethods.AnyModifierDown() && wait.ElapsedMilliseconds < 1500) {
+            Thread.Sleep(15);
+        }
+        bool held = NativeMethods.AnyModifierDown();
+        SynthesizeEnter();
+        Log.Write("paste: sent Enter after " + (delayMs + wait.ElapsedMilliseconds) + "ms"
+            + (held ? " (modifier still held — may arrive as Shift/Ctrl+Enter)" : ""));
     }
 
     private static PasteTarget? CaptureResume(PasteTarget? target) =>
