@@ -879,9 +879,16 @@ internal sealed class ChatGPTWebController : IDisposable {
         // unable to steal focus.
         form.SuppressActivation = true;
         form.Location = new Point(-32000, -32000);
+        // A minimized or maximized window only stores that move for later (and a minimized one
+        // stops rendering): restore it, which lands it offscreen.
+        if (form.WindowState != FormWindowState.Normal) {
+            form.WindowState = FormWindowState.Normal;
+            form.Location = new Point(-32000, -32000);
+        }
         long ex = Native.NativeMethods.GetWindowLongPtrW(form.Handle, Native.NativeMethods.GWL_EXSTYLE);
         Native.NativeMethods.SetWindowLongPtrW(form.Handle, Native.NativeMethods.GWL_EXSTYLE,
             ex | Native.NativeMethods.WS_EX_NOACTIVATE | Native.NativeMethods.WS_EX_TOOLWINDOW);
+        RefreshFrame(form);
         if (controller != null) {
             controller.IsVisible = true;
             SyncWebViewBounds(form, controller);
@@ -896,6 +903,8 @@ internal sealed class ChatGPTWebController : IDisposable {
         long ex = Native.NativeMethods.GetWindowLongPtrW(_form.Handle, Native.NativeMethods.GWL_EXSTYLE);
         Native.NativeMethods.SetWindowLongPtrW(_form.Handle, Native.NativeMethods.GWL_EXSTYLE,
             ex & ~Native.NativeMethods.WS_EX_NOACTIVATE & ~Native.NativeMethods.WS_EX_TOOLWINDOW);
+        // Without this the window keeps the thin tool-window caption (a tiny ✕, no minimize/maximize).
+        RefreshFrame(_form);
         PlaceOnPrimaryMonitor();
         if (_controller != null) {
             _controller.IsVisible = true;
@@ -906,6 +915,13 @@ internal sealed class ChatGPTWebController : IDisposable {
         _form.Activate();
         _controller?.MoveFocus(CoreWebView2MoveFocusReason.Programmatic);
         Log.Write("webview: login window shown");
+    }
+
+    /// <summary>Redraws the caption after a WS_EX_TOOLWINDOW change; Windows caches the frame until SWP_FRAMECHANGED.</summary>
+    private static void RefreshFrame(Form form) {
+        Native.NativeMethods.SetWindowPos(form.Handle, IntPtr.Zero, 0, 0, 0, 0,
+            Native.NativeMethods.SWP_NOMOVE | Native.NativeMethods.SWP_NOSIZE | Native.NativeMethods.SWP_NOZORDER
+            | Native.NativeMethods.SWP_NOACTIVATE | Native.NativeMethods.SWP_FRAMECHANGED);
     }
 
     private void PlaceOnPrimaryMonitor() => PlaceOnPrimaryMonitor(_form);
@@ -933,9 +949,16 @@ internal sealed class ChatGPTWebController : IDisposable {
     }
 
     private void OnHostFormResize(object? sender, EventArgs e) {
-        if (_loginVisible && ReferenceEquals(sender, _form)) {
-            SyncWebViewBounds();
+        if (!_loginVisible || !ReferenceEquals(sender, _form)) {
+            return;
         }
+        if (_form.WindowState == FormWindowState.Minimized) {
+            // This window also runs dictation, which needs it rendering: minimize puts it
+            // back into hidden mode (like the close box) instead of the taskbar.
+            _form.BeginInvoke(HideLoginWindow);
+            return;
+        }
+        SyncWebViewBounds();
     }
 
     private void OnHostFormLocationChanged(object? sender, EventArgs e) {

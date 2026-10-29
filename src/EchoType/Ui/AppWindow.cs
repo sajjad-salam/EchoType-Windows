@@ -38,6 +38,7 @@ internal interface IAppWindowHost {
     void SetAskModel(TranscriptionProvider provider);
     void ToggleAskWindow();
     void EditOpenAiKey();
+    void EditTelegramVoice();
     void EditWordReplacements();
     void EditTextShortcuts();
     void SetTextShortcutsEnabled(bool value);
@@ -125,6 +126,8 @@ internal sealed class AppWindow : Form {
     private readonly ComboBox _translateSelectionLanguage;
     private readonly HudSettingRow _openAiRow;
     private readonly HudButton _openAiButton;
+    private readonly HudButton _telegramButton;
+    private readonly HudSettingRow _telegramRow;
     private readonly HudHotkeyRow _chatgptKey;
     private readonly HudHotkeyRow _geminiKey;
     private readonly HudHotkeyRow _claudeKey;
@@ -346,6 +349,12 @@ internal sealed class AppWindow : Form {
         profilesButton.Click += (_, _) => _host.EditAppProfiles();
         AddRow(paste, Loc.T("Per-app profiles"), Loc.T("Auto Enter, Auto Clean and Translate per app."), profilesButton, 200);
 
+        AddSection(settings, "Telegram");
+        var telegramCard = AddCard(settings);
+        _telegramButton = MakeButton(Loc.T("Set up…"), HudButton.Kind.Ghost);
+        _telegramButton.Click += (_, _) => _host.EditTelegramVoice();
+        _telegramRow = AddRow(telegramCard, Loc.T("Telegram voice notes"), null, _telegramButton, 200);
+
         AddSection(settings, Loc.T("Language") + (Loc.Arabic ? "" : " · اللغة"));
         var languageCard = AddCard(settings);
         // Each name in its own language so it can be found whatever the current UI is.
@@ -555,6 +564,12 @@ internal sealed class AppWindow : Form {
             _openAiRow.Description = Loc.T(hasKey ? "Set — translating with OpenAI." : "Not set — translating with Google.");
             _openAiButton.Text = Loc.T(hasKey ? "Change…" : "Add key…");
             _openAiRow.Invalidate();
+            bool telegramOn = s.TelegramEnabled && !string.IsNullOrWhiteSpace(s.TelegramBotToken);
+            _telegramRow.Description = Loc.T(telegramOn
+                ? "On — voice notes sent to your bot come back as text."
+                : "Off — send voice notes to a bot and get their text back.");
+            _telegramButton.Text = Loc.T(telegramOn ? "Change…" : "Set up…");
+            _telegramRow.Invalidate();
             _chatgptKey.Value = HotkeyLabel(s.ChatGptSwitchVk);
             _geminiKey.Value = HotkeyLabel(s.GeminiSwitchVk);
             _claudeKey.Value = HotkeyLabel(s.ClaudeSwitchVk);

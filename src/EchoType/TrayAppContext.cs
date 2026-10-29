@@ -3,6 +3,7 @@ using EchoType.Audio;
 using EchoType.Hotkey;
 using EchoType.Input;
 using EchoType.Native;
+using EchoType.Telegram;
 using EchoType.Translation;
 using EchoType.Ui;
 using EchoType.Web;
@@ -83,6 +84,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private int _cleanWarmupEpoch;
     private bool _cleanPromptUiOpen;
     private bool _openAiKeyUiOpen;
+    private bool _telegramUiOpen;
+    private TelegramVoiceRelay? _telegram;
     private bool _wordReplacementsUiOpen;
     private bool _textShortcutsUiOpen;
     private bool _workspaceModesUiOpen;
@@ -331,6 +334,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkey.CancelRequested += OnCancelRequested;
         _textExpander.Start(_settings.TextShortcuts, _settings.TextShortcutsEnabled);
         StatusOverlay.CancelClicked += OnHudCancelClicked;
+        StatusOverlay.ParkAfterSeconds = _settings.ProgressPillHideSeconds;
+        _telegram = TelegramVoiceRelay.Start(_settings);
 
         Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey={HotkeyNames.For(_settings.DictationChord)}, askModelVk=0x{_settings.AskModelVk:X2}, askModel={_settings.AskProviderName}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateSelection={HotkeyNames.For(_settings.TranslateSelectionChord)}, translateTo={_settings.TranslateTargetLanguage}, translateSelectionTo={_settings.TranslateSelectionTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating}, longDictation={_settings.LongDictation})");
         StartupRegistration.Apply(_settings.StartWithWindows);
@@ -540,6 +545,39 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
         } finally {
             _openAiKeyUiOpen = false;
+        }
+    }
+
+    private void EditTelegramVoice() {
+        if (_telegramUiOpen) {
+            return;
+        }
+        _telegramUiOpen = true;
+        try {
+            using var form = new TelegramVoiceForm(_settings);
+            IWin32Window? owner = _window is { Visible: true, IsDisposed: false } ? _window : null;
+            if (form.ShowDialog(owner) != DialogResult.OK) {
+                return;
+            }
+            _settings.TelegramEnabled = form.TelegramEnabled;
+            _settings.TelegramBotToken = form.TelegramToken;
+            _settings.TelegramChatId = form.TelegramChatId;
+            _settings.GeminiApiKey = form.GeminiKey;
+            _settings.GeminiModel = form.GeminiModel;
+            _settings.Save();
+            _telegram?.Dispose();
+            _telegram = TelegramVoiceRelay.Start(_settings);
+            Log.Write("settings: telegram " + (_telegram != null ? "on" : "off"));
+            ShowBalloon(_telegram != null
+                ? Loc.T("Telegram voice notes are on.")
+                : Loc.T("Telegram voice notes are off."), OverlayKind.Success);
+            NotifyUi();
+        } catch (Exception ex) {
+            Log.Write("telegram ui: " + ex);
+            MessageBox.Show("Could not open the Telegram settings: " + ex.Message, "EchoType",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        } finally {
+            _telegramUiOpen = false;
         }
     }
 
@@ -3192,6 +3230,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     void IAppWindowHost.SetAskModel(TranscriptionProvider provider) => SetAskModel(provider);
     void IAppWindowHost.ToggleAskWindow() => ToggleAskWindow();
     void IAppWindowHost.EditOpenAiKey() => EditOpenAiKey();
+
+    void IAppWindowHost.EditTelegramVoice() => EditTelegramVoice();
     void IAppWindowHost.EditWordReplacements() => EditWordReplacements();
     void IAppWindowHost.EditTextShortcuts() => EditTextShortcuts();
     void IAppWindowHost.SetTextShortcutsEnabled(bool value) => SetTextShortcutsEnabled(value);
@@ -3434,6 +3474,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         StatusOverlay.Shutdown();
         _hotkey.Dispose();
         _textExpander.Dispose();
+        _telegram?.Dispose();
         _web.Dispose();
         _cleanWeb?.Dispose();
         _askWeb?.Dispose();

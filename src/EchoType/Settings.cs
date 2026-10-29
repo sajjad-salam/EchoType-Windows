@@ -92,6 +92,35 @@ internal sealed class Settings {
     public bool LongDictation { get; set; }
 
     /// <summary>
+    /// The progress pill slides down off screen after this many seconds; the task keeps
+    /// running and still pastes when done. 0 = keep it up until the work ends.
+    /// </summary>
+    [JsonPropertyName("progressPillHideSeconds")]
+    public int ProgressPillHideSeconds { get; set; } = 5;
+
+    /// <summary>Telegram bot token from @BotFather. Empty = Telegram voice notes off.</summary>
+    [JsonPropertyName("telegramBotToken")]
+    public string TelegramBotToken { get; set; } = "";
+
+    /// <summary>The only chat whose voice notes are transcribed (the reply goes back there).</summary>
+    [JsonPropertyName("telegramChatId")]
+    public string TelegramChatId { get; set; } = "";
+
+    [JsonPropertyName("telegramEnabled")]
+    public bool TelegramEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Google Gemini API key that transcribes Telegram voice notes. The GEMINI_API_KEY
+    /// environment variable also works.
+    /// </summary>
+    [JsonPropertyName("geminiApiKey")]
+    public string GeminiApiKey { get; set; } = "";
+
+    /// <summary>Gemini model id. Empty = <c>gemini-flash-latest</c>.</summary>
+    [JsonPropertyName("geminiModel")]
+    public string GeminiModel { get; set; } = "";
+
+    /// <summary>
     /// When false (default), hold a recording shortcut to talk and release to stop.
     /// When true, press once to start and press the same key again to stop.
     /// Applies to dictation, selection rewrite, Ask model, and custom commands.
@@ -390,6 +419,11 @@ internal sealed class Settings {
             loaded.TranslateSelectionVks ??= [];
             loaded.AddWordReplacementVks ??= [];
             loaded.OpenAiApiKey ??= "";
+            loaded.TelegramBotToken ??= "";
+            loaded.TelegramChatId ??= "";
+            loaded.GeminiApiKey ??= "";
+            loaded.GeminiModel ??= "";
+            loaded.ProgressPillHideSeconds = Math.Clamp(loaded.ProgressPillHideSeconds, 0, 600);
             loaded.OpenAiTranslationModel ??= "";
             loaded.WordReplacements ??= [];
             loaded.TextShortcuts ??= [];

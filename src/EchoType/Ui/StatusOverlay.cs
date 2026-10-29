@@ -26,7 +26,8 @@ internal enum WorkStage {
 /// a slim progress pill while the transcript or reply is on its way, and short
 /// notices that replace Windows balloon tips. The listening and progress pills have
 /// an ✕ button that cancels the task; clicking it never takes focus from the app the
-/// result will be pasted into.
+/// result will be pasted into. A progress pill that waits longer than
+/// <see cref="ParkAfterSeconds"/> slides down out of the way while the work carries on.
 /// </summary>
 internal sealed class StatusOverlay : Form {
 
@@ -61,6 +62,12 @@ internal sealed class StatusOverlay : Form {
     private const int FinishHoldMs = 260;
 
     private static StatusOverlay? _instance;
+
+    /// <summary>
+    /// After this long the progress pill slides down off screen; the task keeps running and
+    /// still pastes (or shows its reply) when done. 0 = keep it up until the work ends.
+    /// </summary>
+    public static int ParkAfterSeconds { get; set; } = 5;
 
     /// <summary>Raised on the UI thread when the ✕ on the listening or progress pill is clicked.</summary>
     public static event Action? CancelClicked;
@@ -111,6 +118,9 @@ internal sealed class StatusOverlay : Form {
     private bool _workFinishing;
     private long _workFinishedAt;
     private long _workLastTick;
+    private long _workShownAt;
+    // Slid away because the wait ran long: later stages of the same run stay hidden.
+    private bool _parked;
 
     // Size morph between modes (listening → progress → notice) so the pill reshapes in place.
     private bool _morphing;
@@ -126,6 +136,7 @@ internal sealed class StatusOverlay : Form {
     public static void ShowListening(string modelName, Func<float> level, Func<float[], bool>? spectrum = null) {
         try {
             var hud = Instance();
+            hud._parked = false;
             hud._level = level;
             hud._spectrum = spectrum;
             hud._title = Loc.T("Listening");
@@ -194,6 +205,8 @@ internal sealed class StatusOverlay : Form {
             var hud = Instance();
             if (restart) {
                 hud._workProgress = 0;
+                hud._workShownAt = Environment.TickCount64;
+                hud._parked = false;
             }
             hud._level = null;
             hud._spectrum = null;
@@ -216,10 +229,14 @@ internal sealed class StatusOverlay : Form {
             hud._workFinishing = false;
             hud._workFinishedAt = 0;
             hud._workLastTick = 0;
+            if (hud._parked) {
+                return;
+            }
             if (hud._mode == Mode.Working && hud._motion != Motion.Out) {
                 hud.PaintFrame();
                 return;
             }
+            hud._workShownAt = Environment.TickCount64;
             hud.Present(Mode.Working);
         } catch (Exception ex) {
             Log.Write("hud: working failed: " + ex.Message);
@@ -244,7 +261,12 @@ internal sealed class StatusOverlay : Form {
     /// <summary>Cancelled, or paused while the action picker is up: slide away without filling.</summary>
     public static void HideWorking() {
         try {
-            if (_instance is { IsDisposed: false } hud && hud._mode == Mode.Working) {
+            if (_instance is not { IsDisposed: false } hud) {
+                return;
+            }
+            // The next progress pill (after the action picker, or a new task) shows again.
+            hud._parked = false;
+            if (hud._mode == Mode.Working) {
                 hud.BeginHide();
             }
         } catch (Exception ex) {
@@ -510,6 +532,12 @@ internal sealed class StatusOverlay : Form {
         } else {
             _opacity = 255;
             if (_mode == Mode.Notice && _noticeShownAt > 0 && now - _noticeShownAt >= NoticeHoldMs) {
+                BeginHide();
+            } else if (_mode == Mode.Working && !_workFinishing && !_morphing && ParkAfterSeconds > 0
+                && _workShownAt > 0 && now - _workShownAt >= ParkAfterSeconds * 1000L) {
+                // Long wait: slide down out of the way; the task itself is not touched.
+                Log.Write("hud: progress pill parked after " + ParkAfterSeconds + "s");
+                _parked = true;
                 BeginHide();
             }
         }
