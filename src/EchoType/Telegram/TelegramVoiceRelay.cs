@@ -4,7 +4,8 @@ namespace EchoType.Telegram;
 
 /// <summary>
 /// While EchoType runs, voice notes sent to the user's Telegram bot from their chat are
-/// downloaded, transcribed by Gemini and the text is sent back to that chat as a reply.
+/// downloaded, transcribed by Gemini web (hidden window, no API key) and the text is sent
+/// back to that chat as a reply.
 /// Other chats only get their chat id (to help with setup).
 /// </summary>
 internal sealed class TelegramVoiceRelay : IDisposable {
@@ -14,31 +15,34 @@ internal sealed class TelegramVoiceRelay : IDisposable {
 
     private readonly TelegramBot _bot;
     private readonly long _chatId;
-    private readonly string _geminiKey;
-    private readonly string _geminiModel;
+    /// <summary>UI-thread control: the Gemini window (WebView2) is only driven from there.</summary>
+    private readonly Control _ui;
+    private readonly GeminiWebTranscriber _gemini = new();
 
-    private TelegramVoiceRelay(string token, long chatId, string geminiKey, string geminiModel) {
+    private TelegramVoiceRelay(string token, long chatId, Control ui) {
         _bot = new TelegramBot(token);
         _chatId = chatId;
-        _geminiKey = geminiKey;
-        _geminiModel = geminiModel;
+        _ui = ui;
         _bot.MessageReceived += OnMessageAsync;
     }
 
     /// <summary>Starts polling when Telegram is on and has a token; null otherwise.</summary>
-    public static TelegramVoiceRelay? Start(Settings settings) {
+    public static TelegramVoiceRelay? Start(Settings settings, Control ui) {
         if (!settings.TelegramEnabled || string.IsNullOrWhiteSpace(settings.TelegramBotToken)) {
             return null;
         }
         TelegramBot.TryParseChatId(settings.TelegramChatId, out long chatId);
-        var relay = new TelegramVoiceRelay(settings.TelegramBotToken, chatId,
-            GeminiTranscriber.ResolveKey(settings), settings.GeminiModel);
+        var relay = new TelegramVoiceRelay(settings.TelegramBotToken, chatId, ui);
         relay._bot.Start(ReadOffset, SaveOffset);
         Log.Write("telegram: voice relay on" + (chatId == 0 ? " (no chat id yet)" : ""));
         return relay;
     }
 
-    public void Dispose() => _bot.Dispose();
+    /// <summary>Call on the UI thread (closes the hidden Gemini window).</summary>
+    public void Dispose() {
+        _bot.Dispose();
+        _gemini.Dispose();
+    }
 
     private async Task OnMessageAsync(TelegramIncoming message, CancellationToken cancel) {
         if (_chatId == 0 || message.ChatId != _chatId) {
@@ -53,13 +57,6 @@ internal sealed class TelegramVoiceRelay : IDisposable {
                 Loc.T("Send me a voice note and I'll reply with its text."), message.MessageId, cancel);
             return;
         }
-        if (_geminiKey.Length == 0) {
-            await _bot.SendMessageAsync(_chatId,
-                Loc.T("Add a Gemini API key in EchoType → Settings → Telegram voice notes to transcribe voice notes."),
-                message.MessageId, cancel);
-            return;
-        }
-
         var started = DateTime.UtcNow;
         Log.Write("telegram: voice note " + message.MessageId + " (" + message.AudioMime + ", " + message.AudioSize + " bytes)");
         // "typing…" lasts about 5 s; keep it up while Gemini works.
@@ -68,8 +65,7 @@ internal sealed class TelegramVoiceRelay : IDisposable {
         string reply;
         try {
             byte[] audio = await _bot.DownloadFileAsync(message.AudioFileId, cancel);
-            string text = await new GeminiTranscriber(_geminiKey, _geminiModel)
-                .TranscribeAsync(audio, message.AudioMime, cancel);
+            string text = await OnUiAsync(() => _gemini.TranscribeAsync(audio, message.AudioMime, cancel));
             reply = text.Length > 0 ? text : Loc.T("(No speech found in this voice note.)");
             Log.Write("telegram: voice note " + message.MessageId + " transcribed, " + text.Length + " chars in "
                 + (int)(DateTime.UtcNow - started).TotalMilliseconds + " ms");
@@ -81,6 +77,18 @@ internal sealed class TelegramVoiceRelay : IDisposable {
         }
         await typingLoop;
         await _bot.SendMessageAsync(_chatId, reply, message.MessageId, cancel);
+    }
+
+    private Task<string> OnUiAsync(Func<Task<string>> work) {
+        var done = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ui.BeginInvoke(new Action(async () => {
+            try {
+                done.SetResult(await work());
+            } catch (Exception ex) {
+                done.SetException(ex);
+            }
+        }));
+        return done.Task;
     }
 
     private async Task KeepTypingAsync(CancellationToken cancel) {

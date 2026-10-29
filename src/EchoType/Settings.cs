@@ -110,17 +110,6 @@ internal sealed class Settings {
     public bool TelegramEnabled { get; set; } = true;
 
     /// <summary>
-    /// Google Gemini API key that transcribes Telegram voice notes. The GEMINI_API_KEY
-    /// environment variable also works.
-    /// </summary>
-    [JsonPropertyName("geminiApiKey")]
-    public string GeminiApiKey { get; set; } = "";
-
-    /// <summary>Gemini model id. Empty = <c>gemini-flash-latest</c>.</summary>
-    [JsonPropertyName("geminiModel")]
-    public string GeminiModel { get; set; } = "";
-
-    /// <summary>
     /// When false (default), hold a recording shortcut to talk and release to stop.
     /// When true, press once to start and press the same key again to stop.
     /// Applies to dictation, selection rewrite, Ask model, and custom commands.
@@ -421,8 +410,6 @@ internal sealed class Settings {
             loaded.OpenAiApiKey ??= "";
             loaded.TelegramBotToken ??= "";
             loaded.TelegramChatId ??= "";
-            loaded.GeminiApiKey ??= "";
-            loaded.GeminiModel ??= "";
             loaded.ProgressPillHideSeconds = Math.Clamp(loaded.ProgressPillHideSeconds, 0, 600);
             loaded.OpenAiTranslationModel ??= "";
             loaded.WordReplacements ??= [];

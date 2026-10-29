@@ -3,26 +3,20 @@ using EchoType.Telegram;
 namespace EchoType.Ui;
 
 /// <summary>
-/// Telegram bot token, chat id and the Gemini API key used to turn voice notes sent to
-/// the bot into text replies.
+/// Telegram bot token and chat id for turning voice notes sent to the bot into text
+/// replies (transcribed by Gemini web, no API key).
 /// </summary>
 internal sealed class TelegramVoiceForm : Form {
 
     private const int FieldWidth = 460;
 
     private readonly CheckBox _enabled;
-    private readonly TextBox _geminiKey;
-    private readonly TextBox _geminiModel;
     private readonly TextBox _token;
     private readonly TextBox _chatId;
-    private readonly Label _geminiStatus;
     private readonly Label _telegramStatus;
-    private readonly Button _testGemini;
     private readonly Button _testTelegram;
 
     public bool TelegramEnabled => _enabled.Checked;
-    public string GeminiKey => _geminiKey.Text.Trim();
-    public string GeminiModel => _geminiModel.Text.Trim();
     public string TelegramToken => _token.Text.Trim();
     public string TelegramChatId => _chatId.Text.Trim();
 
@@ -65,22 +59,10 @@ internal sealed class TelegramVoiceForm : Form {
         layout.Controls.Add(Row(_testTelegram, _telegramStatus));
 
         layout.Controls.Add(Heading("Gemini"));
-        layout.Controls.Add(Note(Loc.T("Turns the voice notes into text. Get a free key at aistudio.google.com → Get API key.")));
-        _geminiKey = new TextBox { Width = FieldWidth, UseSystemPasswordChar = true, Text = settings.GeminiApiKey, PlaceholderText = "AIza…" };
-        layout.Controls.Add(_geminiKey);
-        _geminiModel = new TextBox { Width = FieldWidth, Text = settings.GeminiModel, PlaceholderText = GeminiTranscriber.DefaultModel };
-        layout.Controls.Add(Note(Loc.T("Model (empty = latest Flash):")));
-        layout.Controls.Add(_geminiModel);
-        _testGemini = new Button { Text = Loc.T("Test Gemini"), AutoSize = true };
-        _testGemini.Click += async (_, _) => await TestGeminiAsync();
-        _geminiStatus = Status();
-        layout.Controls.Add(Row(_testGemini, _geminiStatus));
+        layout.Controls.Add(Note(Loc.T("Voice notes are turned into text by Gemini web (gemini.google.com) in a hidden window — no API key. It uses the same login as the Gemini model, so log in to Gemini in EchoType once.")));
 
         var show = new CheckBox { Text = Loc.T("Show keys"), AutoSize = true, Margin = new Padding(0, 8, 0, 0) };
-        show.CheckedChanged += (_, _) => {
-            _geminiKey.UseSystemPasswordChar = !show.Checked;
-            _token.UseSystemPasswordChar = !show.Checked;
-        };
+        show.CheckedChanged += (_, _) => _token.UseSystemPasswordChar = !show.Checked;
         layout.Controls.Add(show);
         layout.Controls.Add(Note(Loc.T("Keys are saved only in %APPDATA%\\EchoType\\config.json on this PC.")));
 
@@ -133,21 +115,6 @@ internal sealed class TelegramVoiceForm : Form {
         var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 6, 0, 0) };
         row.Controls.AddRange(controls);
         return row;
-    }
-
-    private async Task TestGeminiAsync() {
-        if (GeminiKey.Length == 0) {
-            SetStatus(_geminiStatus, Loc.T("Enter a key first."), null);
-            return;
-        }
-        _testGemini.Enabled = false;
-        SetStatus(_geminiStatus, Loc.T("Testing…"), null);
-        string? error = await new GeminiTranscriber(GeminiKey, GeminiModel).TestAsync(CancellationToken.None);
-        if (IsDisposed) {
-            return;
-        }
-        _testGemini.Enabled = true;
-        SetStatus(_geminiStatus, error == null ? Loc.T("Gemini works.") : Loc.T("Didn't work: ") + error, error == null);
     }
 
     private async Task TestTelegramAsync() {

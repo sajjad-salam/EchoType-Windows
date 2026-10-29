@@ -616,13 +616,14 @@ internal sealed class DictationDriver {
             c.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
             return 'ok';
           };
-          E.markFileInput = (count) => {
+          E.markFileInput = (count, kind) => {
             document.querySelectorAll('[data-et-file]').forEach(function (n) { n.removeAttribute('data-et-file'); });
             const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
             if (!inputs.length) return 'none';
             const fits = inputs.filter(function (i) { return count < 2 || i.multiple; });
             const pool = fits.length ? fits : inputs;
-            const pick = pool.find(function (i) { return /image/i.test(i.accept || ''); })
+            const wants = new RegExp(kind || 'image', 'i');
+            const pick = pool.find(function (i) { return wants.test(i.accept || ''); })
               || pool.find(function (i) { return !i.accept; }) || pool[0];
             pick.setAttribute('data-et-file', '1');
             return 'ok';
@@ -2044,12 +2045,13 @@ internal sealed class DictationDriver {
     }
 
     /// <summary>
-    /// Attaches image files to the composer (after the text is in): first a paste event
-    /// carrying the files, which ChatGPT, Gemini and Claude all accept like a Ctrl+V of an
-    /// image; if no thumbnail shows up, the page's file input is filled over CDP. Then waits
-    /// for the upload so Send is enabled. Returns false when no attachment could be seen.
+    /// Attaches files (images, or audio for Telegram voice notes) to the composer after the
+    /// text is in: first a paste event carrying the files, which ChatGPT, Gemini and Claude
+    /// all accept like a Ctrl+V of an image; if no thumbnail shows up, the page's file input
+    /// is filled over CDP. Then waits for the upload so Send is enabled. Returns false when
+    /// no attachment could be seen.
     /// </summary>
-    public async Task<bool> AttachImagesAsync(IReadOnlyList<string> paths) {
+    public async Task<bool> AttachFilesAsync(IReadOnlyList<string> paths) {
         if (paths.Count == 0) {
             return true;
         }
@@ -2064,14 +2066,14 @@ internal sealed class DictationDriver {
                 _ = await EvalLiteAsync("(window.__etB64 = (window.__etB64 || '') + " + part + ", 'ok')");
             }
             string name = JsonSerializer.Serialize(Path.GetFileName(path));
-            string mime = JsonSerializer.Serialize(Input.ImageReferences.MimeType(path));
+            string mime = JsonSerializer.Serialize(FileMime(path));
             _ = await EvalAsync("__echotype.stageFile(" + name + ", " + mime + ")");
         }
 
         bool attached = false;
         try {
             string pasted = await EvalAsync("__echotype.pasteFiles()");
-            Log.Write("driver: pasted " + paths.Count + " image(s) into the composer (" + pasted + ")");
+            Log.Write("driver: pasted " + paths.Count + " file(s) into the composer (" + pasted + ")");
             attached = pasted == "ok" && await AwaitAttachmentAsync(before, TimeSpan.FromSeconds(3));
             if (!attached) {
                 Log.Write("driver: no attachment after paste, trying the file input");
@@ -2087,6 +2089,15 @@ internal sealed class DictationDriver {
         await AwaitUploadAsync(TimeSpan.FromSeconds(30));
         return true;
     }
+
+    private static string FileMime(string path) => Path.GetExtension(path).ToLowerInvariant() switch {
+        ".ogg" or ".oga" or ".opus" => "audio/ogg",
+        ".mp3" => "audio/mpeg",
+        ".m4a" => "audio/mp4",
+        ".wav" => "audio/wav",
+        ".mp4" => "video/mp4",
+        _ => Input.ImageReferences.MimeType(path),
+    };
 
     private async Task<int> AttachmentCountAsync() {
         string count = await EvalAsync("__echotype.attachmentCount()");
@@ -2124,7 +2135,8 @@ internal sealed class DictationDriver {
     /// <summary>Puppeteer's uploadFile: DOM.setFileInputFiles on the page's own file input.</summary>
     private async Task<bool> SetFileInputAsync(IReadOnlyList<string> paths) {
         try {
-            if (await EvalAsync("__echotype.markFileInput(" + paths.Count + ")") != "ok") {
+            string kind = JsonSerializer.Serialize(FileMime(paths[0]).Split('/')[0]);
+            if (await EvalAsync("__echotype.markFileInput(" + paths.Count + ", " + kind + ")") != "ok") {
                 Log.Write("driver: no file input on the page");
                 return false;
             }

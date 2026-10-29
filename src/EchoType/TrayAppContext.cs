@@ -335,7 +335,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _textExpander.Start(_settings.TextShortcuts, _settings.TextShortcutsEnabled);
         StatusOverlay.CancelClicked += OnHudCancelClicked;
         StatusOverlay.ParkAfterSeconds = _settings.ProgressPillHideSeconds;
-        _telegram = TelegramVoiceRelay.Start(_settings);
+        _telegram = TelegramVoiceRelay.Start(_settings, _marshal);
 
         Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey={HotkeyNames.For(_settings.DictationChord)}, askModelVk=0x{_settings.AskModelVk:X2}, askModel={_settings.AskProviderName}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateSelection={HotkeyNames.For(_settings.TranslateSelectionChord)}, translateTo={_settings.TranslateTargetLanguage}, translateSelectionTo={_settings.TranslateSelectionTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating}, longDictation={_settings.LongDictation})");
         StartupRegistration.Apply(_settings.StartWithWindows);
@@ -562,11 +562,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             _settings.TelegramEnabled = form.TelegramEnabled;
             _settings.TelegramBotToken = form.TelegramToken;
             _settings.TelegramChatId = form.TelegramChatId;
-            _settings.GeminiApiKey = form.GeminiKey;
-            _settings.GeminiModel = form.GeminiModel;
             _settings.Save();
             _telegram?.Dispose();
-            _telegram = TelegramVoiceRelay.Start(_settings);
+            _telegram = TelegramVoiceRelay.Start(_settings, _marshal);
             Log.Write("settings: telegram " + (_telegram != null ? "on" : "off"));
             ShowBalloon(_telegram != null
                 ? Loc.T("Telegram voice notes are on.")
@@ -1972,7 +1970,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
         CommandTurnSnapshot previous = await driver.SnapshotCommandTurnAsync();
         await driver.SetComposerAsync(message);
-        if (_askModel && _askImages.Count > 0 && !await driver.AttachImagesAsync(_askImages)) {
+        if (_askModel && _askImages.Count > 0 && !await driver.AttachFilesAsync(_askImages)) {
             ShowBalloon(Loc.T("Couldn't confirm the image was attached — sending the question anyway."), OverlayKind.Warning);
         }
         await driver.SendPromptAsync();
