@@ -290,6 +290,17 @@ internal sealed class Settings {
     public List<WordReplacement> WordReplacements { get; set; } = [];
 
     /// <summary>
+    /// Typed abbreviations expanded in any app when followed by Space (وع → وعليكم السلام…).
+    /// Missing from older configs → the shipped examples.
+    /// </summary>
+    [JsonPropertyName("textShortcuts")]
+    public List<TextShortcut> TextShortcuts { get; set; } = TextShortcut.Defaults();
+
+    /// <summary>Master switch for <see cref="TextShortcuts"/>.</summary>
+    [JsonPropertyName("textShortcutsEnabled")]
+    public bool TextShortcutsEnabled { get; set; } = true;
+
+    /// <summary>
     /// Spoken workspace switches: a short dictation such as "coding mode" presses the mode's
     /// shortcut instead of pasting. Missing from older configs → the four default modes.
     /// </summary>
@@ -381,6 +392,12 @@ internal sealed class Settings {
             loaded.OpenAiApiKey ??= "";
             loaded.OpenAiTranslationModel ??= "";
             loaded.WordReplacements ??= [];
+            loaded.TextShortcuts ??= [];
+            loaded.TextShortcuts.RemoveAll(s => s == null);
+            foreach (var shortcut in loaded.TextShortcuts) {
+                shortcut.Trigger ??= "";
+                shortcut.Text ??= "";
+            }
             loaded.WorkspaceModes ??= [];
             foreach (var mode in loaded.WorkspaceModes) {
                 mode.Keywords ??= [];

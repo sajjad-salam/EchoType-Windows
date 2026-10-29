@@ -39,6 +39,8 @@ internal interface IAppWindowHost {
     void ToggleAskWindow();
     void EditOpenAiKey();
     void EditWordReplacements();
+    void EditTextShortcuts();
+    void SetTextShortcutsEnabled(bool value);
     void EditWorkspaceModes();
     void EditAppProfiles();
     bool LoginWindowVisible { get; }
@@ -131,6 +133,8 @@ internal sealed class AppWindow : Form {
     private readonly HudCommandList _commands;
     private readonly HudToggleRow _muteToggle;
     private readonly HudToggleRow _longDictationToggle;
+    private readonly HudToggleRow _textShortcutsToggle;
+    private readonly HudSettingRow _textShortcutsRow;
     private readonly HudToggleRow _enterToggle;
     private readonly HudToggleRow _clipboardToggle;
     private readonly HudToggleRow _startupToggle;
@@ -318,6 +322,16 @@ internal sealed class AppWindow : Form {
         AddRow(voiceCard, Loc.T("Word replacements"), Loc.T("Fix dialect words in every transcript."), wordsButton, 200);
         _addWordKey = AddHotkey(voiceCard, Loc.T("Add word shortcut"), AppShortcut.AddWordReplacement);
         _addWordKey.MultiKey = true;
+
+        AddSection(commands, Loc.T("Text shortcuts"));
+        var textCard = AddCard(commands);
+        _textShortcutsToggle = AddToggle(textCard, Loc.T("Expand text shortcuts"),
+            Loc.T("Type a shortcut such as وع, press Space, and it becomes its text — in any app."),
+            toggle => _host.SetTextShortcutsEnabled(toggle.Checked));
+        var textButton = MakeButton(Loc.T("Edit…"), HudButton.Kind.Ghost);
+        textButton.Click += (_, _) => _host.EditTextShortcuts();
+        _textShortcutsRow = AddRow(textCard, Loc.T("Text shortcuts"),
+            Loc.F("{0} shortcuts", _host.Settings.TextShortcuts.Count), textButton, 200);
 
         // ── Settings ──────────────────────────────────────────
         var settings = AddPage(GlyphSettings, Loc.T("Settings"), Loc.T("General options, language and app controls."));
@@ -511,6 +525,9 @@ internal sealed class AppWindow : Form {
             _modeSeg.SetSilent(s.ToggleRecording ? 1 : 0);
             _muteToggle.SetSilent(s.MuteOtherAppsWhileDictating);
             _longDictationToggle.SetSilent(s.LongDictation);
+            _textShortcutsToggle.SetSilent(s.TextShortcutsEnabled);
+            _textShortcutsRow.Description = Loc.F("{0} shortcuts", s.TextShortcuts.Count);
+            _textShortcutsRow.Invalidate();
             _enterToggle.SetSilent(s.PressEnterAfterPaste);
             _clipboardToggle.SetSilent(s.KeepTranscriptOnClipboard);
             _startupToggle.SetSilent(s.StartWithWindows);

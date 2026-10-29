@@ -54,6 +54,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private readonly ToolStripMenuItem _modelWindowShortcutItem;
     private readonly ToolStripMenuItem _muteOthersItem;
     private readonly ToolStripMenuItem _longDictationItem;
+    private readonly ToolStripMenuItem _textShortcutsItem;
     private readonly ToolStripMenuItem _recordingModeRoot;
     private readonly ToolStripMenuItem _holdModeItem;
     private readonly ToolStripMenuItem _toggleModeItem;
@@ -83,9 +84,11 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private bool _cleanPromptUiOpen;
     private bool _openAiKeyUiOpen;
     private bool _wordReplacementsUiOpen;
+    private bool _textShortcutsUiOpen;
     private bool _workspaceModesUiOpen;
     private bool _appProfilesUiOpen;
     private readonly HotkeyMonitor _hotkey;
+    private readonly TextExpander _textExpander = new();
     private readonly BackgroundAudioMuter _audioMuter = new();
     private readonly MicLevelMeter _micMeter = new();
     private AppWindow? _window;
@@ -215,6 +218,11 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             Checked = _settings.LongDictation,
         };
         _longDictationItem.CheckedChanged += OnLongDictationChanged;
+        _textShortcutsItem = new ToolStripMenuItem(Loc.T("Expand text shortcuts")) {
+            CheckOnClick = true,
+            Checked = _settings.TextShortcutsEnabled,
+        };
+        _textShortcutsItem.CheckedChanged += OnTextShortcutsChanged;
         _holdModeItem = new ToolStripMenuItem(Loc.T("Hold to talk"), null, (_, _) => SetToggleRecording(false));
         _toggleModeItem = new ToolStripMenuItem(Loc.T("Press to start/stop"), null, (_, _) => SetToggleRecording(true));
         _recordingModeRoot = new ToolStripMenuItem(Loc.T("Recording mode"));
@@ -257,6 +265,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         commandsRoot.DropDownItems.Add(_commandsRoot);
         commandsRoot.DropDownItems.Add(Loc.T("Workspace modes…"), null, (_, _) => EditWorkspaceModes());
         commandsRoot.DropDownItems.Add(Loc.T("Word replacements…"), null, (_, _) => EditWordReplacements());
+        commandsRoot.DropDownItems.Add(new ToolStripSeparator());
+        commandsRoot.DropDownItems.Add(_textShortcutsItem);
+        commandsRoot.DropDownItems.Add(Loc.T("Text shortcuts…"), null, (_, _) => EditTextShortcuts());
 
         var pasteRoot = new ToolStripMenuItem(Loc.T("Paste"));
         pasteRoot.DropDownItems.Add(_pressEnterItem);
@@ -318,6 +329,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkey.HoldEnd += OnHoldEnd;
         _hotkey.TapPressed += OnTapPressed;
         _hotkey.CancelRequested += OnCancelRequested;
+        _textExpander.Start(_settings.TextShortcuts, _settings.TextShortcutsEnabled, _marshal);
         StatusOverlay.CancelClicked += OnHudCancelClicked;
 
         Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey={HotkeyNames.For(_settings.DictationChord)}, askModelVk=0x{_settings.AskModelVk:X2}, askModel={_settings.AskProviderName}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateSelection={HotkeyNames.For(_settings.TranslateSelectionChord)}, translateTo={_settings.TranslateTargetLanguage}, translateSelectionTo={_settings.TranslateSelectionTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating}, longDictation={_settings.LongDictation})");
@@ -590,6 +602,52 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         } finally {
             _wordReplacementsUiOpen = false;
         }
+    }
+
+    private void EditTextShortcuts() {
+        if (_textShortcutsUiOpen) {
+            return;
+        }
+        _textShortcutsUiOpen = true;
+        try {
+            using var form = new TextShortcutsForm(_settings.TextShortcuts);
+            IWin32Window? owner = _window is { Visible: true, IsDisposed: false } ? _window : null;
+            if (form.ShowDialog(owner) != DialogResult.OK) {
+                return;
+            }
+            _settings.TextShortcuts = form.Result;
+            _settings.Save();
+            _textExpander.Update(_settings.TextShortcuts, _settings.TextShortcutsEnabled);
+            Log.Write("settings: textShortcuts=" + form.Result.Count);
+            ShowBalloon(Loc.F("Text shortcuts saved ({0}).", form.Result.Count), OverlayKind.Success);
+            NotifyUi();
+        } catch (Exception ex) {
+            Log.Write("text shortcuts ui: " + ex);
+            MessageBox.Show("Could not open Text shortcuts: " + ex.Message, "EchoType",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        } finally {
+            _textShortcutsUiOpen = false;
+        }
+    }
+
+    private void OnTextShortcutsChanged(object? sender, EventArgs e) {
+        SetTextShortcutsEnabled(_textShortcutsItem.Checked);
+    }
+
+    private void SetTextShortcutsEnabled(bool value) {
+        if (_settings.TextShortcutsEnabled == value) {
+            return;
+        }
+        _settings.TextShortcutsEnabled = value;
+        _settings.Save();
+        _textExpander.Update(_settings.TextShortcuts, value);
+        if (_textShortcutsItem.Checked != value) {
+            _textShortcutsItem.CheckedChanged -= OnTextShortcutsChanged;
+            _textShortcutsItem.Checked = value;
+            _textShortcutsItem.CheckedChanged += OnTextShortcutsChanged;
+        }
+        Log.Write("settings: textShortcutsEnabled=" + value);
+        NotifyUi();
     }
 
     private bool IsAddWordReplacementChord(HotkeyChord chord) =>
@@ -3135,6 +3193,8 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     void IAppWindowHost.ToggleAskWindow() => ToggleAskWindow();
     void IAppWindowHost.EditOpenAiKey() => EditOpenAiKey();
     void IAppWindowHost.EditWordReplacements() => EditWordReplacements();
+    void IAppWindowHost.EditTextShortcuts() => EditTextShortcuts();
+    void IAppWindowHost.SetTextShortcutsEnabled(bool value) => SetTextShortcutsEnabled(value);
     void IAppWindowHost.EditWorkspaceModes() => EditWorkspaceModes();
     void IAppWindowHost.EditAppProfiles() => EditAppProfiles();
 
@@ -3373,6 +3433,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         AskReplyForm.CloseCurrent();
         StatusOverlay.Shutdown();
         _hotkey.Dispose();
+        _textExpander.Dispose();
         _web.Dispose();
         _cleanWeb?.Dispose();
         _askWeb?.Dispose();

@@ -394,6 +394,22 @@ internal static partial class Loc {
         ["Added: {0} → {1}"] = "تمت الإضافة: {0} ← {1}",
         ["Updated: {0} → {1}"] = "تم التحديث: {0} ← {1}",
 
+        // Text shortcuts
+        ["Text shortcuts"] = "الاختصارات النصية",
+        ["Text shortcuts…"] = "الاختصارات النصية…",
+        ["Expand text shortcuts"] = "تفعيل الاختصارات النصية",
+        ["Type a shortcut such as وع, press Space, and it becomes its text — in any app."] =
+            "اكتب اختصارًا مثل وع واضغط مسافة، فيتحوّل إلى نصه — في أي تطبيق.",
+        ["{0} shortcuts"] = "{0} اختصار",
+        ["Text shortcuts saved ({0})."] = "تم حفظ الاختصارات النصية ({0}).",
+        ["Type a shortcut in any app and press Space to replace it with its text"] =
+            "اكتب الاختصار في أي تطبيق واضغط مسافة ليُستبدل بنصه",
+        ["e.g. وع → وعليكم السلام ورحمة الله وبركاته. A shortcut is one word (no spaces) and is matched as a whole word, ignoring case. Shift+Enter adds a new line to the text. Leave a row empty to remove it."] =
+            "مثال: وع ← وعليكم السلام ورحمة الله وبركاته. الاختصار كلمة واحدة (بدون مسافات) ويُطابَق ككلمة كاملة دون تمييز حالة الأحرف. Shift+Enter يضيف سطرًا جديدًا في النص. اترك الصف فارغًا لإزالته.",
+        ["Text to write"] = "النص المكتوب",
+        ["\"{0}\": a shortcut must be one word without spaces."] = "«{0}»: يجب أن يكون الاختصار كلمة واحدة بدون مسافات.",
+        ["\"{0}\" is listed twice."] = "«{0}» مكرر.",
+
         // Per-app profiles
         ["Per-app profiles…"] = "إعدادات حسب التطبيق…",
         ["Per-app profiles"] = "إعدادات حسب التطبيق",

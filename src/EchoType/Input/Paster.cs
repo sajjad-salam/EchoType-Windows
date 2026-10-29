@@ -36,6 +36,17 @@ internal static class Paster {
     public static void Copy(string text) => CopyToClipboard(text);
 
     /// <summary>
+    /// Pastes into whatever has focus right now, then puts the previous clipboard text
+    /// back. Used by text shortcuts whose expansion is too long or multi-line to type.
+    /// </summary>
+    public static void PasteRestoringClipboard(string text) {
+        string? saved = TryGetClipboardText();
+        CopyToClipboard(text);
+        SynthesizeCtrlV();
+        RestoreClipboardLater(saved, text);
+    }
+
+    /// <summary>
     /// Puts <paramref name="text"/> on the clipboard after a short delay so a
     /// Ctrl+V already in flight can still read whatever we just pasted. Qt and
     /// Electron apps often read the clipboard on the next event-loop tick.

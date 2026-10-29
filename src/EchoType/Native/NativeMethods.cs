@@ -140,6 +140,35 @@ internal static partial class NativeMethods {
     [DllImport("user32.dll")]
     public static extern short GetAsyncKeyState(int vKey);
 
+    // ---- Text shortcuts (typed-character tracking) ----
+
+    public const int WH_MOUSE_LL = 14;
+    public const uint WM_LBUTTONDOWN = 0x0201;
+    public const uint WM_RBUTTONDOWN = 0x0204;
+    public const uint WM_MBUTTONDOWN = 0x0207;
+    public const uint VK_BACK = 0x08;
+    public const uint VK_SPACE = 0x20;
+    public const uint VK_CAPITAL = 0x14;
+    public const uint KEYEVENTF_UNICODE = 0x0004;
+    /// <summary>ToUnicodeEx flag (Windows 10 1607+): translate without touching dead-key state.</summary>
+    public const uint TOUNICODE_NO_STATE_CHANGE = 0x0004;
+
+    public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true, EntryPoint = "SetWindowsHookExW")]
+    public static extern IntPtr SetWindowsHookExMouse(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+
+    [DllImport("user32.dll")]
+    public static extern short GetKeyState(int nVirtKey);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetKeyboardLayout(uint idThread);
+
+    [DllImport("user32.dll")]
+    public static extern int ToUnicodeEx(
+        uint wVirtKey, uint wScanCode, byte[] lpKeyState,
+        [Out] char[] pwszBuff, int cchBuff, uint wFlags, IntPtr dwhkl);
+
     /// <summary>True while Ctrl, Shift, Alt or Win is physically down.</summary>
     public static bool AnyModifierDown() {
         foreach (uint vk in new[] { VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN }) {
