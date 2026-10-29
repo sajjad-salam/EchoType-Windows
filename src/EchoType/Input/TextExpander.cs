@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.ComponentModel;
 using System.Runtime.InteropServices;
 using EchoType.Native;
 
@@ -9,9 +8,7 @@ namespace EchoType.Input;
 /// Text shortcuts in any app: remembers the word being typed (via a second low-level
 /// keyboard hook, translated with the foreground window's keyboard layout) and, when
 /// Space follows a trigger, swallows that Space, erases the trigger with Backspace and
-/// types the expansion plus a space. Expansions with a line break or longer than
-/// <see cref="MaxTypedLength"/> are pasted through the clipboard instead, which is
-/// restored afterwards.
+/// types the expansion plus a space. The clipboard is never used.
 ///
 /// The word is forgotten on anything that may move the caret or change the target:
 /// Enter, Tab, arrows and other non-character keys, Ctrl/Alt/Win shortcuts, mouse
@@ -28,8 +25,8 @@ namespace EchoType.Input;
 internal sealed class TextExpander : IDisposable {
 
     private const int BufferSize = 64;
-    /// <summary>Longer expansions, and any with a line break, are pasted instead of typed.</summary>
-    private const int MaxTypedLength = 200;
+    /// <summary>Key events per SendInput call when typing a long expansion.</summary>
+    private const int SendBatch = 200;
 
     private sealed record Entry(string Trigger, string Text);
 
@@ -54,12 +51,10 @@ internal sealed class TextExpander : IDisposable {
     private readonly char[] _chars = new char[8];
     private IntPtr _lastForeground;
     private bool _swallowSpaceUp;
-    private ISynchronizeInvoke? _ui;
 
-    public bool Start(IEnumerable<TextShortcut> shortcuts, bool enabled, ISynchronizeInvoke ui) {
+    public bool Start(IEnumerable<TextShortcut> shortcuts, bool enabled) {
         Stop();
         Update(shortcuts, enabled);
-        _ui = ui;
         _pending = new BlockingCollection<Entry>();
         _sender = new Thread(SendLoop) { IsBackground = true, Name = "EchoType text shortcuts (send)" };
         _sender.Start(_pending);
@@ -301,31 +296,37 @@ internal sealed class TextExpander : IDisposable {
         }
     }
 
-    private void Send(Entry entry) {
-        string text = entry.Text + " ";
-        bool paste = text.Length > MaxTypedLength || text.Contains('\n') || text.Contains('\r');
-        if (paste) {
-            text = text.ReplaceLineEndings("\r\n"); // classic Win32 edit boxes ignore a bare \n
-        }
+    private static void Send(Entry entry) {
+        // Typed key by key, never pasted, so the text never touches the clipboard (or its
+        // Win+V history). A line break is Shift+Enter: a new line in chat apps, not "send".
+        string text = entry.Text.ReplaceLineEndings("\n") + " ";
         int erase = entry.Trigger.Count(c => !char.IsLowSurrogate(c));
-        var inputs = new List<NativeMethods.INPUT>(erase * 2 + (paste ? 0 : text.Length * 2));
+        var inputs = new List<NativeMethods.INPUT>(erase * 2 + text.Length * 2);
         for (int i = 0; i < erase; i++) {
             inputs.Add(Key(NativeMethods.VK_BACK, 0, 0));
             inputs.Add(Key(NativeMethods.VK_BACK, 0, NativeMethods.KEYEVENTF_KEYUP));
         }
-        if (!paste) {
-            foreach (char c in text) {
+        foreach (char c in text) {
+            if (c == '\n') {
+                inputs.Add(Key(NativeMethods.VK_SHIFT, 0, 0));
+                inputs.Add(Key(NativeMethods.VK_RETURN, 0, 0));
+                inputs.Add(Key(NativeMethods.VK_RETURN, 0, NativeMethods.KEYEVENTF_KEYUP));
+                inputs.Add(Key(NativeMethods.VK_SHIFT, 0, NativeMethods.KEYEVENTF_KEYUP));
+            } else {
                 inputs.Add(Key(0, c, NativeMethods.KEYEVENTF_UNICODE));
                 inputs.Add(Key(0, c, NativeMethods.KEYEVENTF_UNICODE | NativeMethods.KEYEVENTF_KEYUP));
             }
         }
-        uint sent = NativeMethods.SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<NativeMethods.INPUT>());
-        if (paste) {
-            // The clipboard needs the STA UI thread; the Backspaces above are already queued.
-            _ui?.BeginInvoke(new Action(() => Paster.PasteRestoringClipboard(text)), null);
+        // Long texts go in batches so slower apps (Electron, terminals) keep up.
+        uint sent = 0;
+        for (int offset = 0; offset < inputs.Count; offset += SendBatch) {
+            var batch = inputs.GetRange(offset, Math.Min(SendBatch, inputs.Count - offset)).ToArray();
+            sent += NativeMethods.SendInput((uint)batch.Length, batch, Marshal.SizeOf<NativeMethods.INPUT>());
+            if (offset + SendBatch < inputs.Count) {
+                Thread.Sleep(15);
+            }
         }
-        Log.Write("text-shortcuts: expanded a " + erase + "-char trigger, "
-            + (paste ? "pasted " : "typed ") + text.Length + " chars"
+        Log.Write("text-shortcuts: expanded a " + erase + "-char trigger, typed " + text.Length + " chars"
             + (sent == inputs.Count ? "" : " (SendInput sent " + sent + "/" + inputs.Count + ")"));
     }
 

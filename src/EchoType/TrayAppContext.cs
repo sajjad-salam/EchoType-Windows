@@ -329,7 +329,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkey.HoldEnd += OnHoldEnd;
         _hotkey.TapPressed += OnTapPressed;
         _hotkey.CancelRequested += OnCancelRequested;
-        _textExpander.Start(_settings.TextShortcuts, _settings.TextShortcutsEnabled, _marshal);
+        _textExpander.Start(_settings.TextShortcuts, _settings.TextShortcutsEnabled);
         StatusOverlay.CancelClicked += OnHudCancelClicked;
 
         Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey={HotkeyNames.For(_settings.DictationChord)}, askModelVk=0x{_settings.AskModelVk:X2}, askModel={_settings.AskProviderName}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateSelection={HotkeyNames.For(_settings.TranslateSelectionChord)}, translateTo={_settings.TranslateTargetLanguage}, translateSelectionTo={_settings.TranslateSelectionTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating}, longDictation={_settings.LongDictation})");
