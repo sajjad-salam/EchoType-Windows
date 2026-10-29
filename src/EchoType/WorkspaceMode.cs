@@ -221,7 +221,7 @@ internal sealed class WorkspaceMode {
     /// Lower-case, drop Arabic diacritics and tatweel, unify alef/ya/ta-marbuta spellings, and
     /// turn punctuation into spaces so "وضعُ البرمجةِ." and "وضع البرمجه" compare equal.
     /// </summary>
-    internal static string Normalize(string text) {
+    private static string Normalize(string text) {
         if (string.IsNullOrEmpty(text)) {
             return "";
         }

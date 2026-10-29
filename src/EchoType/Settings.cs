@@ -178,80 +178,6 @@ internal sealed class Settings {
         AddWordReplacementVks = chord.ToIntArray().ToList();
     }
 
-    /// <summary>
-    /// One to three keys that open the quick-add bar (type an idea, Enter → Inbox) from any app.
-    /// Default Ctrl+Alt+Space; empty = off.
-    /// </summary>
-    [JsonPropertyName("quickAddVks")]
-    public List<int> QuickAddVks { get; set; } = [0x11, 0x12, 0x20];
-
-    [JsonIgnore]
-    public HotkeyChord QuickAddChord => HotkeyChord.FromVks(QuickAddVks);
-
-    public void SetQuickAddChord(HotkeyChord chord) {
-        QuickAddVks = chord.ToIntArray().ToList();
-    }
-
-    /// <summary>
-    /// One to three keys you hold (or press, in press-to-start/stop mode) to talk to the tasks
-    /// assistant: "add a task for Thursday…", "delete it", "undo". Default Ctrl+Alt+V; empty = off.
-    /// </summary>
-    [JsonPropertyName("taskVoiceVks")]
-    public List<int> TaskVoiceVks { get; set; } = [0x11, 0x12, 0x56];
-
-    [JsonIgnore]
-    public HotkeyChord TaskVoiceChord => HotkeyChord.FromVks(TaskVoiceVks);
-
-    public void SetTaskVoiceChord(HotkeyChord chord) {
-        TaskVoiceVks = chord.ToIntArray().ToList();
-    }
-
-    /// <summary>
-    /// Google Gemini API key: transcribes Telegram voice notes and lets the tasks assistant read
-    /// typed or Telegram text. Without it, spoken commands use the cleaning model's window and
-    /// Telegram text is saved as plain ideas. The GEMINI_API_KEY environment variable also works.
-    /// </summary>
-    [JsonPropertyName("geminiApiKey")]
-    public string GeminiApiKey { get; set; } = "";
-
-    /// <summary>Gemini model id. Empty = <c>gemini-flash-latest</c>.</summary>
-    [JsonPropertyName("geminiModel")]
-    public string GeminiModel { get; set; } = "";
-
-    /// <summary>
-    /// How the tasks assistant understands what you say: "auto" (Gemini when a key is set, otherwise
-    /// the cleaning model's window), "gemini" or "web".
-    /// </summary>
-    [JsonPropertyName("taskAssistantEngine")]
-    public string TaskAssistantEngine { get; set; } = "auto";
-
-    /// <summary>Telegram bot token from @BotFather. Empty = Telegram sync off.</summary>
-    [JsonPropertyName("telegramBotToken")]
-    public string TelegramBotToken { get; set; } = "";
-
-    /// <summary>The only chat the bot listens to and sends reminders to.</summary>
-    [JsonPropertyName("telegramChatId")]
-    public string TelegramChatId { get; set; } = "";
-
-    [JsonPropertyName("telegramEnabled")]
-    public bool TelegramEnabled { get; set; } = true;
-
-    /// <summary>Send each due reminder to Telegram as a poll (Done / Snooze / Stop / Delete).</summary>
-    [JsonPropertyName("telegramReminders")]
-    public bool TelegramReminders { get; set; } = true;
-
-    /// <summary>IANA or Windows time zone id for due dates. Default Asia/Baghdad.</summary>
-    [JsonPropertyName("taskTimeZone")]
-    public string TaskTimeZone { get; set; } = "Asia/Baghdad";
-
-    /// <summary>When a task has a day but no time, its reminder fires at this hour (0–23).</summary>
-    [JsonPropertyName("defaultReminderHour")]
-    public int DefaultReminderHour { get; set; } = 9;
-
-    /// <summary>An unanswered reminder chimes again every this many minutes. 0 = once.</summary>
-    [JsonPropertyName("reminderRepeatMinutes")]
-    public int ReminderRepeatMinutes { get; set; } = 5;
-
     /// <summary>Google Translate target language code for <see cref="TranslateVk"/> (e.g. "en", "ar").</summary>
     [JsonPropertyName("translateTargetLanguage")]
     public string TranslateTargetLanguage { get; set; } = "en";
@@ -463,18 +389,6 @@ internal sealed class Settings {
             loaded.TranslateVks ??= [];
             loaded.TranslateSelectionVks ??= [];
             loaded.AddWordReplacementVks ??= [];
-            loaded.QuickAddVks ??= [];
-            loaded.TaskVoiceVks ??= [];
-            loaded.GeminiApiKey ??= "";
-            loaded.GeminiModel ??= "";
-            loaded.TaskAssistantEngine ??= "auto";
-            loaded.TelegramBotToken ??= "";
-            loaded.TelegramChatId ??= "";
-            if (string.IsNullOrWhiteSpace(loaded.TaskTimeZone)) {
-                loaded.TaskTimeZone = "Asia/Baghdad";
-            }
-            loaded.DefaultReminderHour = Math.Clamp(loaded.DefaultReminderHour, 0, 23);
-            loaded.ReminderRepeatMinutes = Math.Clamp(loaded.ReminderRepeatMinutes, 0, 240);
             loaded.OpenAiApiKey ??= "";
             loaded.OpenAiTranslationModel ??= "";
             loaded.WordReplacements ??= [];

@@ -3,7 +3,6 @@ using EchoType.Audio;
 using EchoType.Hotkey;
 using EchoType.Input;
 using EchoType.Native;
-using EchoType.Tasks;
 using EchoType.Translation;
 using EchoType.Ui;
 using EchoType.Web;
@@ -93,13 +92,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private readonly BackgroundAudioMuter _audioMuter = new();
     private readonly MicLevelMeter _micMeter = new();
     private AppWindow? _window;
-    private readonly TasksHub _tasks;
-    private readonly ToolStripMenuItem _quickAddItem;
-    /// <summary>The running session talks to the tasks assistant instead of pasting.</summary>
-    private bool _tasksVoice;
-    /// <summary>Started from the quick-add bar's mic: the next dictation or Tasks voice press stops it.</summary>
-    private bool _micSession;
-    private bool _forceTaskVoice;
 
     public event Action? UiChanged;
 
@@ -287,21 +279,11 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             (_, _) => _ = AddWordReplacementAsync(fromSelection: false));
         UpdateAddWordReplacementMenu();
 
-        _quickAddItem = new ToolStripMenuItem(Loc.T("Quick add idea…"), null, (_, _) => OpenQuickAdd());
-        var tasksRoot = new ToolStripMenuItem(Loc.T("Tasks & ideas"));
-        tasksRoot.DropDownItems.Add(_quickAddItem);
-        tasksRoot.DropDownItems.Add(Loc.T("Inbox…"), null, (_, _) => ShowAppWindow(AppWindow.InboxPage));
-        tasksRoot.DropDownItems.Add(Loc.T("Notification center…"), null, (_, _) => ShowAppWindow(AppWindow.NotificationsPage));
-        tasksRoot.DropDownItems.Add(Loc.T("Undo last task change"), null, (_, _) => UndoTaskChange());
-        tasksRoot.DropDownItems.Add(new ToolStripSeparator());
-        tasksRoot.DropDownItems.Add(Loc.T("Assistant & Telegram…"), null, (_, _) => EditTaskSync());
-
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusItem);
         menu.Items.Add(Loc.T("Open EchoType"), null, (_, _) => ShowAppWindow());
         menu.Items.Add(_addWordReplacementItem);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(tasksRoot);
         menu.Items.Add(dictationRoot);
         menu.Items.Add(cleanAskRoot);
         menu.Items.Add(translateRoot);
@@ -339,11 +321,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
         DropTranslateSelectionChordIfTaken();
         DropAddWordReplacementChordIfTaken();
-        DropTaskChordsIfTaken();
-        UpdateQuickAddMenu();
-        _tasks = new TasksHub(_settings, _marshal);
-        _tasks.Changed += NotifyUi;
-        _tasks.Notify += (text, kind) => ShowBalloon(text, kind, Loc.T("Tasks"));
         if (!_hotkey.Start(CollectHotkeys(), CollectTapHotkeys(), _marshal)) {
             MessageBox.Show(Loc.T("EchoType could not install its global keyboard hook."), "EchoType",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -357,7 +334,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
         Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey={HotkeyNames.For(_settings.DictationChord)}, askModelVk=0x{_settings.AskModelVk:X2}, askModel={_settings.AskProviderName}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateSelection={HotkeyNames.For(_settings.TranslateSelectionChord)}, translateTo={_settings.TranslateTargetLanguage}, translateSelectionTo={_settings.TranslateSelectionTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating}, longDictation={_settings.LongDictation})");
         StartupRegistration.Apply(_settings.StartWithWindows);
-        _tasks.Start(); // fires reminders missed while EchoType was closed, starts Telegram sync
         // Stay in the tray on launch. Double-click the icon (or Open EchoType) to show the window.
         _ = WarmupAsync(); // alwaysReady: load the selected model at launch (mac applyPolicyAtLaunch)
         ApplyReplySites(); // windows for the cleaning and Ask models, warmed in parallel
@@ -756,218 +732,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         UpdateAddWordReplacementMenu();
     }
 
-    // ------------------------------------------------------------------
-    // Tasks & ideas: quick-add bar, spoken commands, Telegram (see TasksHub)
-    // ------------------------------------------------------------------
-
-    private bool IsQuickAddChord(HotkeyChord chord) =>
-        !_settings.QuickAddChord.IsEmpty && chord.Equals(_settings.QuickAddChord);
-
-    private bool IsTaskVoiceChord(HotkeyChord chord) =>
-        !_settings.TaskVoiceChord.IsEmpty && chord.Equals(_settings.TaskVoiceChord);
-
-    /// <summary>The search-bar-like popup: Enter adds an idea to the Inbox.</summary>
-    private void OpenQuickAdd() {
-        try {
-            QuickAddForm.Open(
-                _tasks.Store.Projects(),
-                (text, kind) => {
-                    var item = _tasks.QuickAdd(text, kind);
-                    if (item != null) {
-                        Sounds.Pasted();
-                        ShowBalloon(TaskAssistant.Line(item, _tasks.Store.Projects()), OverlayKind.Success, Loc.T("Added"));
-                    }
-                },
-                text => _ = AskAssistantTypedAsync(text),
-                StartTaskVoiceFromBar,
-                Loc.F("🎙 Speak, then press {0} to finish", HotkeyNames.For(_settings.DictationChord)));
-        } catch (Exception ex) {
-            Log.Write("quick add ui: " + ex);
-        }
-    }
-
-    /// <summary>Ctrl+Enter in the quick-add bar: the typed text goes through the assistant.</summary>
-    private async Task AskAssistantTypedAsync(string text) {
-        if (!_tasks.HasGemini) {
-            // The web model belongs to dictation; without Gemini, typed commands are kept as ideas.
-            var item = _tasks.QuickAdd(text);
-            ShowBalloon(Loc.T("Saved as an idea. Add a Gemini API key to let EchoType understand dates, projects and commands."),
-                OverlayKind.Warning, Loc.T("Tasks"));
-            Log.Write("tasks: typed command saved as idea (no Gemini key), id=" + item?.Id);
-            return;
-        }
-        StatusOverlay.ShowWorking(WorkStage.Thinking, Loc.T("Tasks assistant"), cap: 0.9f, restart: true);
-        try {
-            var result = await _tasks.RunAssistantAsync(text, "quick");
-            StatusOverlay.CompleteWorking();
-            ShowAssistantResult(result);
-        } catch (Exception ex) {
-            Log.Write("tasks: typed command failed: " + ex.Message);
-            StatusOverlay.HideWorking();
-            ShowBalloon(ex.Message, OverlayKind.Error, Loc.T("Tasks"));
-        }
-    }
-
-    /// <summary>The quick-add bar's mic: a spoken command, stopped by the dictation or Tasks voice key.</summary>
-    private void StartTaskVoiceFromBar() {
-        if (_phase != AppPhase.Idle) {
-            ShowBalloon(Loc.T("Wait until dictation finishes."), OverlayKind.Warning);
-            return;
-        }
-        _micSession = true;
-        _forceTaskVoice = true;
-        OnHoldStart(_settings.TaskVoiceChord);
-        if (_phase == AppPhase.Idle) {
-            _micSession = false;
-            _forceTaskVoice = false;
-        }
-    }
-
-    /// <summary>
-    /// A spoken tasks command: the transcript goes to the assistant (Gemini when a key is set,
-    /// otherwise the cleaning model's window), which adds, edits, completes, deletes or undoes.
-    /// </summary>
-    private async Task DeliverTaskCommandAsync(string transcript, int session) {
-        if (!IsLive(session)) {
-            return;
-        }
-        SetPhase(AppPhase.Generating);
-        ShowProgress(WorkStage.Thinking, Loc.T("Tasks assistant"));
-        Log.Write("tasks-voice: " + transcript.Length + " chars");
-        try {
-            var result = await _tasks.RunAssistantAsync(transcript, "voice", async prompt => {
-                var reply = await RequestCommandReplyAsync(prompt, session);
-                return reply.Text;
-            });
-            if (!IsLive(session)) {
-                return;
-            }
-            ResetToIdle();
-            ShowAssistantResult(result);
-        } catch (Exception ex) {
-            if (!IsLive(session)) {
-                return;
-            }
-            Log.Write("tasks-voice: failed: " + ex.Message);
-            Sounds.Error();
-            CopyTranscript(transcript);
-            ResetToIdle();
-            ShowBalloon(Loc.T("The tasks assistant failed. Transcript copied to clipboard."), OverlayKind.Error, Loc.T("Tasks"));
-        }
-    }
-
-    private void ShowAssistantResult(AssistantResult result) {
-        string text = result.FullText();
-        if (text.Length == 0) {
-            text = Loc.T("Nothing to change.");
-        }
-        if (result.UsedFallback) {
-            Sounds.Pasted();
-            ShowBalloon(text, OverlayKind.Warning, Loc.T("Tasks"));
-        } else {
-            Sounds.Pasted();
-            ShowBalloon(text, result.Changed ? OverlayKind.Success : OverlayKind.Info, Loc.T("Tasks"));
-        }
-    }
-
-    private void UndoTaskChange() {
-        string? undone = _tasks.Undo();
-        ShowBalloon(undone == null ? Loc.T("Nothing to undo.") : Loc.F("Undone: {0}", undone),
-            undone == null ? OverlayKind.Info : OverlayKind.Success, Loc.T("Tasks"));
-    }
-
-    private void EditTaskSync() {
-        if (_commandsUiOpen) {
-            return;
-        }
-        _commandsUiOpen = true;
-        try {
-            using var form = new TasksSyncForm(_settings);
-            IWin32Window? owner = _window is { Visible: true, IsDisposed: false } ? _window : null;
-            if (form.ShowDialog(owner) != DialogResult.OK) {
-                return;
-            }
-            _settings.GeminiApiKey = form.GeminiKey;
-            _settings.GeminiModel = form.GeminiModel;
-            _settings.TelegramBotToken = form.TelegramToken;
-            _settings.TelegramChatId = form.TelegramChatId;
-            _settings.Save();
-            Log.Write("settings: gemini=" + (form.GeminiKey.Length > 0 ? "set" : "none")
-                + ", telegram=" + (form.TelegramToken.Length > 0 ? "set" : "none"));
-            _tasks.ApplyTelegramSettings();
-            NotifyUi();
-        } catch (Exception ex) {
-            Log.Write("task sync ui: " + ex);
-            MessageBox.Show("Could not open the assistant settings: " + ex.Message, "EchoType",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        } finally {
-            _commandsUiOpen = false;
-        }
-    }
-
-    private void UpdateQuickAddMenu() {
-        var chord = _settings.QuickAddChord;
-        _quickAddItem.ShortcutKeyDisplayString = chord.IsEmpty ? null : HotkeyNames.For(chord);
-    }
-
-    /// <summary>The default task shortcuts reach older configs too; drop one that another shortcut already uses.</summary>
-    private void DropTaskChordsIfTaken() {
-        var all = CollectHotkeys();
-        if (!_settings.QuickAddChord.IsEmpty && all.Count(c => c.Equals(_settings.QuickAddChord)) > 1) {
-            Log.Write("settings: quick-add " + HotkeyNames.For(_settings.QuickAddChord) + " already in use, cleared");
-            _settings.SetQuickAddChord(default);
-            _settings.Save();
-        }
-        all = CollectHotkeys();
-        if (!_settings.TaskVoiceChord.IsEmpty && all.Count(c => c.Equals(_settings.TaskVoiceChord)) > 1) {
-            Log.Write("settings: tasks-voice " + HotkeyNames.For(_settings.TaskVoiceChord) + " already in use, cleared");
-            _settings.SetTaskVoiceChord(default);
-            _settings.Save();
-        }
-    }
-
-    private void ApplyTaskSettings() {
-        _settings.Save();
-        TaskTime.Configure(_settings.TaskTimeZone);
-        _tasks.ApplyTelegramSettings();
-        _tasks.CheckReminders();
-        NotifyUi();
-    }
-
-    TasksHub IAppWindowHost.Tasks => _tasks;
-    void IAppWindowHost.OpenQuickAdd() => OpenQuickAdd();
-    void IAppWindowHost.EditTaskSync() => EditTaskSync();
-    void IAppWindowHost.SaveTaskSettings() => ApplyTaskSettings();
-
-    bool IAppWindowHost.TrySetQuickAddChord(HotkeyChord chord) {
-        string? conflict = HotkeyConflicts.Message(chord, _settings, _settings.QuickAddChord);
-        if (conflict != null) {
-            ShowBalloon(conflict, OverlayKind.Warning);
-            return false;
-        }
-        _settings.SetQuickAddChord(chord);
-        _settings.Save();
-        UpdateQuickAddMenu();
-        _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
-        Log.Write("settings: quick-add=" + (chord.IsEmpty ? "(none)" : HotkeyNames.For(chord)));
-        NotifyUi();
-        return true;
-    }
-
-    bool IAppWindowHost.TrySetTaskVoiceChord(HotkeyChord chord) {
-        string? conflict = HotkeyConflicts.Message(chord, _settings, _settings.TaskVoiceChord);
-        if (conflict != null) {
-            ShowBalloon(conflict, OverlayKind.Warning);
-            return false;
-        }
-        _settings.SetTaskVoiceChord(chord);
-        _settings.Save();
-        _hotkey.UpdateHotkeys(CollectHotkeys(), CollectTapHotkeys());
-        Log.Write("settings: tasks-voice=" + (chord.IsEmpty ? "(none)" : HotkeyNames.For(chord)));
-        NotifyUi();
-        return true;
-    }
-
     private void EditWorkspaceModes() {
         if (_workspaceModesUiOpen) {
             return;
@@ -1069,17 +833,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             _ = AddWordReplacementAsync(fromSelection: true);
             return;
         }
-        if (IsQuickAddChord(chord)) {
-            OpenQuickAdd();
-            return;
-        }
         bool isDictation = IsDictationChord(chord);
-        bool isTaskVoice = _forceTaskVoice || (!isDictation && IsTaskVoiceChord(chord));
-        _forceTaskVoice = false;
-        if (_micSession && _phase == AppPhase.Listening && (isDictation || isTaskVoice)) {
-            StopToggleListening();
-            return;
-        }
         if (isDictation && ConsumeCancelDoubleTap()) {
             // In toggle mode the second press of the same recording key stops
             // listening; don't treat that as the cancel double-tap.
@@ -1101,26 +855,22 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 if (_profile != null) {
                     Log.Write("app-profile: " + _pasteTarget!.ProcessName + " → " + _profile.DisplayName);
                 }
-                _tasksVoice = isTaskVoice;
-                _activeCommand = _tasksVoice ? null : FindCommand(chord);
+                _activeCommand = FindCommand(chord);
                 _askModel = _activeCommand == null
-                    && !_tasksVoice
                     && !isDictation
                     && _settings.AskModelVk != 0
                     && chord.Count == 1
                     && chord.K1 == (uint)_settings.AskModelVk;
                 _translate = _activeCommand == null
                     && !isDictation
-                    && !_tasksVoice
                     && !_askModel
                     && !_settings.TranslateChord.IsEmpty
                     && chord.Equals(_settings.TranslateChord);
                 _selectedText = null;
-                // The tasks assistant never touches the foreground app, so don't copy its selection.
-                _selectionTask = _pasteTarget != null && !_tasksVoice
+                _selectionTask = _pasteTarget != null
                     ? SelectionCapture.CaptureAsync()
                     : Task.FromResult<string?>(null);
-                Log.Write(_tasksVoice ? "tasks-voice: key down" : _activeCommand != null
+                Log.Write(_activeCommand != null
                     ? $"command: key down ({_activeCommand.DisplayName}, {HotkeyNames.For(chord)})"
                     : _askModel
                         ? "ask-model: key down"
@@ -1157,10 +907,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     }
 
     private void OnHoldEnd(HotkeyChord chord) {
-        if (IsTranslateSelectionChord(chord) || IsAddWordReplacementChord(chord) || IsQuickAddChord(chord)) {
+        if (IsTranslateSelectionChord(chord) || IsAddWordReplacementChord(chord)) {
             return;
         }
-        if (_settings.ToggleRecording || _micSession) {
+        if (_settings.ToggleRecording) {
             // Release does not stop recording; the next press of the same key does.
             return;
         }
@@ -1445,11 +1195,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 ? Loc.T("Nothing transcribed — try speaking longer before pressing the key again.")
                 : Loc.T("Nothing transcribed — try holding the key longer."), OverlayKind.Error);
             ResetToIdle();
-            return;
-        }
-
-        if (_tasksVoice) {
-            await DeliverTaskCommandAsync(transcript, session);
             return;
         }
 
@@ -2420,8 +2165,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _askModel = false;
         _askImages = [];
         _translate = false;
-        _tasksVoice = false;
-        _micSession = false;
         _sessionChord = default;
         _pasteTarget = null;
         _profile = null;
@@ -2830,7 +2573,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         StatusOverlay.ShowWorking(stage, detail, cap: 0.94f, restart: false);
 
     private bool ExpectsReplyStep() =>
-        _activeCommand != null || _translate || _askModel || _tasksVoice
+        _activeCommand != null || _translate || _askModel
         || AutoCleanHere
         || (_selectionTask.IsCompletedSuccessfully && !string.IsNullOrEmpty(_selectionTask.Result));
 
@@ -3299,12 +3042,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (!_settings.AddWordReplacementChord.IsEmpty) {
             chords.Add(_settings.AddWordReplacementChord);
         }
-        if (!_settings.QuickAddChord.IsEmpty) {
-            chords.Add(_settings.QuickAddChord);
-        }
-        if (!_settings.TaskVoiceChord.IsEmpty) {
-            chords.Add(_settings.TaskVoiceChord);
-        }
         foreach (var cmd in _settings.ActiveCommands) {
             var chord = cmd.Chord;
             if (!chord.IsEmpty) {
@@ -3386,13 +3123,11 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
     }
 
-    public void ShowAppWindow() => ShowAppWindow(null);
-
-    private void ShowAppWindow(int? page) {
+    public void ShowAppWindow() {
         if (_window is not { IsDisposed: false }) {
             _window = new AppWindow(this);
         }
-        _window.Reveal(page);
+        _window.Reveal();
     }
 
     Settings IAppWindowHost.Settings => _settings;
@@ -3573,12 +3308,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (shortcut == AppShortcut.AddWordReplacement) {
             return ((IAppWindowHost)this).TrySetAddWordReplacementChord(HotkeyChord.Single(vk));
         }
-        if (shortcut == AppShortcut.QuickAdd) {
-            return ((IAppWindowHost)this).TrySetQuickAddChord(HotkeyChord.Single(vk));
-        }
-        if (shortcut == AppShortcut.TaskVoice) {
-            return ((IAppWindowHost)this).TrySetTaskVoiceChord(HotkeyChord.Single(vk));
-        }
         if (shortcut == AppShortcut.Dictation) {
             return ((IAppWindowHost)this).TrySetDictationChord(HotkeyChord.Single(vk));
         }
@@ -3702,8 +3431,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _micMeter.Dispose();
         _selectionTranslateCts?.Cancel();
         AskReplyForm.CloseCurrent();
-        QuickAddForm.CloseCurrent();
-        _tasks.Dispose();
         StatusOverlay.Shutdown();
         _hotkey.Dispose();
         _textExpander.Dispose();

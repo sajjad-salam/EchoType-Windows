@@ -86,22 +86,6 @@ internal static class HotkeyConflicts {
                 ? "That key is already the Add word replacement shortcut."
                 : "That shortcut overlaps the Add word replacement shortcut.";
         }
-        var quickAdd = settings.QuickAddChord;
-        bool ignoreQuickAdd = (!ignoreChord.IsEmpty && quickAdd.Equals(ignoreChord))
-            || (quickAdd.Count == 1 && ignoreVks.Contains((int)quickAdd.K1));
-        if (!ignoreQuickAdd && Conflicts(chord, quickAdd)) {
-            return chord.Count == 1 && quickAdd.Count == 1
-                ? "That key is already the Quick add shortcut."
-                : "That shortcut overlaps the Quick add shortcut.";
-        }
-        var taskVoice = settings.TaskVoiceChord;
-        bool ignoreTaskVoice = (!ignoreChord.IsEmpty && taskVoice.Equals(ignoreChord))
-            || (taskVoice.Count == 1 && ignoreVks.Contains((int)taskVoice.K1));
-        if (!ignoreTaskVoice && Conflicts(chord, taskVoice)) {
-            return chord.Count == 1 && taskVoice.Count == 1
-                ? "That key is already the Tasks voice shortcut."
-                : "That shortcut overlaps the Tasks voice shortcut.";
-        }
         if (ConflictsWithReserved(chord, settings.OpenModelWindowVk, ignoreVks)) {
             return chord.Count == 1
                 ? "That key is already the model window shortcut."
