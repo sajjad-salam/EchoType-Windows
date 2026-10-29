@@ -55,6 +55,36 @@ Clipboard + Ctrl+V ──► the app you were using
 
 Your audio never touches this app: the selected model's page captures it via `getUserMedia` inside the hidden browser. EchoType just presses the buttons and reads back the result.
 
+## Tasks, ideas & Telegram sync
+
+EchoType is also a small to-do / ideas app, built around capturing a thought in two seconds and finding it again later. Everything lives in `%APPDATA%\EchoType\tasks.json`; dates are in **Baghdad time** (UTC+3) whatever Windows is set to (`taskTimeZone` in `config.json`).
+
+**Window.** The EchoType window opens on the **Inbox** (ideas first, then tasks, for everything not yet in a project), followed by **Tasks** (Overdue, Today, Upcoming, No date, Recently completed), **Projects** and the **Notifications** center. Click a row to edit it (title, idea/task, any number of projects, date and time, repeat, notes), click the circle to complete a task, hover for **Make task** / **Delete**. **Undo** reverts the last change, whatever made it (window, voice, Telegram).
+
+**Quick add (Ctrl+Alt+Space).** From any app a search-bar-like box opens in the middle of the screen. Type and press **Enter**: the idea goes to the Inbox. **Tab** switches idea ↔ task, **Ctrl+Enter** hands the text to the assistant instead ("call Ali tomorrow at 5", "delete the last one"), the 🎙 button lets you say it, **Esc** closes. Change the key under **Tasks & sync**.
+
+**Projects.** Create projects (e.g. *Joker*) and give them nicknames/other spellings (*جوكر*). An idea that mentions a project — "feature for the Joker bot", "فكرة للجوكر" — is filed under it automatically; an idea that names two projects is linked to both (one item, two links, never a duplicate). Arabic spelling variants, `ال` and attached prepositions (و ف ب ل ك) are ignored. **File Inbox items** re-files older Inbox items after you add a project.
+
+**Talk to it (Ctrl+Alt+V, hold and speak).** Recorded with your transcription model (Claude's live transcript works), then read by the assistant, which keeps the last few turns of the conversation:
+
+- "ضيفلي مهمة يوم الخميس الساعة خمسة أتصل بعلي" → task, Thursday 17:00
+- "فكرة لمشروع الجوكر: أمر يرسل الطقس" → idea in the Joker project
+- "رياضة ثلاث مرات بالأسبوع" / "every Sunday and Tuesday at 7" → repeating task
+- "خلّيها الساعة ستة" / "delete it" / "done" / "تراجع" (undo) / "شنو عندي باچر؟"
+
+The assistant uses **Gemini** when you add a key (fast, reliable JSON), otherwise the cleaning model's web window (no key needed). Without either, what you say is saved as an idea.
+
+**Reminders.** When a task's time comes, a reminder card appears in the corner and **stays until you act**: **Done** (a repeating task moves to its next time), **Snooze** (10 min / 1 hour / tomorrow), **Stop reminder**, or **Delete**. It chimes again every 5 minutes while unanswered (`reminderRepeatMinutes`; 0 = once). A day without a time reminds at 09:00 (`defaultReminderHour`). Reminders that came due while EchoType was closed fire as soon as it starts, marked *late*. Everything is listed in the **Notifications** page.
+
+**Telegram (phone ↔ PC).** Under **Tasks & sync → Gemini & Telegram → Set up…** paste your bot token (from @BotFather), your chat id (message the bot and it tells you) and a [Gemini API key](https://aistudio.google.com/apikey). Then:
+
+- Text the bot → it goes through the same assistant (ideas, tasks, projects, "undo"…).
+- Send a **voice note** → EchoType downloads it, uploads it to Gemini for a transcript only, replies with the text, and adds it.
+- Due reminders are sent to the chat as a **poll** (✅ Done · ⏰ 1 hour · 🌙 Tomorrow · 🔕 Stop · 🗑 Delete). Vote on the phone and the PC follows; act on the PC and the poll closes with a note in the chat.
+- `/tasks`, `/inbox`, `/projects`, `/undo`, `/help`.
+
+The bot uses long polling while EchoType runs — no server. Messages sent while the PC is off wait at Telegram (up to 24 hours) and are handled on the next start; reminders missed meanwhile are sent then. Only your chat id is served. Keys stay in `config.json` on your PC (`geminiApiKey`, `geminiModel` (default `gemini-flash-latest`), `telegramBotToken`, `telegramChatId`); `GEMINI_API_KEY` also works as an environment variable.
+
 ## Requirements
 
 - Windows 10 or 11, x64
