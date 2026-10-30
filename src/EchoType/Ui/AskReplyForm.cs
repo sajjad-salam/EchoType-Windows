@@ -7,7 +7,9 @@ namespace EchoType.Ui;
 /// <summary>
 /// What the Ask model popup shows. <paramref name="Title"/> replaces "Ask {model}" in the
 /// caption; <paramref name="KeepLayout"/> shows <paramref name="Text"/> exactly as given
-/// (blank lines, indentation, spacing) in a popup wide enough for its longest line.
+/// (blank lines, indentation, spacing) in a popup wide enough for its longest line;
+/// <paramref name="Markdown"/> renders it as formatted text (headings, bold, lists…), the
+/// way the model's own page shows it.
 /// </summary>
 internal sealed record AskReplyContent(
     string ModelName,
@@ -18,7 +20,8 @@ internal sealed record AskReplyContent(
     IReadOnlyList<string> Videos,
     string DeliveryNote,
     string? Title = null,
-    bool KeepLayout = false);
+    bool KeepLayout = false,
+    bool Markdown = false);
 
 /// <summary>
 /// Popup with the Ask model's complete reply: the text (copyable, selectable), the
@@ -29,12 +32,15 @@ internal sealed record AskReplyContent(
 internal sealed partial class AskReplyForm : Form {
 
     private const int WidthDip = 560;
+    private const int MarkdownWidthDip = 640;
     private const int MaxLayoutWidthDip = 960;
     private static AskReplyForm? _current;
 
     private readonly AskReplyContent _content;
     private readonly Action? _openModelWindow;
     private readonly string _text;
+    /// <summary>The formatted reply for a Markdown popup, re-applied once the form is laid out.</summary>
+    private readonly string? _rtf;
     private readonly Panel _caption;
     private readonly HudCaptionButton _close;
     private readonly Label _question;
@@ -83,7 +89,8 @@ internal sealed partial class AskReplyForm : Form {
     private AskReplyForm(AskReplyContent content, Action? openModelWindow) {
         _content = content;
         _openModelWindow = openModelWindow;
-        _text = content.KeepLayout ? content.Text : CleanText(content.Text);
+        _text = content.Markdown ? MarkdownRtf.ToPlainText(CleanText(content.Text))
+            : content.KeepLayout ? content.Text : CleanText(content.Text);
 
         Text = CaptionText;
         FormBorderStyle = FormBorderStyle.None;
@@ -99,7 +106,8 @@ internal sealed partial class AskReplyForm : Form {
 
         _bodyFont = HudTheme.ContentFont(11f, _text);
         var screen = Screen.FromPoint(Cursor.Position).WorkingArea;
-        int width = content.KeepLayout ? LayoutWidth(_text, _bodyFont, screen) : WidthDip;
+        int width = content.KeepLayout ? LayoutWidth(_text, _bodyFont, screen)
+            : content.Markdown ? Math.Min(MarkdownWidthDip, screen.Width - 80) : WidthDip;
         Width = width;
 
         _caption = new Panel { Dock = DockStyle.Top, Height = 52, BackColor = HudTheme.Surface };
@@ -169,7 +177,11 @@ internal sealed partial class AskReplyForm : Form {
             _body.LinkClicked += (_, e) => OpenUrl(e.LinkText ?? "");
             int textHeight = TextRenderer.MeasureText(_text, _bodyFont, new Size(inner - 24, 10_000),
                 TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.ExpandTabs).Height + 12;
-            int maxText = content.Image != null ? screen.Height / 4 : screen.Height / 2;
+            if (content.Markdown) {
+                _rtf = MarkdownRtf.ToRtf(CleanText(content.Text), _bodyFont.Name, _bodyFont.SizeInPoints);
+                textHeight = MeasureRtf(_body, _rtf) ?? textHeight;
+            }
+            int maxText = content.Image != null ? screen.Height / 4 : content.Markdown ? screen.Height * 3 / 5 : screen.Height / 2;
             _body.Height = Math.Clamp(textHeight, 40, Math.Max(120, maxText));
             content_.Controls.Add(_body);
         }
@@ -298,6 +310,34 @@ internal sealed partial class AskReplyForm : Form {
         HudTheme.ApplyChrome(this, paper: true);
     }
 
+    protected override void OnLoad(EventArgs e) {
+        base.OnLoad(e);
+        // Layout (DPI scaling) may have reset the font of the whole box; put the formatting back.
+        if (_body != null && _rtf != null) {
+            _body.Rtf = _rtf;
+        }
+    }
+
+    /// <summary>
+    /// Height of <paramref name="rtf"/> laid out at the box's width: where its last line
+    /// sits, plus that line. Null when the box can't say (the caller estimates instead).
+    /// </summary>
+    private static int? MeasureRtf(RichTextBox box, string rtf) {
+        try {
+            _ = box.Handle;
+            box.Rtf = rtf;
+            if (box.TextLength == 0) {
+                return null;
+            }
+            int last = box.GetPositionFromCharIndex(box.TextLength - 1).Y;
+            int first = box.GetPositionFromCharIndex(0).Y;
+            return last - first + (int)(box.Font.GetHeight() * 1.45f) + 10;
+        } catch (Exception ex) {
+            Log.Write("ask popup: measure failed: " + ex.Message);
+            return null;
+        }
+    }
+
     protected override void OnPaint(PaintEventArgs e) {
         base.OnPaint(e);
         using var pen = new Pen(HudTheme.HairlineStrong);
@@ -392,8 +432,14 @@ internal sealed partial class AskReplyForm : Form {
     }
 
     private void CopyText() {
-        string text = _body is { SelectionLength: > 0 } ? _body.SelectedText : _text;
-        if (TrySetClipboard(new DataObject(DataFormats.UnicodeText, text))) {
+        bool selection = _body is { SelectionLength: > 0 };
+        string text = selection ? _body!.SelectedText : _text;
+        var data = new DataObject(DataFormats.UnicodeText, text);
+        if (_rtf != null && _body != null) {
+            // Word, Outlook and other rich editors keep the headings, bold and lists.
+            data.SetData(DataFormats.Rtf, selection ? _body.SelectedRtf : _rtf);
+        }
+        if (TrySetClipboard(data)) {
             Flash(_copyText, Loc.T("Copied the text."));
         }
     }

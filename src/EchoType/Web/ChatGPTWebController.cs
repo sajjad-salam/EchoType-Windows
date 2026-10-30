@@ -34,6 +34,9 @@ internal sealed class WebView2RuntimeMissingException : Exception {
 /// The embedded engine is WebView2 (Chromium). We use a Chrome user-agent so ChatGPT,
 /// Gemini, and Google SSO don't treat it as "Edg/" embedded-browser and blank the page.
 /// </summary>
+/// <summary>A chat page handed out by <see cref="ChatGPTWebController.DetachActivePage"/>.</summary>
+internal sealed record PageLease(DictationDriver Driver, CoreWebView2 Webview);
+
 internal sealed class ChatGPTWebController : IDisposable {
 
     private const int WebViewWidth = 1100;
@@ -156,6 +159,8 @@ internal sealed class ChatGPTWebController : IDisposable {
     private bool _standbyReady;
     private bool _standbyCreating;
     private int _standbyGeneration;
+    // The standby slot's page while a caller holds it (DetachActivePage) to finish a transcription.
+    private CoreWebView2? _leasedWebview;
 
     public ChatGPTWebController(ChatSite? site = null, bool keepStandby = false) {
         _site = site ?? ChatSite.ChatGpt;
@@ -181,6 +186,12 @@ internal sealed class ChatGPTWebController : IDisposable {
     public DictationDriver? Driver => _driver;
 
     public ChatSite Site => _site;
+
+    /// <summary>
+    /// One prompt at a time: background jobs that share this window wait here so two
+    /// never type into the same composer.
+    /// </summary>
+    public SemaphoreSlim Turn { get; } = new(1, 1);
 
     /// <summary>Successful prompt sends in this window's current ChatGPT thread.</summary>
     public int ChatThreadSends { get; set; }
@@ -562,6 +573,71 @@ internal sealed class ChatGPTWebController : IDisposable {
         return true;
     }
 
+    /// <summary>
+    /// Hands the active page, which holds the recording that just stopped, to the caller and
+    /// makes the ready standby page active, so the next recording can start while this one
+    /// is still being transcribed. Null when no standby page is ready (transcribe in place).
+    /// Give the page back with <see cref="ReturnPage"/> once it is done.
+    /// </summary>
+    public PageLease? DetachActivePage() {
+        if (!_standbyReady || _leasedWebview != null || _loginVisible || !_isOnline
+            || _standbyForm == null || _standbyController == null || _standbyWebview == null || _standbyDriver == null
+            || _controller == null || _webview == null || _driver == null) {
+            return null;
+        }
+        var lease = new PageLease(_driver, _webview);
+        (_form, _standbyForm) = (_standbyForm, _form);
+        (_controller, _standbyController) = (_standbyController, _controller);
+        (_webview, _standbyWebview) = (_standbyWebview, _webview);
+        (_driver, _standbyDriver) = (_standbyDriver, _driver);
+        _navGeneration++;
+        _navCompletedGeneration = _navGeneration; // the new active page is already loaded
+        _loading = false;
+        _showingOfflinePage = false;
+        ChatThreadSends = 0;
+        ForceNewChatThread = false;
+        // Not ready, and a non-zero generation so EnsureStandbyLoaded leaves the leased page alone.
+        _standbyReady = false;
+        _standbyGeneration++;
+        _leasedWebview = lease.Webview;
+        SetInteractive(true);
+        Log.Write("webview: handed the " + _site.DisplayName + " page to a background job, the standby page takes the next recording");
+        return lease;
+    }
+
+    /// <summary>
+    /// Takes back a page from <see cref="DetachActivePage"/>. A clean page becomes the standby
+    /// again as it is; after a failure or cancel it is reloaded first. <paramref name="makeActive"/>
+    /// (the page holds a reply the user may open) swaps it back in as the active page, which the
+    /// login window shows; only pass it while no recording uses the active page.
+    /// </summary>
+    public void ReturnPage(PageLease lease, bool clean, bool makeActive = false) {
+        if (!ReferenceEquals(lease.Webview, _leasedWebview)) {
+            return;
+        }
+        _leasedWebview = null;
+        if (_disposed || !ReferenceEquals(lease.Webview, _standbyWebview)) {
+            return; // closed or switched site meanwhile
+        }
+        if (!clean) {
+            LoadStandby();
+            return;
+        }
+        _standbyReady = true;
+        if (makeActive && !_loginVisible && !_loading && _interactive && _controller != null && _webview != null && _driver != null
+            && _standbyForm != null && _standbyController != null && _standbyDriver != null) {
+            (_form, _standbyForm) = (_standbyForm, _form);
+            (_controller, _standbyController) = (_standbyController, _controller);
+            (_webview, _standbyWebview) = (_standbyWebview, _webview);
+            (_driver, _standbyDriver) = (_standbyDriver, _driver);
+            _navGeneration++;
+            _navCompletedGeneration = _navGeneration;
+            Log.Write("webview: background job returned the " + _site.DisplayName + " page with its reply, made it active");
+            return;
+        }
+        Log.Write("webview: background job returned the " + _site.DisplayName + " page, standby ready");
+    }
+
     /// <summary>Creates or loads the standby page once the active page is ready.</summary>
     private void EnsureStandbyLoaded() {
         if (!_keepStandby || _disposed || _standbyCreating) {
@@ -666,6 +742,7 @@ internal sealed class ChatGPTWebController : IDisposable {
     private void CloseStandby() {
         _standbyGeneration = 0;
         _standbyReady = false;
+        _leasedWebview = null;
         _standbyDriver = null;
         if (_standbyWebview != null) {
             UnhookWebView(_standbyWebview);

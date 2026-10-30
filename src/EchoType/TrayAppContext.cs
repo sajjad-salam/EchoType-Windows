@@ -15,7 +15,7 @@ namespace EchoType;
 /// (AppDelegate.swift analog). Recording is hold-to-talk by default, or
 /// press-to-start / press-to-stop when that mode is selected in the tray.
 /// </summary>
-internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
+internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHost {
 
     /// <summary>Releases shorter than this are a tap → cancel (mac tapThreshold).</summary>
     private const double TapThresholdSeconds = 0.35;
@@ -110,9 +110,22 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private int _engagementFailures; // consecutive; 2+ triggers a page reload
     private CustomCommand? _activeCommand;
     private CommandButtonPickerForm? _actionPicker;
+    private DictationJob? _pickerJob;
+    /// <summary>Recordings still being transcribed, cleaned, translated or answered in the background.</summary>
+    private readonly List<DictationJob> _jobs = [];
+    private int _jobIds;
+    /// <summary>The newest job's delivery: the next job pastes after it, so pastes keep recording order.</summary>
+    private Task _deliveryTail = Task.CompletedTask;
+    /// <summary>The job whose progress the pill shows, until the next recording takes the pill.</summary>
+    private DictationJob? _pillJob;
+    /// <summary>The job working on the recorder's own page (no standby page was ready); the next recording waits for it.</summary>
+    private DictationJob? _recorderJob;
+    /// <summary>A recording shortcut pressed while <see cref="_recorderJob"/> had the page; it starts once the page is free.</summary>
+    private HotkeyChord _pendingChord;
+    private bool _pendingHeld;
+    /// <summary>ChatGPT window that only translates; see <see cref="TranslateWeb"/>.</summary>
+    private ChatGPTWebController? _translateWeb;
     private bool _askModel;
-    /// <summary>Image files named by the selection (Obsidian embeds, paths) to attach to the Ask model prompt.</summary>
-    private IReadOnlyList<string> _askImages = [];
     private bool _translate;
     /// <summary>Set while the Translate selection shortcut copies and translates a selection.</summary>
     private CancellationTokenSource? _selectionTranslateCts;
@@ -120,7 +133,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private PasteTarget? _pasteTarget;
     /// <summary>The <see cref="AppProfile"/> for the app the session started in, or null for the global settings.</summary>
     private AppProfile? _profile;
-    private string? _selectedText;
     private Task<string?> _selectionTask = Task.FromResult<string?>(null);
     private bool _commandsUiOpen;
     private CancellationTokenSource? _listenWatchCts;
@@ -262,6 +274,23 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         translateRoot.DropDownItems.Add(_translateSelectionLanguageRoot);
         translateRoot.DropDownItems.Add(_translateSelectionShortcutItem);
         translateRoot.DropDownItems.Add(new ToolStripSeparator());
+        var chatGptTranslateItem = new ToolStripMenuItem(Loc.T("Translate with ChatGPT")) {
+            CheckOnClick = true,
+            Checked = _settings.TranslateWithChatGpt,
+        };
+        chatGptTranslateItem.CheckedChanged += (_, _) => {
+            _settings.TranslateWithChatGpt = chatGptTranslateItem.Checked;
+            _settings.Save();
+            Log.Write("settings: translateWithChatGpt=" + _settings.TranslateWithChatGpt);
+            ShowBalloon(_settings.TranslateWithChatGpt
+                ? Loc.T("Translations now come from ChatGPT.")
+                : Loc.F("Translations now come from {0}.", ClassicTranslationEngine), OverlayKind.Success);
+        };
+        translateRoot.DropDownItems.Add(chatGptTranslateItem);
+        translateRoot.DropDownItems.Add(Loc.T("Open ChatGPT translation window…"), null, (_, _) => {
+            TranslateWeb.ShowLoginWindow();
+            NotifyUi();
+        });
         translateRoot.DropDownItems.Add(Loc.T("OpenAI API key (translation)…"), null, (_, _) => EditOpenAiKey());
 
         var commandsRoot = new ToolStripMenuItem(Loc.T("Commands"));
@@ -334,7 +363,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _hotkey.CancelRequested += OnCancelRequested;
         _textExpander.Start(_settings.TextShortcuts, _settings.TextShortcutsEnabled);
         StatusOverlay.CancelClicked += OnHudCancelClicked;
-        StatusOverlay.ParkAfterSeconds = _settings.ProgressPillHideSeconds;
+        StatusOverlay.ParkAfterMs = _settings.ProgressPillHideMs;
         _telegram = TelegramVoiceRelay.Start(_settings, _marshal);
 
         Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey={HotkeyNames.For(_settings.DictationChord)}, askModelVk=0x{_settings.AskModelVk:X2}, askModel={_settings.AskProviderName}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateSelection={HotkeyNames.For(_settings.TranslateSelectionChord)}, translateTo={_settings.TranslateTargetLanguage}, translateSelectionTo={_settings.TranslateSelectionTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating}, longDictation={_settings.LongDictation})");
@@ -342,6 +371,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         // Stay in the tray on launch. Double-click the icon (or Open EchoType) to show the window.
         _ = WarmupAsync(); // alwaysReady: load the selected model at launch (mac applyPolicyAtLaunch)
         ApplyReplySites(); // windows for the cleaning and Ask models, warmed in parallel
+        _ = WarmupTranslateWindowAsync();
     }
 
     // ------------------------------------------------------------------
@@ -468,7 +498,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             SyncAskMenu();
             return;
         }
-        if (_phase != AppPhase.Idle) {
+        if (IsBusy) {
             ShowBalloon(Loc.T("Wait until dictation finishes before switching models."), OverlayKind.Warning);
             SyncAskMenu();
             return;
@@ -507,7 +537,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             SyncCleanMenu();
             return;
         }
-        if (_phase != AppPhase.Idle) {
+        if (IsBusy) {
             ShowBalloon(Loc.T("Wait until dictation finishes before switching models."), OverlayKind.Warning);
             SyncCleanMenu();
             return;
@@ -698,7 +728,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (_wordReplacementsUiOpen) {
             return;
         }
-        if (fromSelection && _phase != AppPhase.Idle) {
+        if (fromSelection && IsBusy) {
             ShowBalloon(Loc.T("Wait until dictation finishes before adding a word."), OverlayKind.Warning);
             return;
         }
@@ -822,7 +852,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     /// A short dictation like "coding mode" presses that mode's shortcut instead of pasting, so
     /// the user's workspace app can switch. The transcript stays on the clipboard.
     /// </summary>
-    private bool TryTriggerWorkspaceMode(string transcript) {
+    private async Task<bool> TryTriggerWorkspaceModeAsync(DictationJob job, string transcript) {
         if (_settings.WorkspaceModes.Count == 0) {
             return false;
         }
@@ -831,6 +861,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             return false;
         }
         Log.Write("workspace-mode: \"" + mode.Name + "\" -> " + mode.Shortcut);
+        if (!await BeforeDeliverAsync(job)) {
+            return true;
+        }
         CopyTranscript(transcript);
         if (WorkspaceMode.SendShortcut(mode.Shortcut)) {
             Sounds.Pasted();
@@ -840,7 +873,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             Sounds.Error();
             ShowBalloon(Loc.F("Could not press {0} for {1}.", mode.Shortcut, mode.Name), OverlayKind.Error);
         }
-        ResetToIdle();
+        CompleteJobPill(job);
         return true;
     }
 
@@ -874,52 +907,16 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             // In toggle mode the second press of the same recording key stops
             // listening; don't treat that as the cancel double-tap.
             if (!(_settings.ToggleRecording && _phase == AppPhase.Listening && IsSessionChord(chord))) {
-                if (_phase != AppPhase.Idle) {
-                    _ = CancelAndResetAsync("double-tap, cancelled");
+                if (IsBusy) {
+                    CancelEverything("double-tap, cancelled");
                 }
                 return;
             }
         }
         switch (_phase) {
-            case AppPhase.Idle: {
-                _hotkeyHeld = true;
-                _sessionChord = chord;
-                _holdStartedAt = DateTime.UtcNow;
-                _releasedAt = default;
-                _pasteTarget = PasteTarget.Capture();
-                _profile = AppProfile.Match(_pasteTarget?.ProcessName, _settings.AppProfiles);
-                if (_profile != null) {
-                    Log.Write("app-profile: " + _pasteTarget!.ProcessName + " → " + _profile.DisplayName);
-                }
-                _activeCommand = FindCommand(chord);
-                _askModel = _activeCommand == null
-                    && !isDictation
-                    && _settings.AskModelVk != 0
-                    && chord.Count == 1
-                    && chord.K1 == (uint)_settings.AskModelVk;
-                _translate = _activeCommand == null
-                    && !isDictation
-                    && !_askModel
-                    && !_settings.TranslateChord.IsEmpty
-                    && chord.Equals(_settings.TranslateChord);
-                _selectedText = null;
-                _selectionTask = _pasteTarget != null
-                    ? SelectionCapture.CaptureAsync()
-                    : Task.FromResult<string?>(null);
-                Log.Write(_activeCommand != null
-                    ? $"command: key down ({_activeCommand.DisplayName}, {HotkeyNames.For(chord)})"
-                    : _askModel
-                        ? "ask-model: key down"
-                        : _translate
-                            ? "translate: key down"
-                            : "dictation: key down");
-                MuteOtherAppsIfEnabled();
-                EnsureMicAtFullVolume();
-                int session = ++_session;
-                SetPhase(_web.HasWebView ? AppPhase.Engaging : AppPhase.Waking);
-                _ = StartDictationSessionAsync(session);
+            case AppPhase.Idle:
+                BeginSession(chord, isDictation);
                 break;
-            }
             case AppPhase.Waking:
             case AppPhase.Engaging:
                 if (_settings.ToggleRecording && IsSessionChord(chord)) {
@@ -937,9 +934,63 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 Log.Write($"dictation: key down ignored, phase {_phase} busy");
                 break;
             default:
+                if (_recorderJob != null) {
+                    // The previous recording still has the page (no standby page was ready yet):
+                    // this one starts as soon as its transcript is in.
+                    if (_settings.ToggleRecording && _pendingChord.Equals(chord)) {
+                        _pendingChord = default;
+                        Log.Write("dictation: queued recording cancelled by a second press");
+                        break;
+                    }
+                    _pendingChord = chord;
+                    _pendingHeld = true;
+                    Log.Write("dictation: key down while the previous recording is transcribed, starts once the page is free");
+                    break;
+                }
                 Log.Write($"dictation: key down ignored, phase {_phase} busy");
                 break;
         }
+    }
+
+    /// <summary>Starts a recording session for <paramref name="chord"/> (the recorder is idle).</summary>
+    private void BeginSession(HotkeyChord chord, bool isDictation) {
+        _hotkeyHeld = true;
+        _sessionChord = chord;
+        _holdStartedAt = DateTime.UtcNow;
+        _releasedAt = default;
+        _pasteTarget = PasteTarget.Capture();
+        _profile = AppProfile.Match(_pasteTarget?.ProcessName, _settings.AppProfiles);
+        if (_profile != null) {
+            Log.Write("app-profile: " + _pasteTarget!.ProcessName + " → " + _profile.DisplayName);
+        }
+        _activeCommand = FindCommand(chord);
+        _askModel = _activeCommand == null
+            && !isDictation
+            && _settings.AskModelVk != 0
+            && chord.Count == 1
+            && chord.K1 == (uint)_settings.AskModelVk;
+        _translate = _activeCommand == null
+            && !isDictation
+            && !_askModel
+            && !_settings.TranslateChord.IsEmpty
+            && chord.Equals(_settings.TranslateChord);
+        _selectionTask = _pasteTarget != null
+            ? SelectionCapture.CaptureAsync()
+            : Task.FromResult<string?>(null);
+        Log.Write(_activeCommand != null
+            ? $"command: key down ({_activeCommand.DisplayName}, {HotkeyNames.For(chord)})"
+            : _askModel
+                ? "ask-model: key down"
+                : _translate
+                    ? "translate: key down"
+                    : "dictation: key down");
+        MuteOtherAppsIfEnabled();
+        EnsureMicAtFullVolume();
+        int session = ++_session;
+        // The next progress pill is this recording's; older jobs stop updating it.
+        _pillJob = null;
+        SetPhase(_web.HasWebView ? AppPhase.Engaging : AppPhase.Waking);
+        _ = StartDictationSessionAsync(session);
     }
 
     private void OnHoldEnd(HotkeyChord chord) {
@@ -948,6 +999,12 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
         if (_settings.ToggleRecording) {
             // Release does not stop recording; the next press of the same key does.
+            return;
+        }
+        if (!_pendingChord.IsEmpty && chord.Equals(_pendingChord)) {
+            _pendingChord = default;
+            _pendingHeld = false;
+            Log.Write("dictation: released before the page was free, queued recording dropped");
             return;
         }
         _hotkeyHeld = false;
@@ -990,9 +1047,16 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
     /// <summary>The ✕ on the listening or progress pill: abort, nothing is pasted.</summary>
     private void OnHudCancelClicked() {
-        if (_phase != AppPhase.Idle) {
+        if (RecorderCapturing) {
             _ = CancelAndResetAsync("cancelled with the HUD ✕");
-        } else if (_selectionTranslateCts != null) {
+            return;
+        }
+        if (_jobs.Count > 0) {
+            // The progress pill: stop the recordings still being processed.
+            CancelAllJobs("cancelled with the HUD ✕");
+            StatusOverlay.HideWorking();
+        }
+        if (_selectionTranslateCts != null) {
             Log.Write("translate-selection: cancelled with the HUD ✕");
             _selectionTranslateCts.Cancel();
             StatusOverlay.HideWorking();
@@ -1001,8 +1065,11 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
     private void OnCancelRequested() {
         // Physical Esc swallowed while Listening or choosing a command button.
-        if (_phase is AppPhase.Listening or AppPhase.ChoosingAction) {
+        if (_phase == AppPhase.Listening) {
             _ = CancelAndResetAsync("cancelled with Esc");
+        } else if (_actionPicker != null) {
+            Log.Write("command: action picker closed with Esc");
+            DismissActionPicker();
         }
     }
 
@@ -1152,6 +1219,13 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
     }
 
+    /// <summary>
+    /// Recording stopped: the pill turns into "Processing…" and slides away after a moment,
+    /// and the rest (transcript, Auto Clean, command, translation, paste) runs as a background
+    /// job. The page holding the recording goes with the job and the standby page takes the
+    /// next recording, so you can record again straight away; with no standby page ready the
+    /// next recording starts once this transcript is in.
+    /// </summary>
     /// <param name="micOpen">
     /// False when Long dictation already collected the last piece and the page isn't recording,
     /// so only the collected pieces are delivered.
@@ -1165,124 +1239,185 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
         StopListenWatch();
         RestoreOtherApps();
-        SetPhase(AppPhase.Transcribing);
         _hotkey.EscSwallowActive = false;
         NativeMethods.SetThreadExecutionState(NativeMethods.ES_CONTINUOUS);
-
-        var driver = _web.Driver;
-        if (driver == null) {
+        if (micOpen && _web.Driver == null) {
             HandleFailure(new DriverException(DriverFailure.NotReady, "no driver"));
             return;
         }
 
-        string transcript = "";
+        var job = new DictationJob {
+            Id = ++_jobIds,
+            PasteTarget = _pasteTarget,
+            Profile = _profile,
+            Command = _activeCommand,
+            AskModel = _askModel,
+            Translate = _translate,
+            SelectionTask = _selectionTask,
+            HeldSeconds = HeldSeconds(),
+            PieceSeconds = PieceSeconds(),
+            LongPieces = _longPieces.ToArray(),
+            MicOpen = micOpen,
+            PreviousDelivery = _deliveryTail,
+        };
+        _deliveryTail = job.Delivered.Task;
+        _jobs.Add(job);
+        _pillJob = job;
+        // The listening pill reshapes into "Processing…" and parks after ParkAfterMs.
+        StatusOverlay.ShowWorking(WorkStage.Transcribing, _web.Site.DisplayName,
+            cap: JobExpectsReply(job) ? 0.45f : 0.9f, restart: true);
+        Log.Write(job.Kind + " #" + job.Id + ": recording stopped (" + job.HeldSeconds.ToString("0.0") + "s), processing in the background");
+
         if (micOpen) {
+            job.Lease = _web.DetachActivePage();
+        }
+        if (micOpen && job.Lease == null) {
+            // No standby page ready: transcribe in place; the next recording waits for the transcript.
+            job.HoldsRecorder = true;
+            _recorderJob = job;
+            SetPhase(AppPhase.Transcribing);
+        } else {
+            FreeRecorder();
+        }
+        await RunJobAsync(job);
+    }
+
+    private async Task RunJobAsync(DictationJob job) {
+        try {
+            await ProcessJobAsync(job);
+        } catch (OperationCanceledException) when (job.Cancelled) {
+            // Cancelled: nothing is pasted.
+        } catch (Exception ex) {
+            // Anything unexpected (WebView2 COM errors, a disposed page…) must not leave the job hanging.
+            if (!job.Cancelled) {
+                Log.Write(job.Kind + " #" + job.Id + ": unexpected " + ex.GetType().Name + ": " + ex.Message);
+                job.LeaseClean = false;
+                try {
+                    await FailJobAsync(job, ex as DriverException ?? new DriverException(DriverFailure.JavaScript, ex.Message));
+                } catch (Exception report) {
+                    Log.Write(job.Kind + " #" + job.Id + ": failure report failed: " + report.Message);
+                }
+            }
+        } finally {
+            EndJob(job);
+        }
+    }
+
+    private async Task ProcessJobAsync(DictationJob job) {
+        string transcript = "";
+        if (job.MicOpen) {
+            var driver = job.Lease?.Driver ?? _web.Driver;
+            if (driver == null) {
+                await FailJobAsync(job, new DriverException(DriverFailure.NotReady, "no driver"));
+                return;
+            }
             try {
                 await driver.SubmitDictationAsync();
-                if (!IsLive(session)) {
-                    return;
-                }
-                transcript = await driver.AwaitTranscriptAsync(TimeSpan.FromSeconds(PieceSeconds()));
-                if (!IsLive(session)) {
-                    return;
-                }
+                job.Cancel.Token.ThrowIfCancellationRequested();
+                transcript = await driver.AwaitTranscriptAsync(TimeSpan.FromSeconds(job.PieceSeconds));
+                job.Cancel.Token.ThrowIfCancellationRequested();
                 await driver.ClearComposerAsync();
             } catch (DriverException ex) {
-                if (!IsLive(session)) {
+                if (job.Cancelled) {
                     return;
                 }
-                string earlier = JoinLongPieces("");
+                job.LeaseClean = false;
+                string earlier = JoinPieces(job.LongPieces, "");
                 // mac collectTranscript failure parity: cancel + clear, then report.
                 try { await driver.CancelDictationAsync(); } catch { /* best effort */ }
                 try { await driver.ClearComposerAsync(); } catch { /* best effort */ }
-                if (IsLive(session)) {
-                    HandleFailure(ex, earlier.Length > 0 ? earlier : null);
+                if (!job.Cancelled) {
+                    await FailJobAsync(job, ex, earlier.Length > 0 ? earlier : null);
                 }
                 return;
             }
-            if (!IsLive(session)) {
-                return;
-            }
         }
-        if (_longPieces.Count > 0) {
-            Log.Write($"dictation: long dictation joined {_longPieces.Count + (transcript.Trim().Length > 0 ? 1 : 0)} pieces");
-            transcript = JoinLongPieces(transcript);
+        if (job.LongPieces.Length > 0) {
+            Log.Write($"dictation: long dictation joined {job.LongPieces.Length + (transcript.Trim().Length > 0 ? 1 : 0)} pieces");
+            transcript = JoinPieces(job.LongPieces, transcript);
         }
 
         try {
-            _selectedText = await _selectionTask;
+            job.SelectedText = await job.SelectionTask;
         } catch (Exception ex) {
             Log.Write("selection: await failed: " + ex.Message);
-            _selectedText = null;
+            job.SelectedText = null;
         }
-        if (!IsLive(session)) {
-            return;
-        }
-        if (!string.IsNullOrEmpty(_selectedText)) {
-            Log.Write((_askModel ? "ask-model" : _translate ? "translate" : _activeCommand != null ? "command" : "dictation")
-                + ": using selected " + _selectedText.Length + " chars");
+        job.Cancel.Token.ThrowIfCancellationRequested();
+        bool hasSelection = !string.IsNullOrEmpty(job.SelectedText);
+        if (hasSelection) {
+            Log.Write(job.Kind + ": using selected " + job.SelectedText!.Length + " chars");
         }
 
         transcript = ApplyWordReplacements(transcript);
+        // The transcription page stays with the job only when the reply comes from the same model.
+        bool replyHere = !job.Translate
+            && (job.Command != null || job.AskModel || hasSelection || AutoCleanFor(job))
+            && ReferenceEquals(ReplyWebFor(job), _web);
+        if (transcript.Length == 0 || !replyHere) {
+            ReleasePage(job);
+        }
         if (transcript.Length == 0) {
             Log.Write("dictation: empty transcript");
+            if (!await BeforeDeliverAsync(job)) {
+                return;
+            }
             Sounds.Error();
             ShowBalloon(_settings.ToggleRecording
                 ? Loc.T("Nothing transcribed — try speaking longer before pressing the key again.")
                 : Loc.T("Nothing transcribed — try holding the key longer."), OverlayKind.Error);
-            ResetToIdle();
             return;
         }
 
-        if (_activeCommand != null) {
+        if (job.Command != null) {
             CopyTranscript(transcript);
-            var buttons = _activeCommand.ResolvedButtons;
+            var buttons = job.Command.ResolvedButtons;
             CommandButton? chosen = buttons.Count == 1 ? buttons[0] : null;
             if (buttons.Count > 1) {
-                chosen = await PickCommandButtonAsync(_activeCommand, buttons, session);
-                if (!IsLive(session)) {
+                chosen = await PickCommandButtonAsync(job, job.Command, buttons);
+                if (job.Cancelled) {
                     return;
                 }
                 if (chosen == null) {
                     Log.Write("command: action picker cancelled");
                     CopyTranscript(transcript);
                     ShowBalloon(Loc.T("Cancelled. Transcript copied to clipboard."), OverlayKind.Info);
-                    ResetToIdle();
                     return;
                 }
             }
             if (chosen == null) {
                 Log.Write("command: no action buttons");
+                if (!await BeforeDeliverAsync(job)) {
+                    return;
+                }
                 Sounds.Error();
                 ShowBalloon(Loc.T("This command has no buttons. Edit it from Custom Commands."), OverlayKind.Error);
-                ResetToIdle();
                 return;
             }
             string label = buttons.Count > 1
-                ? "command (" + _activeCommand.DisplayName + " / " + chosen.DisplayName + ")"
-                : "command (" + _activeCommand.DisplayName + ")";
-            await DeliverGeneratedReplyAsync(
-                _activeCommand.BuildMessage(transcript, _selectedText, chosen),
+                ? "command (" + job.Command.DisplayName + " / " + chosen.DisplayName + ")"
+                : "command (" + job.Command.DisplayName + ")";
+            await DeliverGeneratedReplyAsync(job,
+                job.Command.BuildMessage(transcript, job.SelectedText, chosen),
                 label,
-                session,
                 transcript);
             return;
         }
 
-        if (_translate) {
-            await DeliverTranslationAsync(transcript, session);
+        if (job.Translate) {
+            await DeliverTranslationAsync(job, transcript);
             return;
         }
 
-        if (_askModel) {
+        if (job.AskModel) {
             CopyTranscript(transcript);
             // A selected image path or Obsidian embed (![[image.png]]) is attached as the
             // image itself; any other selected text still goes in with the question.
-            string? selection = _selectedText;
+            string? selection = job.SelectedText;
             if (!string.IsNullOrEmpty(selection)) {
                 var refs = ImageReferences.Extract(selection);
                 if (refs.Paths.Count > 0) {
-                    _askImages = refs.Paths;
+                    job.AskImages = refs.Paths;
                     selection = refs.Remainder;
                     Log.Write("ask-model: attaching " + refs.Paths.Count + " image(s) from the selection");
                 }
@@ -1290,31 +1425,30 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             string message = string.IsNullOrEmpty(selection)
                 ? transcript
                 : SelectionCapture.BuildAskModelMessage(selection, transcript);
-            await DeliverGeneratedReplyAsync(message, "ask-model", session, transcript);
+            await DeliverGeneratedReplyAsync(job, message, "ask-model", transcript);
             return;
         }
 
-        if (!string.IsNullOrEmpty(_selectedText)) {
+        if (hasSelection) {
             CopyTranscript(transcript);
-            await DeliverGeneratedReplyAsync(
-                SelectionCapture.BuildModelMessage(_selectedText, transcript),
+            await DeliverGeneratedReplyAsync(job,
+                SelectionCapture.BuildModelMessage(job.SelectedText!, transcript),
                 "selection-edit",
-                session,
                 transcript);
             return;
         }
 
-        if (TryTriggerWorkspaceMode(transcript)) {
+        if (await TryTriggerWorkspaceModeAsync(job, transcript)) {
             return;
         }
 
-        if (AutoCleanHere) {
-            await DeliverCleanedAsync(transcript, session);
+        if (AutoCleanFor(job)) {
+            await DeliverCleanedAsync(job, transcript);
             return;
         }
 
         Log.Write($"dictation: delivering {transcript.Length} chars");
-        DeliverPaste(transcript, "dictation");
+        await DeliverPasteAsync(job, transcript, "dictation");
     }
 
     /// <summary>
@@ -1322,25 +1456,27 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     /// model when configured) rewrites it. If cleaning fails the raw transcript is pasted so
     /// nothing is lost.
     /// </summary>
-    private async Task DeliverCleanedAsync(string transcript, int session) {
-        if (!IsLive(session)) {
-            return;
-        }
-        SetPhase(AppPhase.Generating);
-        ShowProgress(WorkStage.Cleaning, Gen.Site.DisplayName);
+    private async Task DeliverCleanedAsync(DictationJob job, string transcript) {
+        var web = ReplyWebFor(job);
+        BeginReplyStep(job);
+        JobProgress(job, WorkStage.Cleaning, web.Site.DisplayName);
         CopyTranscript(transcript);
-        string message = CleanPromptHere.Trim() + "\n\n" + transcript;
-        Log.Write("auto-clean: sending " + message.Length + " chars to " + Gen.Site.DisplayName);
+        string message = CleanPromptFor(job).Trim() + "\n\n" + transcript;
+        Log.Write("auto-clean: sending " + message.Length + " chars to " + web.Site.DisplayName);
         string? cleaned = null;
         try {
             // Hard cap so a stuck cleaning page can never block the paste: after this
             // long the raw transcript is pasted instead.
-            Task<ModelReply> work = RequestCommandReplyAsync(message, session);
-            Task finished = await Task.WhenAny(work, Task.Delay(AutoCleanMaxWait));
+            Task<ModelReply> work = RequestCommandReplyAsync(job, message);
+            Task finished = await Task.WhenAny(work, Task.Delay(AutoCleanMaxWait, job.Cancel.Token));
             if (finished != work) {
-                Log.Write("auto-clean: no reply within " + (int)AutoCleanMaxWait.TotalSeconds + "s, giving up");
-                try { Gen.Driver?.InvalidateWaits(); } catch { /* best effort */ }
                 _ = work.ContinueWith(t => _ = t.Exception, TaskScheduler.Default); // observe late errors
+                if (job.Cancelled) {
+                    return;
+                }
+                Log.Write("auto-clean: no reply within " + (int)AutoCleanMaxWait.TotalSeconds + "s, giving up");
+                job.LeaseClean = false;
+                try { ReplyDriver(job)?.InvalidateWaits(); } catch { /* best effort */ }
             } else {
                 ModelReply reply = await work;
                 // Not an echo check: already-clean dictation legitimately comes back unchanged.
@@ -1348,44 +1484,59 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                     cleaned = reply.Text;
                 }
             }
+        } catch (OperationCanceledException) when (job.Cancelled) {
+            return;
         } catch (DriverException ex) {
             Log.Write("auto-clean: failed (" + ex.Kind + ": " + ex.Message + ")");
-            if (ex.Kind == DriverFailure.LoggedOut && IsLive(session)) {
-                Gen.ShowLoginWindow();
+            if (ex.Kind == DriverFailure.LoggedOut && !job.Cancelled) {
+                web.ShowLoginWindow();
             }
         } catch (Exception ex) {
             Log.Write("auto-clean: unexpected " + ex.GetType().Name + ": " + ex.Message);
         }
-        if (!IsLive(session)) {
+        if (job.Cancelled) {
             return;
         }
         if (cleaned == null) {
             Log.Write("auto-clean: no usable reply, pasting raw transcript");
+            if (!await BeforeDeliverAsync(job)) {
+                return;
+            }
             ShowBalloon(Loc.T("Auto Clean failed — pasted the raw transcript."), OverlayKind.Warning);
-            DeliverPaste(transcript, "dictation");
+            DeliverPasteNow(job, transcript, "dictation");
             return;
         }
         // The cleaning model may turn dialect words back into standard spelling; re-apply the fixes.
         cleaned = ApplyWordReplacements(cleaned);
         Log.Write("auto-clean: delivering " + cleaned.Length + " chars");
-        DeliverGeneratedPaste(cleaned, "auto-clean", transcript);
+        await DeliverGeneratedPasteAsync(job, cleaned, "auto-clean", transcript);
     }
 
     private async Task<CommandButton?> PickCommandButtonAsync(
+        DictationJob job,
         CustomCommand command,
-        IReadOnlyList<CommandButton> buttons,
-        int session) {
-        if (!IsLive(session) || buttons.Count == 0) {
+        IReadOnlyList<CommandButton> buttons) {
+        if (job.Cancelled || buttons.Count == 0) {
+            return null;
+        }
+        // One picker at a time, and never in the middle of a recording.
+        while (!job.Cancelled && (RecorderCapturing || _actionPicker != null)) {
+            await Task.Delay(100);
+        }
+        if (job.Cancelled) {
             return null;
         }
 
-        SetPhase(AppPhase.ChoosingAction);
+        if (ReferenceEquals(_pillJob, job)) {
+            StatusOverlay.HideWorking();
+        }
         _hotkey.EscSwallowActive = true;
         Log.Write("command: showing " + buttons.Count + " action buttons for " + command.DisplayName);
 
         var tcs = new TaskCompletionSource<CommandButton?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var form = new CommandButtonPickerForm(command.DisplayName, buttons, tcs);
         _actionPicker = form;
+        _pickerJob = job;
         form.PlaceNearCursor();
         form.Show();
         form.Activate();
@@ -1394,11 +1545,12 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         } finally {
             if (ReferenceEquals(_actionPicker, form)) {
                 _actionPicker = null;
+                _pickerJob = null;
             }
             if (!form.IsDisposed) {
                 form.Dispose();
             }
-            if (IsLive(session)) {
+            if (!RecorderCapturing) {
                 _hotkey.EscSwallowActive = false;
             }
         }
@@ -1407,41 +1559,40 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     private void DismissActionPicker() {
         var picker = _actionPicker;
         _actionPicker = null;
+        _pickerJob = null;
         picker?.Dismiss();
     }
 
-    private async Task DeliverGeneratedReplyAsync(string message, string logLabel, int session, string transcript) {
-        if (!IsLive(session)) {
-            return;
-        }
-        SetPhase(AppPhase.Generating);
-        ShowProgress(WorkStage.Thinking, ReplyWeb.Site.DisplayName);
+    private async Task DeliverGeneratedReplyAsync(DictationJob job, string message, string logLabel, string transcript) {
+        var web = ReplyWebFor(job);
+        BeginReplyStep(job);
+        JobProgress(job, WorkStage.Thinking, web.Site.DisplayName);
         CopyTranscript(transcript);
         Log.Write(logLabel + ": sending " + message.Length + " chars");
 
         try {
-            ModelReply reply = await RequestCommandReplyAsync(message, session);
-            if (!IsLive(session)) {
+            ModelReply reply = await RequestCommandReplyAsync(job, message);
+            if (job.Cancelled) {
                 return;
             }
-            if (_askModel) {
-                await DeliverAskReplyAsync(reply, message, transcript, session);
+            if (job.AskModel) {
+                await DeliverAskReplyAsync(job, reply, message, transcript);
                 return;
             }
             if (reply.Images.Count > 0) {
                 Log.Write(logLabel + ": reply has " + reply.Images.Count + " image(s)");
                 byte[]? imageBytes = null;
                 try {
-                    if (ReplyWeb.Driver != null) {
-                        imageBytes = await ReplyWeb.Driver.DownloadBestAssistantImageAsync(reply);
+                    if (ReplyDriver(job) is { } driver) {
+                        imageBytes = await driver.DownloadBestAssistantImageAsync(reply);
                     }
                 } catch (Exception ex) {
                     Log.Write(logLabel + ": image download failed: " + ex.Message);
                 }
-                if (!IsLive(session)) {
+                if (job.Cancelled) {
                     return;
                 }
-                if (imageBytes is { Length: > 0 } && TryDeliverImage(imageBytes, logLabel)) {
+                if (imageBytes is { Length: > 0 } && await TryDeliverImageAsync(job, imageBytes, logLabel)) {
                     return;
                 }
                 Log.Write(logLabel + ": falling back to text after image download failed");
@@ -1453,37 +1604,41 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 } else {
                     Log.Write(logLabel + ": empty reply after retries");
                 }
+                if (!await BeforeDeliverAsync(job)) {
+                    return;
+                }
                 Sounds.Error();
                 CopyTranscript(transcript);
                 ShowBalloon(
-                    Loc.F("{0} returned an empty reply. Transcript copied to clipboard.", ReplyWeb.Site.DisplayName),
+                    Loc.F("{0} returned an empty reply. Transcript copied to clipboard.", web.Site.DisplayName),
                     OverlayKind.Error);
-                ResetToIdle();
                 return;
             }
 
             Log.Write(logLabel + ": delivering " + reply.Text.Length + " chars");
-            DeliverGeneratedPaste(reply.Text, logLabel, transcript);
+            await DeliverGeneratedPasteAsync(job, reply.Text, logLabel, transcript);
+        } catch (OperationCanceledException) when (job.Cancelled) {
+            // cancelled
         } catch (DriverException ex) {
-            if (!IsLive(session)) {
+            if (job.Cancelled) {
                 return;
             }
             try {
-                if (ReplyWeb.Driver != null) {
-                    await ReplyWeb.Driver.ClearComposerAsync();
+                if (ReplyDriver(job) is { } driver) {
+                    await driver.ClearComposerAsync();
                 }
             } catch { /* best effort */ }
-            if (IsLive(session)) {
-                HandleFailure(ex, transcript);
+            if (!job.Cancelled) {
+                await FailJobAsync(job, ex, transcript);
             }
-        } catch (Exception ex) when (ex is not DriverException) {
-            // Anything unexpected (WebView2 COM errors, disposed page…) must not leave the
-            // app stuck in "Generating" with nothing pasted.
-            if (!IsLive(session)) {
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            // Anything unexpected (WebView2 COM errors, disposed page…) must not end with nothing pasted silently.
+            if (job.Cancelled) {
                 return;
             }
             Log.Write(logLabel + ": unexpected " + ex.GetType().Name + ": " + ex.Message);
-            HandleFailure(new DriverException(DriverFailure.JavaScript, ex.Message), transcript);
+            job.LeaseClean = false;
+            await FailJobAsync(job, new DriverException(DriverFailure.JavaScript, ex.Message), transcript);
         }
     }
 
@@ -1493,9 +1648,9 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     /// off it is pasted into the field you started in instead — the image if there is one,
     /// otherwise the text — or left on the clipboard when no field was focused.
     /// </summary>
-    private async Task DeliverAskReplyAsync(ModelReply reply, string message, string transcript, int session) {
+    private async Task DeliverAskReplyAsync(DictationJob job, ModelReply reply, string message, string transcript) {
         const string label = "ask-model";
-        var web = ReplyWeb;
+        var web = ReplyWebFor(job);
         string modelName = web.Site.DisplayName;
         string text = AskReplyForm.CleanText(reply.Text);
         if (text.Length > 0 && ReplyIsPromptEcho(text, message, transcript)) {
@@ -1507,14 +1662,14 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         if (reply.Images.Count > 0) {
             Log.Write(label + ": reply has " + reply.Images.Count + " image(s)");
             try {
-                if (web.Driver != null) {
-                    byte[]? bytes = await web.Driver.DownloadBestAssistantImageAsync(reply);
+                if (ReplyDriver(job) is { } driver) {
+                    byte[]? bytes = await driver.DownloadBestAssistantImageAsync(reply);
                     image = bytes is { Length: > 0 } ? DecodeImage(bytes, label) : null;
                 }
             } catch (Exception ex) {
                 Log.Write(label + ": image download failed: " + ex.Message);
             }
-            if (!IsLive(session)) {
+            if (job.Cancelled) {
                 image?.Dispose();
                 return;
             }
@@ -1523,6 +1678,10 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             Log.Write(label + ": reply has " + reply.Videos.Count + " video(s)");
         }
 
+        if (!await BeforeDeliverAsync(job)) {
+            image?.Dispose();
+            return;
+        }
         string? videoUrl = reply.Videos.FirstOrDefault(v => v.StartsWith("http", StringComparison.OrdinalIgnoreCase));
         string pasteText = text.Length > 0 ? text : videoUrl ?? "";
         if (image == null && pasteText.Length == 0 && reply.Videos.Count == 0) {
@@ -1530,7 +1689,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             Sounds.Error();
             CopyTranscript(transcript);
             ShowBalloon(Loc.F("{0} returned an empty reply. Transcript copied to clipboard.", modelName), OverlayKind.Error);
-            ResetToIdle();
             return;
         }
 
@@ -1538,6 +1696,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             // Popup only: nothing is pasted into the field; copy from the popup's buttons.
             Log.Write(label + ": shown in popup (text " + text.Length + " chars, image " + (image != null) + ")");
             Sounds.Pasted();
+            CompleteJobPill(job);
             AskReplyForm.ShowReply(
                 new AskReplyContent(modelName, transcript, text, image, reply.Images.Count, reply.Videos,
                     Loc.T("Use the Copy buttons to copy the reply.")),
@@ -1545,20 +1704,19 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                     web.ShowLoginWindow();
                     NotifyUi();
                 });
-            ResetToIdle();
             return;
         }
 
         // Paste: the image when there is one (that is what was asked for), else the text.
         Paster.Outcome? outcome = null;
         if (image != null) {
-            var result = Paster.DeliverImage(image, PressEnterHere, _pasteTarget);
+            var result = Paster.DeliverImage(image, PressEnterFor(job), job.PasteTarget);
             if (result.Outcome is Paster.Outcome.Pasted or Paster.Outcome.CopiedToClipboard) {
                 outcome = result.Outcome;
             }
         }
         if (outcome == null && pasteText.Length > 0) {
-            outcome = Paster.Deliver(pasteText, keepTranscriptOnClipboard: true, PressEnterHere, _pasteTarget).Outcome;
+            outcome = Paster.Deliver(pasteText, keepTranscriptOnClipboard: true, PressEnterFor(job), job.PasteTarget).Outcome;
         }
         Log.Write(label + ": delivered (" + (outcome?.ToString() ?? "popup only") + ", text "
             + text.Length + " chars, image " + (image != null) + ")");
@@ -1571,7 +1729,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         };
         image?.Dispose();
         ShowBalloon(outcome == Paster.Outcome.Pasted ? Loc.T("Pasted the reply.") : note, OverlayKind.Success);
-        ResetToIdle();
+        CompleteJobPill(job);
     }
 
     private static Image? DecodeImage(byte[] bytes, string logLabel) {
@@ -1586,48 +1744,49 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     }
 
     /// <summary>
-    /// Translate shortcut: the model page only transcribed; the translation runs over plain
-    /// HTTP, so there is no wait for a model reply. With an OpenAI API key it goes through
-    /// OpenAI (handles mixed Arabic/English text); otherwise, or if that call fails, through
-    /// Google Translate (GTranslate). On failure the original transcript is left on the clipboard.
+    /// Translate shortcut: the model page only transcribed; ChatGPT web (its own window)
+    /// translates the transcript, falling back to OpenAI with a key, then Google Translate.
+    /// On failure the original transcript is left on the clipboard.
     /// </summary>
-    private async Task DeliverTranslationAsync(string transcript, int session) {
-        if (!IsLive(session)) {
-            return;
-        }
-        SetPhase(AppPhase.Generating);
-        ShowProgress(WorkStage.Translating,
-            OpenAiTranslation.ResolveKey(_settings).Length > 0 ? "OpenAI" : "Google Translate");
+    private async Task DeliverTranslationAsync(DictationJob job, string transcript) {
+        JobProgress(job, WorkStage.Translating, _settings.TranslateWithChatGpt ? "ChatGPT" : ClassicTranslationEngine);
         CopyTranscript(transcript);
-        string target = TranslateTargetHere;
+        string target = TranslateTargetFor(job);
 
         string translated;
         try {
-            translated = await TranslateAsync(transcript, target);
+            string? byChatGpt = await TryChatGptTranslateAsync(transcript, target, formatted: false, job.Cancel.Token,
+                web => job.Waiting = web);
+            translated = byChatGpt != null
+                ? MarkdownRtf.ToPlainText(byChatGpt)
+                : await TranslateAsync(transcript, target);
+        } catch (OperationCanceledException) when (job.Cancelled) {
+            return;
         } catch (Exception ex) {
-            if (!IsLive(session)) {
+            if (job.Cancelled) {
                 return;
             }
             Log.Write("translate: failed: " + ex.Message);
+            if (!await BeforeDeliverAsync(job)) {
+                return;
+            }
             Sounds.Error();
             ShowBalloon(Loc.T("Translation failed — transcript copied to clipboard."), OverlayKind.Error);
-            ResetToIdle();
             return;
         }
-        if (!IsLive(session)) {
+        if (!await BeforeDeliverAsync(job)) {
             return;
         }
         if (translated.Length == 0) {
             Log.Write("translate: empty translation");
             Sounds.Error();
             ShowBalloon(Loc.T("The translation came back empty. Transcript copied to clipboard."), OverlayKind.Error);
-            ResetToIdle();
             return;
         }
 
         Log.Write("translate: delivering " + translated.Length + " chars");
         Paster.DeliverResult result = Paster.Deliver(
-            translated, keepTranscriptOnClipboard: true, PressEnterHere, _pasteTarget);
+            translated, keepTranscriptOnClipboard: true, PressEnterFor(job), job.PasteTarget);
         switch (result.Outcome) {
             case Paster.Outcome.Pasted:
                 // The original transcript was copied first; the translation stays last on the
@@ -1640,7 +1799,61 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 ShowBalloon(Loc.T("Copied the translation — press Ctrl+V to paste."), OverlayKind.Success);
                 break;
         }
-        ResetToIdle();
+        CompleteJobPill(job);
+    }
+
+    /// <summary>
+    /// ChatGPT web translation when it is turned on. Null when it is off or failed, so the
+    /// caller falls back to OpenAI / Google Translate. A signed-out ChatGPT opens its window.
+    /// </summary>
+    private async Task<string?> TryChatGptTranslateAsync(string text, string target, bool formatted,
+        CancellationToken cancel, Action<ChatGPTWebController?>? waiting = null) {
+        if (!_settings.TranslateWithChatGpt) {
+            return null;
+        }
+        var web = TranslateWeb;
+        var started = DateTime.UtcNow;
+        Log.Write("translate: sending " + text.Length + " chars to ChatGPT (to " + target + (formatted ? ", formatted" : "") + ")");
+        waiting?.Invoke(web);
+        try {
+            string result = await ChatGptTranslation.TranslateAsync(web, text, target, formatted, cancel);
+            Log.Write("translate: ChatGPT replied in " + (int)(DateTime.UtcNow - started).TotalMilliseconds
+                + " ms (" + result.Length + " chars)");
+            return result;
+        } catch (OperationCanceledException) when (cancel.IsCancellationRequested) {
+            throw;
+        } catch (Exception ex) {
+            Log.Write("translate: ChatGPT failed (" + ex.Message + "), falling back to " + ClassicTranslationEngine);
+            if (cancel.IsCancellationRequested) {
+                throw new OperationCanceledException(cancel);
+            }
+            if (ex is DriverException { Kind: DriverFailure.LoggedOut }) {
+                web.ShowLoginWindow();
+                JobNotice(Loc.F("ChatGPT is signed out — log in in the window that opened. Translated with {0} meanwhile.",
+                    ClassicTranslationEngine), OverlayKind.Warning);
+            }
+            return null;
+        } finally {
+            waiting?.Invoke(null);
+        }
+    }
+
+    private string ClassicTranslationEngine =>
+        OpenAiTranslation.ResolveKey(_settings).Length > 0 ? "OpenAI" : "Google Translate";
+
+    /// <summary>ChatGPT window that only translates (its own page, the ChatGPT login), created on first use.</summary>
+    private ChatGPTWebController TranslateWeb => _translateWeb ??= new ChatGPTWebController(ChatSite.ChatGpt);
+
+    /// <summary>Loads the translation window a little after launch so the first translation doesn't wait for it.</summary>
+    private async Task WarmupTranslateWindowAsync() {
+        if (!_settings.TranslateWithChatGpt
+            || (_settings.TranslateChord.IsEmpty && _settings.TranslateSelectionChord.IsEmpty)) {
+            return;
+        }
+        // Let the transcription and cleaning windows start first.
+        await Task.Delay(TimeSpan.FromSeconds(8));
+        await WarmupSideWindowAsync(TranslateWeb, "translate",
+            Loc.T("Log in to ChatGPT (translation) from the tray menu."), () => true);
     }
 
     private async Task<string> TranslateAsync(string transcript, string target) {
@@ -1683,7 +1896,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             Log.Write("translate-selection: already running");
             return;
         }
-        if (_phase != AppPhase.Idle) {
+        if (RecorderCapturing) {
             ShowBalloon(Loc.T("Wait until dictation finishes before translating."), OverlayKind.Warning);
             return;
         }
@@ -1708,16 +1921,46 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             }
 
             string target = _settings.TranslateSelectionTargetLanguage;
-            string engine = OpenAiTranslation.ResolveKey(_settings).Length > 0 ? "OpenAI" : "Google Translate";
+            string title = Loc.F("Translation → {0}", GoogleTranslation.NameFor(target));
             Log.Write("translate-selection: " + selected.Length + " chars to " + target);
-            StatusOverlay.ShowWorking(WorkStage.Translating, engine, cap: 0.94f, restart: true);
+            if (_settings.TranslateWithChatGpt) {
+                // ChatGPT translates and lays the result out (points on their own lines, headings,
+                // bold); the popup renders that Markdown the way ChatGPT's own page shows it.
+                StatusOverlay.ShowWorking(WorkStage.Translating, "ChatGPT", cap: 0.94f, restart: true);
+                string? formatted = await TryChatGptTranslateAsync(selected, target, formatted: true, cts.Token);
+                if (cts.IsCancellationRequested) {
+                    return;
+                }
+                if (formatted != null) {
+                    // Dictation may have started meanwhile; its HUD owns the overlay then.
+                    if (!RecorderCapturing) {
+                        StatusOverlay.CompleteWorking();
+                    }
+                    Log.Write("translate-selection: showing ChatGPT's " + formatted.Length + " chars");
+                    Sounds.Pasted();
+                    var web = TranslateWeb;
+                    AskReplyForm.ShowReply(
+                        new AskReplyContent("ChatGPT", selected, formatted, null, 0, [],
+                            Loc.T("Use Copy text to copy the translation."),
+                            Title: title,
+                            Markdown: true),
+                        () => {
+                            web.ShowLoginWindow();
+                            NotifyUi();
+                        });
+                    return;
+                }
+            }
+
+            string engine = ClassicTranslationEngine;
+            StatusOverlay.ShowWorking(WorkStage.Translating, engine, cap: 0.94f, restart: !_settings.TranslateWithChatGpt);
             string translated = await LayoutPreservingTranslation.TranslateAsync(
                 selected, pieces => TranslatePiecesAsync(pieces, target));
             if (cts.IsCancellationRequested) {
                 return;
             }
             // Dictation may have started meanwhile; its HUD owns the overlay then.
-            if (_phase == AppPhase.Idle) {
+            if (!RecorderCapturing) {
                 StatusOverlay.CompleteWorking();
             }
             Log.Write("translate-selection: showing " + translated.Length + " chars");
@@ -1725,7 +1968,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             AskReplyForm.ShowReply(
                 new AskReplyContent(engine, selected, translated, null, 0, [],
                     Loc.T("Use Copy text to copy the translation."),
-                    Title: Loc.F("Translation → {0}", GoogleTranslation.NameFor(target)),
+                    Title: title,
                     KeepLayout: true),
                 openModelWindow: null);
         } catch (Exception ex) {
@@ -1733,7 +1976,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                 return;
             }
             Log.Write("translate-selection: failed: " + ex.Message);
-            if (_phase == AppPhase.Idle) {
+            if (!RecorderCapturing) {
                 StatusOverlay.HideWorking();
             }
             Sounds.Error();
@@ -1774,24 +2017,30 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         UpdateTranslateMenu();
     }
 
-    private void DeliverPaste(string text, string logLabel) {
+    private async Task DeliverPasteAsync(DictationJob job, string text, string logLabel) {
+        if (await BeforeDeliverAsync(job)) {
+            DeliverPasteNow(job, text, logLabel);
+        }
+    }
+
+    /// <summary>Pastes <paramref name="text"/> for <paramref name="job"/>; the caller already waited its turn.</summary>
+    private void DeliverPasteNow(DictationJob job, string text, string logLabel) {
         Paster.DeliverResult result = Paster.Deliver(
-            text, _settings.KeepTranscriptOnClipboard, PressEnterHere, _pasteTarget);
+            text, _settings.KeepTranscriptOnClipboard, PressEnterFor(job), job.PasteTarget);
         switch (result.Outcome) {
             case Paster.Outcome.Pasted:
                 Sounds.Pasted();
                 if (result.KeptUserFocus) {
                     ShowBalloon(Loc.T("Pasted into the original field."), OverlayKind.Success);
                 }
-                ResetToIdle();
                 break;
             case Paster.Outcome.CopiedToClipboard:
                 Log.Write(logLabel + ": no editable field focused, left on clipboard");
                 Sounds.Pasted();
                 ShowBalloon(Loc.T("Copied to clipboard — press Ctrl+V to paste."), OverlayKind.Success);
-                ResetToIdle();
                 break;
         }
+        CompleteJobPill(job);
     }
 
     /// <summary>
@@ -1800,23 +2049,25 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     /// the target app has had time to read the reply (Qt/Electron paste late).
     /// If there was nowhere to paste, the reply stays on the clipboard.
     /// </summary>
-    private void DeliverGeneratedPaste(string reply, string logLabel, string transcript) {
+    private async Task DeliverGeneratedPasteAsync(DictationJob job, string reply, string logLabel, string transcript) {
+        if (!await BeforeDeliverAsync(job)) {
+            return;
+        }
         Paster.DeliverResult result = Paster.Deliver(
-            reply, keepTranscriptOnClipboard: true, PressEnterHere, _pasteTarget);
+            reply, keepTranscriptOnClipboard: true, PressEnterFor(job), job.PasteTarget);
         switch (result.Outcome) {
             case Paster.Outcome.Pasted:
                 Sounds.Pasted();
                 Paster.CopyLater(transcript);
                 ShowBalloon(Loc.T("Pasted the reply. Transcript copied to clipboard."), OverlayKind.Success);
-                ResetToIdle();
                 break;
             case Paster.Outcome.CopiedToClipboard:
                 Log.Write(logLabel + ": no editable field focused, left reply on clipboard");
                 Sounds.Pasted();
                 ShowBalloon(Loc.T("Copied the reply — press Ctrl+V to paste."), OverlayKind.Success);
-                ResetToIdle();
                 break;
         }
+        CompleteJobPill(job);
     }
 
     /// <summary>
@@ -1834,7 +2085,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         return string.Equals(text, message.Trim(), StringComparison.Ordinal);
     }
 
-    private bool TryDeliverImage(byte[] imageBytes, string logLabel) {
+    private async Task<bool> TryDeliverImageAsync(DictationJob job, byte[] imageBytes, string logLabel) {
         Image image;
         try {
             using var ms = new MemoryStream(imageBytes);
@@ -1846,18 +2097,21 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
 
         using (image) {
-            Paster.DeliverResult result = Paster.DeliverImage(image, PressEnterHere, _pasteTarget);
+            if (!await BeforeDeliverAsync(job)) {
+                return true; // cancelled: nothing more to deliver
+            }
+            Paster.DeliverResult result = Paster.DeliverImage(image, PressEnterFor(job), job.PasteTarget);
             switch (result.Outcome) {
                 case Paster.Outcome.Pasted:
                     Sounds.Pasted();
                     ShowBalloon(Loc.T("Pasted image. Transcript copied to clipboard."), OverlayKind.Success);
-                    ResetToIdle();
+                    CompleteJobPill(job);
                     return true;
                 case Paster.Outcome.CopiedToClipboard:
                     Log.Write(logLabel + ": no editable field focused, left image on clipboard");
                     Sounds.Pasted();
                     ShowBalloon(Loc.T("Copied image. Transcript copied to clipboard."), OverlayKind.Success);
-                    ResetToIdle();
+                    CompleteJobPill(job);
                     return true;
                 default:
                     return false;
@@ -1870,95 +2124,125 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     /// current web thread for up to 25 successful sends; a timeout, empty reply,
     /// or that cap opens a new chat. Gemini still starts a fresh chat every time.
     /// If ChatGPT never starts a reply, the same prompt + transcript are resent
-    /// in a new chat, then the page is refreshed as a last fallback.
+    /// in a new chat, then the page is refreshed as a last fallback. A side window
+    /// answers one job at a time; the others wait their turn.
     /// </summary>
-    private async Task<ModelReply> RequestCommandReplyAsync(string message, int session) {
-        if (!ReferenceEquals(ReplyWeb, _web)) {
+    private async Task<ModelReply> RequestCommandReplyAsync(DictationJob job, string message) {
+        var web = ReplyWebFor(job);
+        bool side = !ReferenceEquals(web, _web);
+        if (side) {
+            if (web.Turn.CurrentCount == 0) {
+                Log.Write(job.Kind + " #" + job.Id + ": waiting for " + web.Site.DisplayName + " to finish the previous reply");
+            }
+            await web.Turn.WaitAsync(job.Cancel.Token);
+            job.Waiting = web;
+        }
+        try {
+            return await RequestCommandReplyCoreAsync(job, web, message);
+        } finally {
+            if (side) {
+                job.Waiting = null;
+                web.Turn.Release();
+            }
+        }
+    }
+
+    private async Task<ModelReply> RequestCommandReplyCoreAsync(DictationJob job, ChatGPTWebController web, string message) {
+        // On the leased transcription page the reply can't fall back to refreshing the window.
+        bool onLease = job.Lease != null && ReferenceEquals(web, _web);
+        if (!ReferenceEquals(web, _web)) {
             // The cleaning window is never touched by dictation, so make sure its page is
             // loaded and signed in (it may have been reloaded or navigated since warmup).
-            var ready = await ReplyWeb.EnsureReadyAsync();
-            if (!IsLive(session)) {
+            var ready = await web.EnsureReadyAsync();
+            if (job.Cancelled) {
                 return ModelReply.Empty;
             }
             if (ready != ReadyOutcome.Ready) {
                 throw ToDriverException(ready);
             }
         }
-        TimeSpan firstByteTimeout = CommandFirstByteTimeout();
+        TimeSpan firstByteTimeout = CommandFirstByteTimeout(job, web);
         Log.Write("command: waiting up to " + ((int)firstByteTimeout.TotalSeconds)
-            + "s for a reply (recording " + HeldSeconds().ToString("0.0") + "s)");
+            + "s for a reply (recording " + job.HeldSeconds.ToString("0.0") + "s)");
         // Image questions get a fresh chat: a reused ChatGPT thread could still hold
         // attachments from an earlier failed send.
-        bool firstNeedsNewChat = (_askModel && _askImages.Count > 0) || ShouldStartNewChat();
+        bool firstNeedsNewChat = (job.AskModel && job.AskImages.Count > 0) || ShouldStartNewChat(web);
         try {
-            ModelReply reply = await SendCommandOnceAsync(message, firstNeedsNewChat, firstByteTimeout);
-            if (!IsLive(session)) {
+            ModelReply reply = await SendCommandOnceAsync(job, web, message, firstNeedsNewChat, firstByteTimeout);
+            if (job.Cancelled) {
                 return ModelReply.Empty;
             }
             if (!reply.IsEmpty) {
-                NoteChatGptThreadSuccess(openedNewChat: firstNeedsNewChat);
+                NoteChatGptThreadSuccess(web, openedNewChat: firstNeedsNewChat);
                 return reply;
             }
             Log.Write("command: empty reply");
-            MarkChatGptThreadFailed();
+            MarkChatGptThreadFailed(web);
         } catch (DriverException ex) when (IsCommandRetryable(ex)) {
-            if (!IsLive(session)) {
+            if (job.Cancelled) {
                 return ModelReply.Empty;
             }
             Log.Write("command: first send failed (" + ex.Kind + ": " + ex.Message + ")");
-            MarkChatGptThreadFailed();
+            MarkChatGptThreadFailed(web);
         }
 
-        if (!IsLive(session)) {
+        if (job.Cancelled) {
             return ModelReply.Empty;
         }
         Log.Write("command: retrying in a new chat");
-        ShowBalloon(Loc.F("{0} is slow — retrying in a new chat…", ReplyWeb.Site.DisplayName), OverlayKind.Warning);
+        JobNotice(Loc.F("{0} is slow — retrying in a new chat…", web.Site.DisplayName), OverlayKind.Warning);
         try {
-            ModelReply reply = await SendCommandOnceAsync(message, startNewChat: true, firstByteTimeout);
-            if (!IsLive(session)) {
+            ModelReply reply = await SendCommandOnceAsync(job, web, message, startNewChat: true, firstByteTimeout);
+            if (job.Cancelled) {
                 return ModelReply.Empty;
             }
             if (!reply.IsEmpty) {
-                NoteChatGptThreadSuccess(openedNewChat: true);
+                NoteChatGptThreadSuccess(web, openedNewChat: true);
                 return reply;
             }
             Log.Write("command: empty reply after new-chat retry");
-            MarkChatGptThreadFailed();
+            MarkChatGptThreadFailed(web);
         } catch (DriverException ex) when (IsCommandRetryable(ex)) {
-            if (!IsLive(session)) {
+            if (job.Cancelled) {
                 return ModelReply.Empty;
             }
             Log.Write("command: new-chat retry failed (" + ex.Kind + ": " + ex.Message + ")");
-            MarkChatGptThreadFailed();
+            MarkChatGptThreadFailed(web);
         }
 
-        if (!IsLive(session)) {
+        if (job.Cancelled) {
             return ModelReply.Empty;
         }
-        Log.Write("command: refreshing " + ReplyWeb.Site.DisplayName + " and retrying");
-        ShowBalloon(Loc.F("Still waiting — refreshing {0} and retrying…", ReplyWeb.Site.DisplayName), OverlayKind.Warning);
-        var outcome = await ReplyWeb.RefreshChatAsync();
-        if (!IsLive(session)) {
+        if (onLease) {
+            Log.Write("command: no reply on the background page, giving up");
+            job.LeaseClean = false;
+            return ModelReply.Empty;
+        }
+        Log.Write("command: refreshing " + web.Site.DisplayName + " and retrying");
+        JobNotice(Loc.F("Still waiting — refreshing {0} and retrying…", web.Site.DisplayName), OverlayKind.Warning);
+        var outcome = await web.RefreshChatAsync();
+        if (job.Cancelled) {
             return ModelReply.Empty;
         }
         if (outcome != ReadyOutcome.Ready) {
             throw ToDriverException(outcome);
         }
-        ModelReply refreshed = await SendCommandOnceAsync(message, startNewChat: true, firstByteTimeout);
+        ModelReply refreshed = await SendCommandOnceAsync(job, web, message, startNewChat: true, firstByteTimeout);
         if (!refreshed.IsEmpty) {
-            NoteChatGptThreadSuccess(openedNewChat: true);
+            NoteChatGptThreadSuccess(web, openedNewChat: true);
         } else {
-            MarkChatGptThreadFailed();
+            MarkChatGptThreadFailed(web);
         }
         return refreshed;
     }
 
     private async Task<ModelReply> SendCommandOnceAsync(
+        DictationJob job,
+        ChatGPTWebController web,
         string message,
         bool startNewChat,
         TimeSpan firstByteTimeout) {
-        var driver = ReplyWeb.Driver
+        var driver = ReplyDriver(job, web)
             ?? throw new DriverException(DriverFailure.NotReady, "no driver");
         driver.InvalidateWaits();
         if (startNewChat) {
@@ -1970,14 +2254,14 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
         CommandTurnSnapshot previous = await driver.SnapshotCommandTurnAsync();
         await driver.SetComposerAsync(message);
-        if (_askModel && _askImages.Count > 0 && !await driver.AttachFilesAsync(_askImages)) {
-            ShowBalloon(Loc.T("Couldn't confirm the image was attached — sending the question anyway."), OverlayKind.Warning);
+        if (job.AskModel && job.AskImages.Count > 0 && !await driver.AttachFilesAsync(job.AskImages)) {
+            JobNotice(Loc.T("Couldn't confirm the image was attached — sending the question anyway."), OverlayKind.Warning);
         }
         await driver.SendPromptAsync();
         ModelReply reply;
         try {
             // Ask model waits for the complete reply (generated images and videos included).
-            reply = await driver.AwaitAssistantReplyAsync(previous, firstByteTimeout, waitForMedia: _askModel);
+            reply = await driver.AwaitAssistantReplyAsync(previous, firstByteTimeout, waitForMedia: job.AskModel);
         } catch (DriverException ex) when (ex.Kind == DriverFailure.Timeout) {
             reply = await driver.TryRecoverAssistantReplyAsync(previous);
             if (reply.IsEmpty) {
@@ -1997,19 +2281,18 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     /// Matches recording length, clamped to 30–60 seconds so a 30s clip retries
     /// after 30s and a two-minute clip waits a full minute.
     /// </summary>
-    private TimeSpan CommandFirstByteTimeout() {
-        if (!IsChatGptSite) {
+    private static TimeSpan CommandFirstByteTimeout(DictationJob job, ChatGPTWebController web) {
+        if (!IsChatGptSite(web)) {
             return TimeSpan.FromSeconds(45);
         }
-        double seconds = Math.Clamp(HeldSeconds(), MinChatGptFirstReplySeconds, MaxChatGptFirstReplySeconds);
+        double seconds = Math.Clamp(job.HeldSeconds, MinChatGptFirstReplySeconds, MaxChatGptFirstReplySeconds);
         return TimeSpan.FromSeconds(seconds);
     }
 
-    private bool ShouldStartNewChat() {
-        if (!IsChatGptSite) {
+    private static bool ShouldStartNewChat(ChatGPTWebController web) {
+        if (!IsChatGptSite(web)) {
             return true;
         }
-        var web = ReplyWeb;
         if (web.ForceNewChatThread) {
             Log.Write("command: ChatGPT thread needs a new chat after an error");
             return true;
@@ -2022,20 +2305,19 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         return false;
     }
 
-    private void NoteChatGptThreadSuccess(bool openedNewChat) {
-        if (!IsChatGptSite) {
+    private static void NoteChatGptThreadSuccess(ChatGPTWebController web, bool openedNewChat) {
+        if (!IsChatGptSite(web)) {
             return;
         }
-        var web = ReplyWeb;
         web.ForceNewChatThread = false;
         web.ChatThreadSends = openedNewChat ? 1 : web.ChatThreadSends + 1;
     }
 
-    private void MarkChatGptThreadFailed() {
-        if (!IsChatGptSite) {
+    private static void MarkChatGptThreadFailed(ChatGPTWebController web) {
+        if (!IsChatGptSite(web)) {
             return;
         }
-        ReplyWeb.ForceNewChatThread = true;
+        web.ForceNewChatThread = true;
     }
 
     /// <summary>Cleaning-model window: Auto Clean, custom commands and selection rewrites.</summary>
@@ -2046,12 +2328,21 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _askWeb ?? (_settings.AskProvider == _settings.TranscriptionProvider ? _web : Gen);
 
     /// <summary>
-    /// Window that answers the current session. Ask model uses the Ask model;
+    /// Window that answers <paramref name="job"/>. Ask model uses the Ask model;
     /// everything else goes to the cleaning model.
     /// </summary>
-    private ChatGPTWebController ReplyWeb => _askModel ? AskWeb : Gen;
+    private ChatGPTWebController ReplyWebFor(DictationJob job) => job.AskModel ? AskWeb : Gen;
 
-    private bool IsChatGptSite => ReplyWeb.Site.Id == ChatSite.ChatGpt.Id;
+    /// <summary>
+    /// The page that answers <paramref name="job"/>: its leased transcription page when the
+    /// reply model is the transcription model, otherwise the reply window's own page.
+    /// </summary>
+    private DictationDriver? ReplyDriver(DictationJob job, ChatGPTWebController? web = null) {
+        web ??= ReplyWebFor(job);
+        return job.Lease != null && ReferenceEquals(web, _web) ? job.Lease.Driver : web.Driver;
+    }
+
+    private static bool IsChatGptSite(ChatGPTWebController web) => web.Site.Id == ChatSite.ChatGpt.Id;
 
     private static bool IsCommandRetryable(DriverException ex) =>
         ex.Kind is DriverFailure.Timeout or DriverFailure.ButtonNotFound
@@ -2071,7 +2362,15 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             ? Loc.F("{0}'s page changed — EchoType can't find its mic button. Details are in the log.", siteName)
             : Loc.F("{0}'s page changed — EchoType can't find its message box. Details are in the log.", siteName);
 
+    /// <summary>
+    /// Cancels the recording being opened or listened to (nothing is pasted), or the job that
+    /// still holds the recorder's page. Other background jobs carry on.
+    /// </summary>
     private Task CancelAndResetAsync(string reason) {
+        if (_recorderJob is { } held) {
+            CancelJob(held, reason);
+            return Task.CompletedTask;
+        }
         if (_phase == AppPhase.Idle) {
             return Task.CompletedTask;
         }
@@ -2079,29 +2378,84 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         StopListenWatch();
         _session++;
         _hotkey.EscSwallowActive = false;
-        DismissActionPicker();
-        bool wasGenerating = _phase == AppPhase.Generating;
         try {
             _web.Driver?.InvalidateWaits();
-            _cleanWeb?.Driver?.InvalidateWaits();
-            _askWeb?.Driver?.InvalidateWaits();
         } catch { /* best effort */ }
         _engagementFailures = 0;
         // Cancel leaves ChatGPT/Gemini's mic UI wedged often enough that the next
         // recording does not start until a later self-heal reload. Reload now so
         // the next hotkey waits on a fresh page instead of clicking a stuck mic.
-        (wasGenerating ? ReplyWeb : _web).ReloadAfterCancel();
-        StatusOverlay.HideWorking();
+        _web.ReloadAfterCancel();
+        StatusOverlay.HideListening();
         ResetToIdle();
         return Task.CompletedTask;
+    }
+
+    /// <summary>Double-tap: the recording in progress and every background job; nothing is pasted.</summary>
+    private void CancelEverything(string reason) {
+        _pendingChord = default;
+        if (RecorderCapturing) {
+            _ = CancelAndResetAsync(reason);
+        }
+        CancelAllJobs(reason);
+    }
+
+    private void CancelAllJobs(string reason) {
+        _pendingChord = default;
+        foreach (var job in _jobs.ToArray()) {
+            CancelJob(job, reason);
+        }
+    }
+
+    private void CancelJob(DictationJob job, string reason) {
+        if (job.Cancelled) {
+            return;
+        }
+        Log.Write(job.Kind + " #" + job.Id + ": " + reason);
+        job.Cancel.Cancel();
+        job.LeaseClean = false;
+        if (ReferenceEquals(_pickerJob, job)) {
+            DismissActionPicker();
+        }
+        try {
+            job.Lease?.Driver.InvalidateWaits();
+            job.Waiting?.Driver?.InvalidateWaits();
+            if (job.HoldsRecorder) {
+                _web.Driver?.InvalidateWaits();
+            }
+        } catch { /* best effort */ }
+        _engagementFailures = 0;
+        // Cancel can leave the page's mic or reply wedged: reload it before it is used again
+        // (a leased page is reloaded when the job hands it back).
+        if (job.Waiting != null) {
+            job.Waiting.ReloadAfterCancel();
+        } else if (job.HoldsRecorder) {
+            _web.ReloadAfterCancel();
+        }
+        if (ReferenceEquals(_pillJob, job)) {
+            StatusOverlay.HideWorking();
+        }
     }
 
     // ------------------------------------------------------------------
     // Failure handling (mac handleFailure parity)
     // ------------------------------------------------------------------
 
+    /// <summary>The recording itself failed (page not ready, mic didn't start…).</summary>
     private void HandleFailure(DriverException ex, string? transcriptToCopy = null) {
-        var web = _phase == AppPhase.Generating ? ReplyWeb : _web;
+        ReportFailure(ex, _web, transcriptToCopy);
+        ResetToIdle();
+    }
+
+    /// <summary>A background job failed: report it once earlier recordings have pasted.</summary>
+    private async Task FailJobAsync(DictationJob job, DriverException ex, string? transcriptToCopy = null) {
+        if (!await BeforeDeliverAsync(job)) {
+            return;
+        }
+        ReportFailure(ex, job.Generating ? ReplyWebFor(job) : _web, transcriptToCopy);
+    }
+
+    private void ReportFailure(DriverException ex, ChatGPTWebController web, string? transcriptToCopy) {
         string message;
         switch (ex.Kind) {
             case DriverFailure.LoggedOut:
@@ -2159,7 +2513,6 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             message += Loc.T(" Transcript copied to clipboard.");
         }
         ShowBalloon(message, OverlayKind.Error);
-        ResetToIdle();
     }
 
     /// <summary>
@@ -2180,41 +2533,218 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         }
     }
 
-    // Global settings with the current session's app profile applied on top.
-    private bool PressEnterHere => _profile?.PressEnter ?? _settings.PressEnterAfterPaste;
+    // Global settings with the session's app profile applied on top.
+    private bool PressEnterFor(DictationJob job) => job.Profile?.PressEnter ?? _settings.PressEnterAfterPaste;
 
-    private string CleanPromptHere =>
-        _profile is { CleanPrompt.Length: > 0 } ? _profile.CleanPrompt : _settings.AutoCleanPrompt;
+    private string CleanPromptFor(AppProfile? profile) =>
+        profile is { CleanPrompt.Length: > 0 } ? profile.CleanPrompt : _settings.AutoCleanPrompt;
 
-    private bool AutoCleanHere =>
-        (_profile?.AutoClean ?? _settings.AutoClean) && !string.IsNullOrWhiteSpace(CleanPromptHere);
+    private string CleanPromptFor(DictationJob job) => CleanPromptFor(job.Profile);
 
-    private string TranslateTargetHere =>
-        _profile is { TranslateTo.Length: > 0 } ? _profile.TranslateTo : _settings.TranslateTargetLanguage;
+    private bool AutoCleanFor(AppProfile? profile) =>
+        (profile?.AutoClean ?? _settings.AutoClean) && !string.IsNullOrWhiteSpace(CleanPromptFor(profile));
 
+    private bool AutoCleanFor(DictationJob job) => AutoCleanFor(job.Profile);
+
+    private string TranslateTargetFor(DictationJob job) =>
+        job.Profile is { TranslateTo.Length: > 0 } ? job.Profile.TranslateTo : _settings.TranslateTargetLanguage;
+
+    /// <summary>Clears the recording session; the recorder is ready for the next one.</summary>
     private void ResetToIdle() {
         StopListenWatch();
-        DismissActionPicker();
         RestoreOtherApps();
         _hotkeyHeld = false;
         _activeCommand = null;
         _askModel = false;
-        _askImages = [];
         _translate = false;
         _sessionChord = default;
         _pasteTarget = null;
         _profile = null;
-        _selectedText = null;
         _selectionTask = Task.FromResult<string?>(null);
         _longPieces.Clear();
         _longContinuing = false;
         _longEmptyPieces = 0;
         _pieceStartedAt = default;
-        _hotkey.EscSwallowActive = false;
+        // A command's button picker may still be open for a background job.
+        _hotkey.EscSwallowActive = _actionPicker != null;
         NativeMethods.SetThreadExecutionState(NativeMethods.ES_CONTINUOUS);
         SetPhase(AppPhase.Idle);
         _listenFinishGate = 0;
         _session++;
+    }
+
+    // ------------------------------------------------------------------
+    // Background jobs: a finished recording is processed while the next one records
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// One finished recording on its way to the paste: what it is for (dictation, Auto Clean,
+    /// a command, Ask model, Translate), where it goes, and the chat page it holds while its
+    /// transcript comes in. Jobs run in the background so the next recording can start as
+    /// soon as this one stops; their pastes still land in recording order.
+    /// </summary>
+    private sealed class DictationJob {
+        public required int Id { get; init; }
+        public required PasteTarget? PasteTarget { get; init; }
+        public required AppProfile? Profile { get; init; }
+        public required CustomCommand? Command { get; init; }
+        public required bool AskModel { get; init; }
+        public required bool Translate { get; init; }
+        public required Task<string?> SelectionTask { get; init; }
+        public required double HeldSeconds { get; init; }
+        public required double PieceSeconds { get; init; }
+        public required string[] LongPieces { get; init; }
+        /// <summary>False when Long dictation already collected the last piece and the page isn't recording.</summary>
+        public required bool MicOpen { get; init; }
+        /// <summary>The deliveries of earlier jobs: this one pastes after them.</summary>
+        public required Task PreviousDelivery { get; init; }
+        public TaskCompletionSource Delivered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public CancellationTokenSource Cancel { get; } = new();
+        public string? SelectedText { get; set; }
+        public IReadOnlyList<string> AskImages { get; set; } = [];
+        /// <summary>
+        /// The transcription page handed over by <see cref="ChatGPTWebController.DetachActivePage"/>;
+        /// it also answers when the reply model is the transcription model.
+        /// </summary>
+        public PageLease? Lease { get; set; }
+        /// <summary>False once the leased page failed or was cancelled: it is reloaded before reuse.</summary>
+        public bool LeaseClean { get; set; } = true;
+        /// <summary>True while the job works on the recorder's own page, so the next recording waits.</summary>
+        public bool HoldsRecorder { get; set; }
+        /// <summary>Set once the reply step started: failures then name the reply model's window.</summary>
+        public bool Generating { get; set; }
+        /// <summary>The side window the job is waiting on, reloaded if the job is cancelled.</summary>
+        public ChatGPTWebController? Waiting { get; set; }
+        public bool Cancelled => Cancel.IsCancellationRequested;
+        public string Kind => AskModel ? "ask-model" : Translate ? "translate" : Command != null ? "command" : "dictation";
+    }
+
+    /// <summary>A recording is being opened or listened to: pastes and popups wait for it.</summary>
+    private bool RecorderCapturing => _phase is AppPhase.Waking or AppPhase.Engaging or AppPhase.Listening;
+
+    /// <summary>Recording, or recordings still being processed: settings that swap windows wait.</summary>
+    private bool IsBusy => _phase != AppPhase.Idle || _jobs.Count > 0;
+
+    /// <summary>What the tray icon and window show: still working while background jobs run.</summary>
+    private AppPhase DisplayPhase => _phase == AppPhase.Idle && _jobs.Count > 0 ? AppPhase.Transcribing : _phase;
+
+    /// <summary>The recorder is free for the next recording; the finished one carries on as a job.</summary>
+    private void FreeRecorder() {
+        _recorderJob = null;
+        ResetToIdle();
+        StartPendingRecording();
+    }
+
+    /// <summary>Starts the recording whose shortcut was pressed while the previous one still had the page.</summary>
+    private void StartPendingRecording() {
+        var chord = _pendingChord;
+        _pendingChord = default;
+        if (chord.IsEmpty || _phase != AppPhase.Idle) {
+            return;
+        }
+        if (!_settings.ToggleRecording && !_pendingHeld) {
+            return;
+        }
+        Log.Write("dictation: page free, starting the recording pressed meanwhile");
+        BeginSession(chord, IsDictationChord(chord));
+    }
+
+    /// <summary>Gives the job's transcription page back (it becomes the standby again) and frees the recorder if the job held it.</summary>
+    private void ReleasePage(DictationJob job) {
+        if (job.Lease is { } lease) {
+            job.Lease = null;
+            // After an answer on this page (Ask model on the transcription model), make it the
+            // active page again so "Open in …" shows that answer, unless a recording uses the page.
+            bool showReply = job.Generating && !job.Cancelled && _phase == AppPhase.Idle && _recorderJob == null;
+            _web.ReturnPage(lease, clean: job.LeaseClean && !job.Cancelled, makeActive: showReply);
+        }
+        if (job.HoldsRecorder) {
+            job.HoldsRecorder = false;
+            if (ReferenceEquals(_recorderJob, job)) {
+                FreeRecorder();
+            }
+        }
+    }
+
+    private void EndJob(DictationJob job) {
+        ReleasePage(job);
+        _jobs.Remove(job);
+        if (ReferenceEquals(_pillJob, job)) {
+            _pillJob = null;
+        }
+        job.Delivered.TrySetResult();
+        UpdateStatusIcon();
+    }
+
+    /// <summary>
+    /// Waits until <paramref name="job"/> may paste or speak up: earlier recordings have
+    /// delivered (so pastes land in recording order), no recording is being made (a paste
+    /// would land in the middle of it) and no command picker is open. False when the job
+    /// was cancelled meanwhile.
+    /// </summary>
+    private async Task<bool> BeforeDeliverAsync(DictationJob job) {
+        if (!job.PreviousDelivery.IsCompleted) {
+            Log.Write(job.Kind + " #" + job.Id + ": waiting for the earlier recording to paste first");
+            try {
+                await job.PreviousDelivery.WaitAsync(TimeSpan.FromSeconds(90), job.Cancel.Token);
+            } catch (TimeoutException) {
+                Log.Write(job.Kind + " #" + job.Id + ": earlier recording still busy, delivering anyway");
+            } catch (OperationCanceledException) {
+                return false;
+            }
+        }
+        bool logged = false;
+        while (!job.Cancelled && (RecorderCapturing || _actionPicker != null)) {
+            if (!logged) {
+                Log.Write(job.Kind + " #" + job.Id + ": ready, waiting for the current recording to end");
+                logged = true;
+            }
+            await Task.Delay(100);
+        }
+        return !job.Cancelled;
+    }
+
+    /// <summary>The job's reply step starts: in place, the recorder shows it is still busy.</summary>
+    private void BeginReplyStep(DictationJob job) {
+        job.Generating = true;
+        if (job.HoldsRecorder && ReferenceEquals(_recorderJob, job)) {
+            SetPhase(AppPhase.Generating);
+        }
+    }
+
+    /// <summary>Advances the pill for <paramref name="job"/>, unless a newer recording has taken the pill.</summary>
+    private void JobProgress(DictationJob job, WorkStage stage, string detail) {
+        if (ReferenceEquals(_pillJob, job) && !RecorderCapturing) {
+            StatusOverlay.ShowWorking(stage, detail, cap: 0.94f, restart: false);
+        }
+    }
+
+    /// <summary>The job delivered: fill the pill and slide it away, if it is still the job's.</summary>
+    private void CompleteJobPill(DictationJob job) {
+        if (ReferenceEquals(_pillJob, job) && !RecorderCapturing) {
+            StatusOverlay.CompleteWorking();
+        }
+    }
+
+    /// <summary>A mid-job notice ("retrying…"); held back while a recording is on screen.</summary>
+    private void JobNotice(string text, OverlayKind kind) {
+        if (RecorderCapturing) {
+            Log.Write("hud: notice skipped while recording: " + text);
+            return;
+        }
+        ShowBalloon(text, kind);
+    }
+
+    private bool JobExpectsReply(DictationJob job) =>
+        job.Command != null || job.Translate || job.AskModel
+        || AutoCleanFor(job)
+        || (job.SelectionTask.IsCompletedSuccessfully && !string.IsNullOrEmpty(job.SelectionTask.Result));
+
+    private static string JoinPieces(IReadOnlyList<string> pieces, string current) {
+        if (pieces.Count == 0) {
+            return current;
+        }
+        return string.Join(" ", pieces.Append(current.Trim()).Where(p => p.Length > 0));
     }
 
     private void StartListenWatch(int session) {
@@ -2466,12 +2996,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
     }
 
     /// <summary>The pieces Long dictation already collected, followed by <paramref name="current"/>.</summary>
-    private string JoinLongPieces(string current) {
-        if (_longPieces.Count == 0) {
-            return current;
-        }
-        return string.Join(" ", _longPieces.Append(current.Trim()).Where(p => p.Length > 0));
-    }
+    private string JoinLongPieces(string current) => JoinPieces(_longPieces, current);
 
     /// <summary>
     /// Seconds in the current recording piece: the whole take until Long dictation restarts it,
@@ -2586,35 +3111,13 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             }
         }
 
-        // Progress pill: the listening HUD reshapes into it when recording stops, the
-        // Generating call sites advance it (ShowProgress), and it fills up on success.
-        // Failures and success notices replace it in place.
-        switch (phase) {
-            case AppPhase.Transcribing:
-                // Leave room on the bar when a model or translation step follows.
-                StatusOverlay.ShowWorking(
-                    WorkStage.Transcribing, _web.Site.DisplayName,
-                    cap: ExpectsReplyStep() ? 0.45f : 0.9f, restart: true);
-                break;
-            case AppPhase.ChoosingAction:
-                StatusOverlay.HideWorking();
-                break;
-            case AppPhase.Idle when previous is AppPhase.Transcribing or AppPhase.Generating:
-                StatusOverlay.CompleteWorking();
-                break;
-        }
+        // The progress pill belongs to the jobs: FinishListeningAsync reshapes the listening
+        // HUD into "Processing…", the job advances it (JobProgress) and fills it on success
+        // (CompleteJobPill). Failures and success notices replace it in place.
     }
 
-    private static void ShowProgress(WorkStage stage, string detail) =>
-        StatusOverlay.ShowWorking(stage, detail, cap: 0.94f, restart: false);
-
-    private bool ExpectsReplyStep() =>
-        _activeCommand != null || _translate || _askModel
-        || AutoCleanHere
-        || (_selectionTask.IsCompletedSuccessfully && !string.IsNullOrEmpty(_selectionTask.Result));
-
     private void UpdateStatusIcon() {
-        _tray.Icon = TrayIcons.For(_phase, _loggedIn, _online, _web.IsInteractive);
+        _tray.Icon = TrayIcons.For(DisplayPhase, _loggedIn, _online, _web.IsInteractive);
         NotifyUi();
     }
 
@@ -2679,7 +3182,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             SyncModelMenu();
             return;
         }
-        if (_phase != AppPhase.Idle) {
+        if (IsBusy) {
             ShowBalloon(Loc.T("Wait until dictation finishes before switching models."), OverlayKind.Warning);
             SyncModelMenu();
             return;
@@ -2871,7 +3374,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
                     ? Loc.T("Click the box, then press one to three keys together (for example Ctrl+Shift+T). Press the shortcut to start, speak, and press it again to stop.")
                     : Loc.T("Click the box, then press one to three keys together (for example Ctrl+Shift+T). Hold them and speak."))
                     + " " + Loc.F("EchoType transcribes with the selected model, translates the text to {0} with {1}, and pastes it. Change the language from Translate speech to. Clear removes the shortcut.",
-                        language, OpenAiTranslation.ResolveKey(_settings).Length > 0 ? "OpenAI" : "Google Translate"));
+                        language, _settings.TranslateWithChatGpt ? "ChatGPT" : ClassicTranslationEngine));
             if (form.ShowDialog() == DialogResult.OK) {
                 ApplyTranslateChord(form.Chord);
             }
@@ -3168,7 +3671,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
 
     Settings IAppWindowHost.Settings => _settings;
     HotkeyMonitor IAppWindowHost.Hotkey => _hotkey;
-    AppPhase IAppWindowHost.Phase => _phase;
+    AppPhase IAppWindowHost.Phase => DisplayPhase;
     bool IAppWindowHost.LoggedIn => _loggedIn;
     bool IAppWindowHost.Online => _online;
     bool IAppWindowHost.PageReady => _web.IsInteractive;
@@ -3202,7 +3705,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
             }
             return;
         }
-        if (_phase != AppPhase.Idle) {
+        if (IsBusy) {
             ShowBalloon(Loc.T("Wait until dictation finishes before switching the language."), OverlayKind.Warning);
             NotifyUi();
             return;
@@ -3476,6 +3979,7 @@ internal sealed class TrayAppContext : ApplicationContext, IAppWindowHost {
         _web.Dispose();
         _cleanWeb?.Dispose();
         _askWeb?.Dispose();
+        _translateWeb?.Dispose();
         if (_window is { IsDisposed: false } window) {
             window.Hide();
             window.Dispose();

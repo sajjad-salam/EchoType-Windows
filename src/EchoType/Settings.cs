@@ -92,11 +92,12 @@ internal sealed class Settings {
     public bool LongDictation { get; set; }
 
     /// <summary>
-    /// The progress pill slides down off screen after this many seconds; the task keeps
-    /// running and still pastes when done. 0 = keep it up until the work ends.
+    /// After a recording stops, the pill shows "Processing…" for this many milliseconds and
+    /// then slides away; the work carries on in the background and still pastes when done,
+    /// and you can start the next recording meanwhile. 0 = keep it up until the work ends.
     /// </summary>
-    [JsonPropertyName("progressPillHideSeconds")]
-    public int ProgressPillHideSeconds { get; set; } = 5;
+    [JsonPropertyName("progressPillHideMs")]
+    public int ProgressPillHideMs { get; set; } = 1200;
 
     /// <summary>Telegram bot token from @BotFather. Empty = Telegram voice notes off.</summary>
     [JsonPropertyName("telegramBotToken")]
@@ -219,6 +220,15 @@ internal sealed class Settings {
     /// <summary>OpenAI model used for translation. Empty = <c>gpt-4o-mini</c>.</summary>
     [JsonPropertyName("openAiTranslationModel")]
     public string OpenAiTranslationModel { get; set; } = "";
+
+    /// <summary>
+    /// True (default): both Translate shortcuts send the text to ChatGPT web (its own hidden
+    /// window, your ChatGPT login) and use its reply; the Translate selection popup shows it
+    /// formatted the way ChatGPT lays it out. OpenAI / Google Translate are the fallback.
+    /// False: OpenAI (with a key) or Google Translate only.
+    /// </summary>
+    [JsonPropertyName("translateWithChatGpt")]
+    public bool TranslateWithChatGpt { get; set; } = true;
 
     /// <summary>
     /// Interface language: "en", "ar", or empty to follow the Windows display language.
@@ -410,7 +420,7 @@ internal sealed class Settings {
             loaded.OpenAiApiKey ??= "";
             loaded.TelegramBotToken ??= "";
             loaded.TelegramChatId ??= "";
-            loaded.ProgressPillHideSeconds = Math.Clamp(loaded.ProgressPillHideSeconds, 0, 600);
+            loaded.ProgressPillHideMs = Math.Clamp(loaded.ProgressPillHideMs, 0, 600_000);
             loaded.OpenAiTranslationModel ??= "";
             loaded.WordReplacements ??= [];
             loaded.TextShortcuts ??= [];

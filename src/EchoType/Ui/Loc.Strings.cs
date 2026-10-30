@@ -381,6 +381,12 @@ internal static partial class Loc {
         ["Use Copy text to copy the translation."] = "استخدم «نسخ النص» لنسخ الترجمة.",
         ["Translation → {0}"] = "الترجمة ← {0}",
         ["Translation failed — check your internet connection and try again."] = "فشلت الترجمة — تحقّق من اتصال الإنترنت وحاول مرة أخرى.",
+        ["Translate with ChatGPT"] = "الترجمة عبر ChatGPT",
+        ["Open ChatGPT translation window…"] = "فتح نافذة ترجمة ChatGPT…",
+        ["Translations now come from ChatGPT."] = "الترجمة الآن عبر ChatGPT.",
+        ["Translations now come from {0}."] = "الترجمة الآن عبر {0}.",
+        ["ChatGPT is signed out — log in in the window that opened. Translated with {0} meanwhile."] = "ChatGPT غير مسجَّل الدخول — سجّل الدخول من النافذة التي فُتحت. تُرجم النص عبر {0} مؤقتًا.",
+        ["Log in to ChatGPT (translation) from the tray menu."] = "سجّل الدخول إلى ChatGPT (الترجمة) من قائمة شريط المهام.",
 
         // Quick add word replacement
         ["Add word replacement…"] = "إضافة استبدال كلمة…",

@@ -27,7 +27,7 @@ internal enum WorkStage {
 /// notices that replace Windows balloon tips. The listening and progress pills have
 /// an ✕ button that cancels the task; clicking it never takes focus from the app the
 /// result will be pasted into. A progress pill that waits longer than
-/// <see cref="ParkAfterSeconds"/> slides down out of the way while the work carries on.
+/// <see cref="ParkAfterMs"/> slides down out of the way while the work carries on.
 /// </summary>
 internal sealed class StatusOverlay : Form {
 
@@ -64,10 +64,10 @@ internal sealed class StatusOverlay : Form {
     private static StatusOverlay? _instance;
 
     /// <summary>
-    /// After this long the progress pill slides down off screen; the task keeps running and
-    /// still pastes (or shows its reply) when done. 0 = keep it up until the work ends.
+    /// After this many milliseconds the progress pill slides down off screen; the task keeps
+    /// running and still pastes (or shows its reply) when done. 0 = keep it up until the work ends.
     /// </summary>
-    public static int ParkAfterSeconds { get; set; } = 5;
+    public static int ParkAfterMs { get; set; } = 1200;
 
     /// <summary>Raised on the UI thread when the ✕ on the listening or progress pill is clicked.</summary>
     public static event Action? CancelClicked;
@@ -533,10 +533,10 @@ internal sealed class StatusOverlay : Form {
             _opacity = 255;
             if (_mode == Mode.Notice && _noticeShownAt > 0 && now - _noticeShownAt >= NoticeHoldMs) {
                 BeginHide();
-            } else if (_mode == Mode.Working && !_workFinishing && !_morphing && ParkAfterSeconds > 0
-                && _workShownAt > 0 && now - _workShownAt >= ParkAfterSeconds * 1000L) {
-                // Long wait: slide down out of the way; the task itself is not touched.
-                Log.Write("hud: progress pill parked after " + ParkAfterSeconds + "s");
+            } else if (_mode == Mode.Working && !_workFinishing && !_morphing && ParkAfterMs > 0
+                && _workShownAt > 0 && now - _workShownAt >= ParkAfterMs) {
+                // The work goes on in the background: slide out of the way; the task itself is not touched.
+                Log.Write("hud: progress pill parked after " + ParkAfterMs + " ms");
                 _parked = true;
                 BeginHide();
             }

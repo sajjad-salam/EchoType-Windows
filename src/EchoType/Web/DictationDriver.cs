@@ -222,7 +222,8 @@ internal sealed class DictationDriver {
             }
             return out;
           };
-          const label = (b) => (b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('data-testid') || '') + ' ' + (b.getAttribute('data-test-id') || '');
+          // Trimmed so anchored patterns ("^send$") match a button with only an aria-label.
+          const label = (b) => ((b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('data-testid') || '') + ' ' + (b.getAttribute('data-test-id') || '')).trim();
           // A bad pattern from selectors.json must not throw out of every probe.
           const regexCache = new Map();
           const regexFor = (pattern) => {
@@ -382,12 +383,17 @@ internal sealed class DictationDriver {
             });
             return vis.length ? vis[0].el : null;
           };
+          // chatgpt.com first renders a static stand-in box (#pending-home-input) and swaps in
+          // the real editor once its app has loaded (~10 s in a hidden window). Text typed
+          // into the stand-in is never sent, so it doesn't count as the composer: the page
+          // isn't ready until the real one is there.
+          E.isComposerPlaceholder = (el) => !!el && el.id === 'pending-home-input';
           E.composer = () => {
             const seen = new Set();
             const hits = [];
             for (const sel of S.composer) {
               for (const el of deepQueryAll(sel)) {
-                if (seen.has(el) || E.inSideChrome(el)) continue;
+                if (seen.has(el) || E.inSideChrome(el) || E.isComposerPlaceholder(el)) continue;
                 seen.add(el);
                 hits.push(el);
               }
@@ -397,7 +403,7 @@ internal sealed class DictationDriver {
             const minTop = (window.innerHeight || 0) * 0.4;
             const extra = [];
             for (const el of deepQueryAll('[contenteditable="true"], [contenteditable="plaintext-only"], textarea, [role="textbox"]')) {
-              if (seen.has(el) || E.inSideChrome(el)) continue;
+              if (seen.has(el) || E.inSideChrome(el) || E.isComposerPlaceholder(el)) continue;
               const r = el.getBoundingClientRect();
               if (r.width < 40 || r.height < 12 || r.height > 280 || r.top < minTop) continue;
               extra.push(el);
@@ -637,7 +643,7 @@ internal sealed class DictationDriver {
           // Reconstruct GFM from ChatGPT's rendered HTML so fences, headings,
           // emphasis, lists, and tables survive the paste (innerText strips them).
           E.toMarkdown = (root) => {
-            const skipSel = 'button,svg,style,script,noscript,[aria-hidden="true"]';
+            const skipSel = 'button,svg,style,script,noscript,[aria-hidden="true"],[hidden]';
             const langOf = (code, block) => {
               const cls = ((code && code.className) || '') + '';
               const m = cls.match(/language-([a-zA-Z0-9+#._-]+)/);
@@ -689,8 +695,9 @@ internal sealed class DictationDriver {
                 return n > 1 ? b + ' ' + t + ' ' + b : b + t + b;
               }
               if (/^h[1-6]$/.test(tag)) return '\n\n' + '#'.repeat(+tag[1]) + ' ' + kids(node).trim() + '\n\n';
-              if (tag === 'strong' || tag === 'b') return '**' + kids(node) + '**';
-              if (tag === 'em' || tag === 'i') return '*' + kids(node) + '*';
+              // ChatGPT's late-2026 renderer marks bold and italic runs with data attributes on spans.
+              if (tag === 'strong' || tag === 'b' || node.hasAttribute('data-d-default-strong')) return '**' + kids(node) + '**';
+              if (tag === 'em' || tag === 'i' || node.hasAttribute('data-d-default-em') || node.hasAttribute('data-d-default-emphasis')) return '*' + kids(node) + '*';
               if (tag === 'del' || tag === 's') return '~~' + kids(node) + '~~';
               if (tag === 'a') {
                 const href = node.getAttribute('href') || '';

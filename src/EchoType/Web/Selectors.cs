@@ -8,11 +8,12 @@ namespace EchoType.Web;
 /// a button's `aria-label` and `data-testid`. The first pattern with a match wins.
 ///
 /// Verified against chatgpt.com on 2026-06-07 with a LOGGED-IN session (mac port):
-///   - composer:        div#prompt-textarea (contenteditable ProseMirror)
+///   - composer:        div#prompt-textarea (contenteditable ProseMirror); late 2026 a bare
+///                      div.ProseMirror[aria-label="Ask ChatGPT"], after a static #pending-home-input stand-in
 ///                      REMOVED from the DOM while dictation is active
 ///   - start dictation: button[aria-label="Start dictation"]
 ///   - while dictating: button[aria-label="Cancel dictation"], button[aria-label="Submit dictation"]
-///   - send:            button[aria-label="Send prompt"] / data-testid=send-button
+///   - send:            button[aria-label="Send prompt"] / data-testid=send-button; late 2026 button[aria-label="Send"]
 ///                      NEVER clicked during dictation; custom commands click it after filling the composer
 ///   - voice mode:      button[data-testid="composer-speech-button"]  (NEVER click — opens voice chat)
 ///   - logged out:      button[data-testid="login-button"] present
@@ -60,7 +61,7 @@ internal static class Selectors {
     public static readonly string[] CancelDictation = { "^cancel dictation$", "cancel.*dictation", "stop.*dictation", "discard.*dictation" };
 
     /// <summary>Safety only — patterns we must NEVER click during dictation (send / voice chat).</summary>
-    public static readonly string[] NeverClick = { "^send prompt$", "send-button", "composer-submit-button", "composer-speech-button", "start voice" };
+    public static readonly string[] NeverClick = { "^send prompt$", "^send$", "send-button", "composer-submit-button", "composer-speech-button", "start voice" };
 
     /// <summary>Idle composer: send the prompt (custom-command path only).</summary>
     public static readonly string[] SendPrompt = { "^send prompt$", "^send$", "send-button", "composer-submit-button" };
@@ -69,15 +70,18 @@ internal static class Selectors {
         "#composer-submit-button",
         "button[data-testid=\"send-button\"]",
         "button[aria-label=\"Send prompt\"]",
+        // Late 2026: the send button only has aria-label="Send" (no id or test id).
+        "button[aria-label=\"Send\"]",
     };
 
     /// <summary>While ChatGPT is writing a reply.</summary>
-    public static readonly string[] StopGenerating = { "^stop streaming$", "^stop generating$", "stop-button" };
+    public static readonly string[] StopGenerating = { "^stop streaming$", "^stop generating$", "stop-button", "^stop$" };
 
     public static readonly string[] StopGeneratingCss = {
         "button[data-testid=\"stop-button\"]",
         "button[aria-label=\"Stop streaming\"]",
         "button[aria-label=\"Stop generating\"]",
+        "button[aria-label=\"Stop\"]",
     };
 
     public static readonly string[] NewChat = { "^new chat$", "create-new-chat" };
@@ -88,10 +92,11 @@ internal static class Selectors {
         "button[aria-label=\"New chat\"]",
     };
 
-    public static readonly string[] OpenSidebar = { "^open sidebar$" };
+    public static readonly string[] OpenSidebar = { "^open sidebar$", "^show sidebar$" };
 
     public static readonly string[] OpenSidebarCss = {
         "button[aria-label=\"Open sidebar\"]",
+        "button[aria-label=\"Show sidebar\"]",
     };
 
     public static readonly string[] Assistant = {
@@ -100,9 +105,12 @@ internal static class Selectors {
         "[data-turn=\"assistant\"]",
         "[data-testid=\"assistant-message\"]",
         "[data-testid^=\"conversation-turn\"][data-turn=\"assistant\"]",
+        // Late 2026 markup: turns are only keyed for in-page search ("fallback-turn-0:1:assistant").
+        "[data-content-search-unit-key$=\":assistant\"]",
     };
 
     public static readonly string[] AssistantMarkdown = {
+        "[data-markdown-text-style=\"assistant-message\"]",
         ".markdown", ".prose", "[data-testid=\"markdown\"]", ".whitespace-pre-wrap",
     };
 
@@ -112,6 +120,8 @@ internal static class Selectors {
         "[data-turn=\"user\"]",
         "[data-testid=\"user-message\"]",
         "[data-testid^=\"conversation-turn\"][data-turn=\"user\"]",
+        "[data-content-search-unit-key$=\":user\"]",
+        "[data-user-message-bubble=\"true\"]",
     };
 
     public static SelectorSet ChatGpt { get; } = new() {
@@ -135,7 +145,7 @@ internal static class Selectors {
             "button[aria-label=\"Submit dictation\"]",
             "button[aria-label=\"Cancel dictation\"]",
         ],
-        GeneratingCss = [".result-streaming", "[data-testid=\"stop-button\"]"],
+        GeneratingCss = [".result-streaming", "[data-testid=\"stop-button\"]", "[data-talvt-turn-state=\"in_progress\"]"],
         Assistant = Assistant,
         AssistantMarkdown = AssistantMarkdown,
         User = User,
