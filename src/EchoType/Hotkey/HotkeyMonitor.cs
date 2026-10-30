@@ -325,6 +325,7 @@ internal sealed class HotkeyMonitor : IDisposable {
     private bool TryHandleHold(NativeMethods.KBDLLHOOKSTRUCT kbd, bool down, bool up) {
         uint distinguished = DistinguishedVk(kbd);
         if (down) {
+            PruneReleased(distinguished);
             AddPressed(distinguished);
             if (!TryMatchBestChord(distinguished, kbd.vkCode, out HotkeyChord matched)) {
                 return false;
@@ -379,6 +380,28 @@ internal sealed class HotkeyMonitor : IDisposable {
             }
         }
         return false;
+    }
+
+    /// <summary>
+    /// Drops keys the hook still thinks are down but Windows reports as up. A key-up
+    /// is lost when the UI thread (which runs this hook) is busy past
+    /// LowLevelHooksTimeout — e.g. a paste waiting out a held modifier. A stale Space
+    /// would make a lone Ctrl press match Ctrl+Space. <paramref name="current"/> is
+    /// skipped: its async state is not updated until the hook returns.
+    /// </summary>
+    private void PruneReleased(uint current) {
+        for (int i = _pressedCount - 1; i >= 0; i--) {
+            uint vk = _pressed[i];
+            if (vk != current && (NativeMethods.GetAsyncKeyState((int)vk) & 0x8000) == 0) {
+                _pressed[i] = _pressed[--_pressedCount];
+            }
+        }
+        for (int i = _swallowedCount - 1; i >= 0; i--) {
+            uint vk = _swallowed[i];
+            if (vk != current && (NativeMethods.GetAsyncKeyState((int)vk) & 0x8000) == 0) {
+                _swallowed[i] = _swallowed[--_swallowedCount];
+            }
+        }
     }
 
     private void AddPressed(uint vk) {
