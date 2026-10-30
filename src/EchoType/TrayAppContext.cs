@@ -2701,6 +2701,12 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             }
             await Task.Delay(100);
         }
+        // A toggle stop fires on key down: while Ctrl of Ctrl+Space is still held,
+        // the synthesized Ctrl+V arrives as a plain "v". Paste once the keys are up.
+        var keysUp = Stopwatch.StartNew();
+        while (!job.Cancelled && NativeMethods.AnyModifierDown() && keysUp.ElapsedMilliseconds < 1500) {
+            await Task.Delay(15);
+        }
         return !job.Cancelled;
     }
 
