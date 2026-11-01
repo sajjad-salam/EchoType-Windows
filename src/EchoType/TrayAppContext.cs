@@ -1220,9 +1220,9 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     }
 
     /// <summary>
-    /// Recording stopped: the pill turns into "Processing…" and slides away after a moment,
-    /// and the rest (transcript, Auto Clean, command, translation, paste) runs as a background
-    /// job. The page holding the recording goes with the job and the standby page takes the
+    /// Recording stopped: the listening HUD hides and the rest (transcript, Auto Clean,
+    /// command, translation, paste) runs as a background job with no progress pill. The page
+    /// holding the recording goes with the job and the standby page takes the
     /// next recording, so you can record again straight away; with no standby page ready the
     /// next recording starts once this transcript is in.
     /// </summary>
@@ -1262,10 +1262,9 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         };
         _deliveryTail = job.Delivered.Task;
         _jobs.Add(job);
-        _pillJob = job;
-        // The listening pill reshapes into "Processing…" and parks after ParkAfterMs.
-        StatusOverlay.ShowWorking(WorkStage.Transcribing, _web.Site.DisplayName,
-            cap: JobExpectsReply(job) ? 0.45f : 0.9f, restart: true);
+        // No progress pill for dictation jobs: the listening HUD hides and everything
+        // carries on in the background (pastes, ask replies, notices still appear).
+        StatusOverlay.HideListening();
         Log.Write(job.Kind + " #" + job.Id + ": recording stopped (" + job.HeldSeconds.ToString("0.0") + "s), processing in the background");
 
         if (micOpen) {
@@ -2701,12 +2700,9 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             }
             await Task.Delay(100);
         }
-        // A toggle stop fires on key down: while Ctrl of Ctrl+Space is still held,
-        // the synthesized Ctrl+V arrives as a plain "v". Paste once the keys are up.
-        var keysUp = Stopwatch.StartNew();
-        while (!job.Cancelled && NativeMethods.AnyModifierDown() && keysUp.ElapsedMilliseconds < 1500) {
-            await Task.Delay(15);
-        }
+        // Keys the user is still holding (Ctrl of Ctrl+Space, the Windows key…) are
+        // neutralized in Paster right before the synthesized Ctrl+V / Enter, so no
+        // wait for their release is needed here.
         return !job.Cancelled;
     }
 
@@ -3117,9 +3113,9 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             }
         }
 
-        // The progress pill belongs to the jobs: FinishListeningAsync reshapes the listening
-        // HUD into "Processing…", the job advances it (JobProgress) and fills it on success
-        // (CompleteJobPill). Failures and success notices replace it in place.
+        // No progress pill for dictation jobs: FinishListeningAsync hides the listening HUD
+        // and the job runs silently in the background. Failures and success notices appear
+        // on their own.
     }
 
     private void UpdateStatusIcon() {

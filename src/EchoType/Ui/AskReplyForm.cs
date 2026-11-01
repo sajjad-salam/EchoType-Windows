@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.Drawing.Imaging;
 using System.Text.RegularExpressions;
 using EchoType.Native;
@@ -56,6 +57,13 @@ internal sealed partial class AskReplyForm : Form {
     private int _dragX;
     private int _dragY;
     private bool _dragging;
+    /// <summary>Where the image drag started; null while no drag is pending.</summary>
+    private Point? _imageDragStart;
+    private bool _imageDragging;
+    /// <summary>True once a drag actually started, so the MouseUp after it does not copy.</summary>
+    private bool _imageDragged;
+    /// <summary>The temp PNG handed to drop targets, reused within one popup.</summary>
+    private string? _dragImagePath;
 
     /// <summary>
     /// Shows <paramref name="content"/>, closing any previous popup. Without
@@ -197,8 +205,10 @@ internal sealed partial class AskReplyForm : Form {
                 Cursor = Cursors.Hand,
                 Margin = new Padding(0, 0, 0, 10),
             };
-            _picture.Click += (_, _) => CopyImage();
-            new ToolTip().SetToolTip(_picture, Loc.T("Click to copy the image"));
+            _picture.MouseDown += OnPictureMouseDown;
+            _picture.MouseMove += OnPictureMouseMove;
+            _picture.MouseUp += OnPictureMouseUp;
+            new ToolTip().SetToolTip(_picture, Loc.T("Click to copy the image, or drag it to another app"));
             content_.Controls.Add(_picture);
         }
 
@@ -457,6 +467,75 @@ internal sealed partial class AskReplyForm : Form {
         if (TrySetClipboard(data)) {
             Flash(_copyImage, Loc.T("Copied the image — paste it anywhere with Ctrl+V."));
         }
+    }
+
+    // Drag the image out of the popup (Explorer, browsers, chat apps…); a plain click
+    // (no drag past DragSize) still copies it.
+    private void OnPictureMouseDown(object? sender, MouseEventArgs e) {
+        if (e.Button == MouseButtons.Left) {
+            _imageDragStart = e.Location;
+            _imageDragged = false;
+        }
+    }
+
+    private void OnPictureMouseMove(object? sender, MouseEventArgs e) {
+        if (_imageDragging || e.Button != MouseButtons.Left
+            || _content.Image == null
+            || !_imageDragStart.HasValue
+            || DragSizeContains(e.Location)) {
+            return;
+        }
+        _imageDragging = true;
+        _imageDragged = true;
+        try {
+            DoDragDrop(BuildImageDragData(), DragDropEffects.Copy);
+        } catch (Exception ex) {
+            Log.Write("ask popup: drag failed: " + ex.Message);
+        } finally {
+            _imageDragging = false;
+            _imageDragStart = null;
+        }
+    }
+
+    private void OnPictureMouseUp(object? sender, MouseEventArgs e) {
+        // Copy only for a plain click: the press started on the picture and no drag happened.
+        if (e.Button == MouseButtons.Left && !_imageDragged && _imageDragStart.HasValue) {
+            CopyImage();
+        }
+        _imageDragStart = null;
+        _imageDragging = false;
+        _imageDragged = false;
+    }
+
+    private bool DragSizeContains(Point p) {
+        var size = SystemInformation.DragSize;
+        return Math.Abs(p.X - _imageDragStart!.Value.X) < size.Width
+            && Math.Abs(p.Y - _imageDragStart!.Value.Y) < size.Height;
+    }
+
+    /// <summary>
+    /// File drop (a PNG in %TEMP%\EchoType, reused within one popup) plus the bitmap and
+    /// a "PNG" stream, so both file-based and image-based drop targets accept it.
+    /// Falls back to image-only data when the temp file cannot be written.
+    /// </summary>
+    private DataObject BuildImageDragData() {
+        var data = new DataObject();
+        data.SetImage(_content.Image!);
+        using var png = new MemoryStream();
+        _content.Image!.Save(png, ImageFormat.Png);
+        data.SetData("PNG", false, new MemoryStream(png.ToArray()));
+        try {
+            if (_dragImagePath == null) {
+                string dir = Path.Combine(Path.GetTempPath(), "EchoType");
+                Directory.CreateDirectory(dir);
+                _dragImagePath = Path.Combine(dir, "echotype-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".png");
+                File.WriteAllBytes(_dragImagePath, png.ToArray());
+            }
+            data.SetFileDropList(new StringCollection { _dragImagePath });
+        } catch (Exception ex) {
+            Log.Write("ask popup: temp PNG for drag failed: " + ex.Message);
+        }
+        return data;
     }
 
     private void SaveImage() {

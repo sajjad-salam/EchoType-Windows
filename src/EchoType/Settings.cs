@@ -92,9 +92,10 @@ internal sealed class Settings {
     public bool LongDictation { get; set; }
 
     /// <summary>
-    /// After a recording stops, the pill shows "Processing…" for this many milliseconds and
-    /// then slides away; the work carries on in the background and still pastes when done,
-    /// and you can start the next recording meanwhile. 0 = keep it up until the work ends.
+    /// Kept for settings-file compatibility only: dictation jobs no longer show a progress
+    /// pill after a recording — the listening HUD hides and the work carries on silently
+    /// in the background. (Still feeds <see cref="StatusOverlay"/>' park timer for the
+    /// separate translate-selection pill.) 0 = keep a pill up until its work ends.
     /// </summary>
     [JsonPropertyName("progressPillHideMs")]
     public int ProgressPillHideMs { get; set; } = 1200;

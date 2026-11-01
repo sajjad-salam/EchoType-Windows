@@ -200,6 +200,67 @@ internal static partial class NativeMethods {
         return false;
     }
 
+    /// <summary>Unassigned VK used as a harmless mask after releasing Win/Alt, so the
+    /// release does not open the Start menu or activate a menu bar.</summary>
+    public const uint VK_MASK = 0xE8;
+
+    /// <summary>Keys whose scan code needs KEYEVENTF_EXTENDEDKEY to be recognized.</summary>
+    private static bool IsExtendedKey(uint vk) =>
+        vk is 0x21 or 0x22 or 0x23 or 0x24 or 0x25 or 0x26 or 0x27 or 0x28 // PgUp…Down arrows
+            or 0x2D or 0x2E                                               // Insert, Delete
+            or 0x5B or 0x5C                                               // LWin, RWin
+            or 0x6F or 0xA3 or 0xA5;                                      // Num/, RCtrl, RAlt
+
+    /// <summary>
+    /// Appends to <paramref name="inputs"/> the INPUTs that release every keyboard key
+    /// currently held down (mouse buttons excepted), so a synthesized Ctrl+V or Enter sent
+    /// in the SAME SendInput batch cannot combine with keys the user is still holding
+    /// (Win+Ctrl+V, Shift+Enter…). SendInput guarantees no user input (auto-repeat) lands
+    /// inside one batch. The keys are not re-pressed; the target app keeps them.
+    /// Returns the released virtual keys for logging.
+    /// </summary>
+    public static List<uint> AppendHeldKeyReleases(List<INPUT> inputs) {
+        var released = new List<uint>();
+        for (uint vk = 0x08; vk <= 0xFE; vk++) {
+            // Mouse buttons (0x01–0x06, loop starts at 0x08), generic Shift/Ctrl/Menu
+            // duplicates of the L/R keys, and VK_PACKET/our mask VK.
+            if (vk is 0x10 or 0x11 or 0x12 or 0xE7 or 0xE8) {
+                continue;
+            }
+            if ((GetAsyncKeyState((int)vk) & 0x8000) == 0) {
+                continue;
+            }
+            released.Add(vk);
+            inputs.Add(new INPUT {
+                type = INPUT_KEYBOARD,
+                U = new InputUnion { ki = new KEYBDINPUT {
+                    wVk = (ushort)vk,
+                    wScan = (ushort)MapVirtualKeyW(vk, MAPVK_VK_TO_VSC),
+                    dwFlags = KEYEVENTF_KEYUP | (IsExtendedKey(vk) ? KEYEVENTF_EXTENDEDKEY : 0),
+                    dwExtraInfo = EchoTypeExtraInfo,
+                } },
+            });
+        }
+        if (released.Count == 0) {
+            return released;
+        }
+        // Releasing Win or Alt alone would open the Start menu / focus the menu bar:
+        // sneak an unassigned key in so the release is treated as part of a combo.
+        if (released.Exists(vk => vk is VK_LWIN or VK_RWIN or VK_LMENU or VK_RMENU)) {
+            foreach (bool up in new[] { false, true }) {
+                inputs.Add(new INPUT {
+                    type = INPUT_KEYBOARD,
+                    U = new InputUnion { ki = new KEYBDINPUT {
+                        wVk = (ushort)VK_MASK,
+                        dwFlags = up ? KEYEVENTF_KEYUP : 0,
+                        dwExtraInfo = EchoTypeExtraInfo,
+                    } },
+                });
+            }
+        }
+        return released;
+    }
+
     // ---- Foreground window inspection / restore ----
 
     public const int SW_SHOW = 5;

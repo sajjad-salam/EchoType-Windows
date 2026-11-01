@@ -149,20 +149,14 @@ internal static class Paster {
     }
 
     /// <summary>
-    /// Waits for the paste to settle, then submits with Enter. A modifier still held
-    /// from the hotkey (Shift in Ctrl+Shift+Space) would turn this into Shift+Enter,
-    /// which inserts a newline in chat boxes instead of sending — so wait it out.
+    /// Waits for the paste to settle, then submits with Enter. Any key the user is still
+    /// holding (a modifier from the hotkey, the Windows key…) is released in the same
+    /// SendInput batch, so the Enter cannot arrive as Shift/Ctrl+Enter or Win+Enter.
     /// </summary>
     private static void PressEnter(int delayMs) {
         Thread.Sleep(delayMs);
-        var wait = System.Diagnostics.Stopwatch.StartNew();
-        while (NativeMethods.AnyModifierDown() && wait.ElapsedMilliseconds < 1500) {
-            Thread.Sleep(15);
-        }
-        bool held = NativeMethods.AnyModifierDown();
         SynthesizeEnter();
-        Log.Write("paste: sent Enter after " + (delayMs + wait.ElapsedMilliseconds) + "ms"
-            + (held ? " (modifier still held — may arrive as Shift/Ctrl+Enter)" : ""));
+        Log.Write("paste: sent Enter after " + delayMs + "ms");
     }
 
     private static PasteTarget? CaptureResume(PasteTarget? target) =>
@@ -232,36 +226,62 @@ internal static class Paster {
 
     private static void SynthesizeCtrlV() {
         var extra = NativeMethods.EchoTypeExtraInfo;
-        var inputs = new NativeMethods.INPUT[4];
-        inputs[0].type = NativeMethods.INPUT_KEYBOARD;
-        inputs[0].U.ki = new NativeMethods.KEYBDINPUT { wVk = (ushort)NativeMethods.VK_CONTROL, dwExtraInfo = extra };
-        inputs[1].type = NativeMethods.INPUT_KEYBOARD;
-        inputs[1].U.ki = new NativeMethods.KEYBDINPUT { wVk = (ushort)NativeMethods.VK_V, dwExtraInfo = extra };
-        inputs[2].type = NativeMethods.INPUT_KEYBOARD;
-        inputs[2].U.ki = new NativeMethods.KEYBDINPUT { wVk = (ushort)NativeMethods.VK_V, dwFlags = NativeMethods.KEYEVENTF_KEYUP, dwExtraInfo = extra };
-        inputs[3].type = NativeMethods.INPUT_KEYBOARD;
-        inputs[3].U.ki = new NativeMethods.KEYBDINPUT { wVk = (ushort)NativeMethods.VK_CONTROL, dwFlags = NativeMethods.KEYEVENTF_KEYUP, dwExtraInfo = extra };
-        NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeMethods.INPUT>());
+        // Held keys (a held Win/Shift/Alt would turn the paste into Win+Ctrl+V…) and the
+        // Ctrl+V go out in ONE SendInput batch: SendInput never interleaves user input
+        // (auto-repeat) inside a batch.
+        var inputs = new List<NativeMethods.INPUT>(8);
+        LogHeldKeyReleases(NativeMethods.AppendHeldKeyReleases(inputs));
+        inputs.Add(new NativeMethods.INPUT {
+            type = NativeMethods.INPUT_KEYBOARD,
+            U = new NativeMethods.InputUnion { ki = new NativeMethods.KEYBDINPUT { wVk = (ushort)NativeMethods.VK_CONTROL, dwExtraInfo = extra } },
+        });
+        inputs.Add(new NativeMethods.INPUT {
+            type = NativeMethods.INPUT_KEYBOARD,
+            U = new NativeMethods.InputUnion { ki = new NativeMethods.KEYBDINPUT { wVk = (ushort)NativeMethods.VK_V, dwExtraInfo = extra } },
+        });
+        inputs.Add(new NativeMethods.INPUT {
+            type = NativeMethods.INPUT_KEYBOARD,
+            U = new NativeMethods.InputUnion { ki = new NativeMethods.KEYBDINPUT { wVk = (ushort)NativeMethods.VK_V, dwFlags = NativeMethods.KEYEVENTF_KEYUP, dwExtraInfo = extra } },
+        });
+        inputs.Add(new NativeMethods.INPUT {
+            type = NativeMethods.INPUT_KEYBOARD,
+            U = new NativeMethods.InputUnion { ki = new NativeMethods.KEYBDINPUT { wVk = (ushort)NativeMethods.VK_CONTROL, dwFlags = NativeMethods.KEYEVENTF_KEYUP, dwExtraInfo = extra } },
+        });
+        NativeMethods.SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<NativeMethods.INPUT>());
     }
 
     private static void SynthesizeEnter() {
         var extra = NativeMethods.EchoTypeExtraInfo;
+        // Held keys and the Enter go out in ONE SendInput batch (see SynthesizeCtrlV).
         ushort scan = (ushort)NativeMethods.MapVirtualKeyW(NativeMethods.VK_RETURN, NativeMethods.MAPVK_VK_TO_VSC);
-        var inputs = new NativeMethods.INPUT[2];
-        inputs[0].type = NativeMethods.INPUT_KEYBOARD;
-        inputs[0].U.ki = new NativeMethods.KEYBDINPUT {
-            wVk = (ushort)NativeMethods.VK_RETURN,
-            wScan = scan,
-            dwExtraInfo = extra,
-        };
-        inputs[1].type = NativeMethods.INPUT_KEYBOARD;
-        inputs[1].U.ki = new NativeMethods.KEYBDINPUT {
-            wVk = (ushort)NativeMethods.VK_RETURN,
-            wScan = scan,
-            dwFlags = NativeMethods.KEYEVENTF_KEYUP,
-            dwExtraInfo = extra,
-        };
-        NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeMethods.INPUT>());
+        var inputs = new List<NativeMethods.INPUT>(4);
+        LogHeldKeyReleases(NativeMethods.AppendHeldKeyReleases(inputs));
+        inputs.Add(new NativeMethods.INPUT {
+            type = NativeMethods.INPUT_KEYBOARD,
+            U = new NativeMethods.InputUnion { ki = new NativeMethods.KEYBDINPUT {
+                wVk = (ushort)NativeMethods.VK_RETURN,
+                wScan = scan,
+                dwExtraInfo = extra,
+            } },
+        });
+        inputs.Add(new NativeMethods.INPUT {
+            type = NativeMethods.INPUT_KEYBOARD,
+            U = new NativeMethods.InputUnion { ki = new NativeMethods.KEYBDINPUT {
+                wVk = (ushort)NativeMethods.VK_RETURN,
+                wScan = scan,
+                dwFlags = NativeMethods.KEYEVENTF_KEYUP,
+                dwExtraInfo = extra,
+            } },
+        });
+        NativeMethods.SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<NativeMethods.INPUT>());
+    }
+
+    /// <summary>Logs the keys a paste batch released, e.g. "0x5B, 0xA2".</summary>
+    private static void LogHeldKeyReleases(List<uint> released) {
+        if (released.Count > 0) {
+            Log.Write("paste: released held keys " + string.Join(", ",
+                released.Select(vk => "0x" + vk.ToString("X2"))));
+        }
     }
 
     private static string? TryGetClipboardText() {

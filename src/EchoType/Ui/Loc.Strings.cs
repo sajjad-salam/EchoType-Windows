@@ -266,6 +266,7 @@ internal static partial class Loc {
         // Ask model popup
         ["Ask {0}"] = "سؤال {0}",
         ["Click to copy the image"] = "انقر لنسخ الصورة",
+        ["Click to copy the image, or drag it to another app"] = "انقر لنسخ الصورة، أو اسحبها إلى تطبيق آخر",
         ["The reply contains a video. Open it in the {0} window to play or download it."] = "يحتوي الرد على فيديو. افتحه في نافذة {0} لتشغيله أو تنزيله.",
         ["The reply has {0} images; the largest is shown. Open the {1} window to see all of them."] = "يحتوي الرد على {0} صور؛ تُعرض أكبرها. افتح نافذة {1} لرؤيتها كلها.",
         ["Copy text"] = "نسخ النص",
