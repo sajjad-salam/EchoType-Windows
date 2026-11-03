@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using EchoType.Audio;
+using System.Diagnostics;
 using EchoType.Hotkey;
 using EchoType.Input;
 using EchoType.Native;
@@ -137,6 +137,10 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     private bool _commandsUiOpen;
     private CancellationTokenSource? _listenWatchCts;
     private CancellationTokenSource? _micLevelCts;
+    private bool _benchmarkRecording;
+    private bool _benchmarkRunning;
+    private string _benchmarkStatus = Loc.T("Record once, then time the same audio in ChatGPT, Gemini and Claude.");
+    private DictationDriver? _benchmarkCaptureDriver;
     private int _listenFinishGate;
     /// <summary>Long dictation: transcripts of the pieces the site already cut off this session.</summary>
     private readonly List<string> _longPieces = [];
@@ -3207,6 +3211,154 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         _ = WarmupAsync();
     }
 
+    private void OpenModel(TranscriptionProvider provider) {
+        SelectModel(provider);
+        if (_settings.TranscriptionProvider == provider) {
+            OpenModelWindow();
+        }
+    }
+
+    private void ToggleModelBenchmark() {
+        if (_benchmarkRecording) {
+            _ = FinishModelBenchmarkAsync();
+        } else if (!_benchmarkRunning) {
+            _ = StartModelBenchmarkAsync();
+        }
+    }
+
+    private async Task StartModelBenchmarkAsync() {
+        if (IsBusy) {
+            ShowBalloon(Loc.T("Wait until dictation finishes before starting the speed test."), OverlayKind.Warning);
+            return;
+        }
+        _benchmarkRunning = true;
+        _benchmarkStatus = Loc.T("Opening the microphone…");
+        NotifyUi();
+        try {
+            ReadyOutcome ready = await _web.EnsureReadyAsync();
+            if (ready != ReadyOutcome.Ready || _web.Driver == null) {
+                throw new DriverException(ready == ReadyOutcome.LoggedOut ? DriverFailure.LoggedOut : DriverFailure.NotReady,
+                    "speed test model is not ready");
+            }
+            _benchmarkCaptureDriver = _web.Driver;
+            await _benchmarkCaptureDriver.StartDictationAsync();
+            await _benchmarkCaptureDriver.StartBenchmarkCaptureAsync();
+            _benchmarkRecording = true;
+            _benchmarkStatus = Loc.T("Recording one shared sample — speak naturally, then click Finish recording.");
+            SetPhase(AppPhase.Listening);
+            Sounds.Start();
+            NotifyUi();
+        } catch (Exception ex) {
+            Log.Write("benchmark: start failed: " + ex.Message);
+            if (_benchmarkCaptureDriver != null) {
+                try { await _benchmarkCaptureDriver.CancelDictationAsync(); } catch { }
+            }
+            _benchmarkRunning = false;
+            _benchmarkRecording = false;
+            _benchmarkCaptureDriver = null;
+            _benchmarkStatus = Loc.T("Could not start the speed test. Open each model once and make sure you are signed in.");
+            ResetToIdle();
+            NotifyUi();
+        }
+    }
+
+    private sealed record BenchmarkResult(TranscriptionProvider Provider, string Name, TimeSpan Elapsed, string? Error);
+
+    private async Task FinishModelBenchmarkAsync() {
+        if (!_benchmarkRecording || _benchmarkCaptureDriver == null) {
+            return;
+        }
+        _benchmarkRecording = false;
+        _benchmarkStatus = Loc.T("Preparing the shared recording…");
+        SetPhase(AppPhase.Transcribing);
+        NotifyUi();
+        string? audioPath = null;
+        var temporary = new List<ChatGPTWebController>();
+        try {
+            audioPath = await _benchmarkCaptureDriver.StopBenchmarkCaptureAsync(Path.Combine(Path.GetTempPath(), "EchoType"));
+            await _benchmarkCaptureDriver.CancelDictationAsync();
+            Sounds.RecordingStopped();
+            var controllers = new Dictionary<TranscriptionProvider, ChatGPTWebController>();
+            foreach (TranscriptionProvider provider in Enum.GetValues<TranscriptionProvider>()) {
+                ChatGPTWebController? existing = ExistingWebFor(provider);
+                if (existing == null) {
+                    existing = new ChatGPTWebController(ChatSite.For(provider));
+                    temporary.Add(existing);
+                }
+                controllers[provider] = existing;
+            }
+            _benchmarkStatus = Loc.T("Testing ChatGPT, Gemini and Claude with the same audio…");
+            NotifyUi();
+            BenchmarkResult[] results = await Task.WhenAll(controllers.Select(pair =>
+                BenchmarkModelAsync(pair.Key, pair.Value, audioPath)));
+            BenchmarkResult[] ranked = results.Where(r => r.Error == null).OrderBy(r => r.Elapsed).ToArray();
+            if (ranked.Length == 0) {
+                _benchmarkStatus = Loc.T("No model completed the test. Open each model and confirm that you are signed in.");
+            } else {
+                string ranking = string.Join("  ·  ", ranked.Select((r, i) => $"{i + 1}. {r.Name} {r.Elapsed.TotalSeconds:0.0}s"));
+                string failed = string.Join(", ", results.Where(r => r.Error != null).Select(r => r.Name));
+                _benchmarkStatus = Loc.F("Fastest: {0}. {1}", ranked[0].Name, ranking)
+                    + (failed.Length == 0 ? "" : "  ·  " + Loc.F("Could not test: {0}", failed));
+                ShowBalloon(Loc.F("Fastest transcription model: {0} ({1:0.0}s).", ranked[0].Name, ranked[0].Elapsed.TotalSeconds), OverlayKind.Success);
+            }
+        } catch (Exception ex) {
+            Log.Write("benchmark: failed: " + ex);
+            try { await _benchmarkCaptureDriver.CancelDictationAsync(); } catch { }
+            _benchmarkStatus = Loc.T("The speed test did not finish. Open each model once and make sure audio uploads are allowed.");
+        } finally {
+            foreach (ChatGPTWebController web in temporary) {
+                web.Dispose();
+            }
+            if (audioPath != null) {
+                try { File.Delete(audioPath); } catch { }
+            }
+            _benchmarkCaptureDriver = null;
+            _benchmarkRunning = false;
+            ResetToIdle();
+            NotifyUi();
+        }
+    }
+
+    private ChatGPTWebController? ExistingWebFor(TranscriptionProvider provider) {
+        string id = ChatSite.For(provider).Id;
+        if (_web.Site.Id == id) return _web;
+        if (_cleanWeb?.Site.Id == id) return _cleanWeb;
+        if (_askWeb?.Site.Id == id) return _askWeb;
+        return null;
+    }
+
+    private static async Task<BenchmarkResult> BenchmarkModelAsync(
+        TranscriptionProvider provider, ChatGPTWebController web, string audioPath) {
+        string name = ChatSite.For(provider).DisplayName;
+        await web.Turn.WaitAsync();
+        try {
+            ReadyOutcome ready = await web.EnsureReadyAsync();
+            if (ready != ReadyOutcome.Ready || web.Driver == null) {
+                return new(provider, name, TimeSpan.Zero, ready.ToString());
+            }
+            var driver = web.Driver;
+            var before = await driver.SnapshotCommandTurnAsync();
+            var timer = Stopwatch.StartNew();
+            await driver.SetComposerAsync("Transcribe the attached audio exactly as spoken. Output only the transcript, with no introduction or commentary.");
+            if (!await driver.AttachFilesAsync([audioPath])) {
+                return new(provider, name, timer.Elapsed, "audio upload failed");
+            }
+            await driver.SendPromptAsync();
+            ModelReply reply = await driver.AwaitAssistantReplyAsync(before, TimeSpan.FromSeconds(90));
+            timer.Stop();
+            if (reply.IsEmpty) {
+                return new(provider, name, timer.Elapsed, "no transcript returned");
+            }
+            Log.Write($"benchmark: {name} completed in {timer.Elapsed.TotalSeconds:0.00}s ({reply.Text.Length} chars)");
+            return new(provider, name, timer.Elapsed, null);
+        } catch (Exception ex) {
+            Log.Write("benchmark: " + name + " failed: " + ex.Message);
+            return new(provider, name, TimeSpan.Zero, ex.Message);
+        } finally {
+            web.Turn.Release();
+        }
+    }
+
     private void OnPressEnterAfterPasteChanged(object? sender, EventArgs e) {
         if (_settings.PressEnterAfterPaste == _pressEnterItem.Checked) {
             return;
@@ -3682,6 +3834,9 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     float IAppWindowHost.MicLevel => _micMeter.Level;
     bool IAppWindowHost.CopyMicSpectrum(float[] dest) => _micMeter.CopySpectrum(dest);
     string IAppWindowHost.StatusText => StatusLine();
+    bool IAppWindowHost.BenchmarkRecording => _benchmarkRecording;
+    bool IAppWindowHost.BenchmarkRunning => _benchmarkRunning;
+    string IAppWindowHost.BenchmarkStatus => _benchmarkStatus;
 
     void IAppWindowHost.SetShowAskReplyWindow(bool value) {
         if (_settings.ShowAskReplyWindow == value) {
@@ -3742,6 +3897,8 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     void IAppWindowHost.EditAppProfiles() => EditAppProfiles();
 
     void IAppWindowHost.SelectModel(TranscriptionProvider provider) => SelectModel(provider);
+    void IAppWindowHost.OpenModel(TranscriptionProvider provider) => OpenModel(provider);
+    void IAppWindowHost.ToggleModelBenchmark() => ToggleModelBenchmark();
     void IAppWindowHost.SetToggleRecording(bool toggle) => SetToggleRecording(toggle);
     void IAppWindowHost.ToggleLoginWindow() => OpenModelWindow();
     void IAppWindowHost.OpenCommands() => OpenCommandsUi();

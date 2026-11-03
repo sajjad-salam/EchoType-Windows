@@ -1553,6 +1553,55 @@ internal sealed class DictationDriver {
     }
 
     /// <summary>
+    /// Records a copy of the live browser microphone stream for the model speed test.
+    /// The site's own recorder keeps running independently; every benchmark provider later
+    /// receives these exact bytes, so the comparison never depends on three separate takes.
+    /// </summary>
+    public async Task StartBenchmarkCaptureAsync() {
+        string result = await EvalAsync("(function(){"
+            + "var streams=window.__etStreams||[];"
+            + "var stream=streams.find(function(s){return s&&s.getAudioTracks&&s.getAudioTracks().some(function(t){return t.readyState==='live';});});"
+            + "if(!stream||typeof MediaRecorder==='undefined')return 'no-stream';"
+            + "if(window.__etBenchRecorder&&window.__etBenchRecorder.state!=='inactive')return 'already-recording';"
+            + "var mime=['audio/webm;codecs=opus','audio/webm'].find(function(m){return MediaRecorder.isTypeSupported(m);})||'';"
+            + "window.__etBenchChunks=[];window.__etBenchData='';window.__etBenchReady=false;"
+            + "var rec=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream);"
+            + "window.__etBenchRecorder=rec;window.__etBenchMime=rec.mimeType||mime||'audio/webm';"
+            + "rec.ondataavailable=function(e){if(e.data&&e.data.size)window.__etBenchChunks.push(e.data);};"
+            + "rec.onstop=function(){var blob=new Blob(window.__etBenchChunks,{type:window.__etBenchMime});var reader=new FileReader();"
+            + "reader.onloadend=function(){window.__etBenchData=String(reader.result||'').split(',').pop()||'';window.__etBenchReady=true;};"
+            + "reader.onerror=function(){window.__etBenchReady=true;};reader.readAsDataURL(blob);};"
+            + "rec.start(250);return 'ok';})() ");
+        if (result != "ok") {
+            throw new DriverException(DriverFailure.NotReady, "benchmark audio capture unavailable (" + result + ")");
+        }
+    }
+
+    public async Task<string> StopBenchmarkCaptureAsync(string directory) {
+        string stopped = await EvalAsync("(function(){var r=window.__etBenchRecorder;if(!r)return 'missing';"
+            + "if(r.state!=='inactive')r.stop();return 'ok';})()");
+        if (stopped != "ok") {
+            throw new DriverException(DriverFailure.NotReady, "benchmark audio capture was not running");
+        }
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline) {
+            if (await EvalLiteAsync("window.__etBenchReady===true") == "true") {
+                break;
+            }
+            await Task.Delay(80);
+        }
+        string base64 = await EvalLiteAsync("window.__etBenchData||''");
+        if (base64.Length == 0) {
+            throw new DriverException(DriverFailure.JavaScript, "recorded benchmark audio was empty");
+        }
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "model-speed-test-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".webm");
+        await File.WriteAllBytesAsync(path, Convert.FromBase64String(base64));
+        _ = await EvalLiteAsync("(window.__etBenchData='',window.__etBenchChunks=[],window.__etBenchReady=false,'ok')");
+        return path;
+    }
+
+    /// <summary>
     /// Engagement can be just "getUserMedia requested" (Gemini, Claude), which is before the
     /// mic records anything. Wait for the stream so the start cue doesn't play while speech
     /// is still being dropped. Returns at once if no request is pending (nothing to wait on).
@@ -2102,6 +2151,7 @@ internal sealed class DictationDriver {
         ".mp3" => "audio/mpeg",
         ".m4a" => "audio/mp4",
         ".wav" => "audio/wav",
+        ".webm" => "audio/webm",
         ".mp4" => "video/mp4",
         _ => Input.ImageReferences.MimeType(path),
     };

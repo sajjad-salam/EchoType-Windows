@@ -49,11 +49,16 @@ internal interface IAppWindowHost {
     /// <summary>Fills the live voice spectrum (0–1 per bar); false when none is available.</summary>
     bool CopyMicSpectrum(float[] dest);
     string StatusText { get; }
+    bool BenchmarkRecording { get; }
+    bool BenchmarkRunning { get; }
+    string BenchmarkStatus { get; }
     /// <summary>Saves the interface language ("en" / "ar") and restarts EchoType to apply it.</summary>
     void SetUiLanguage(string code);
     void SetShowAskReplyWindow(bool value);
     event Action? UiChanged;
     void SelectModel(TranscriptionProvider provider);
+    void OpenModel(TranscriptionProvider provider);
+    void ToggleModelBenchmark();
     void SetToggleRecording(bool toggle);
     void SetMuteOthers(bool value);
     void SetLongDictation(bool value);
@@ -108,6 +113,8 @@ internal sealed class AppWindow : Form {
     private readonly HudCard _statusCard;
     private readonly HudButton _loginButton;
     private readonly HudSegmented _modelSeg;
+    private readonly HudButton _benchmarkButton;
+    private readonly HudSettingRow _benchmarkRow;
     private readonly HudSegmented _modeSeg;
     private readonly HudHotkeyRow _dictationKey;
     private readonly HudHotkeyRow _secondDictationKey;
@@ -228,6 +235,19 @@ internal sealed class AppWindow : Form {
         _loginButton.BackColor = HudTheme.Ink;
         _loginButton.Click += (_, _) => _host.ToggleLoginWindow();
         _statusCard.Controls.Add(_loginButton);
+
+        AddSection(home, Loc.T("Model windows"));
+        var models = AddCard(home);
+        AddModelLauncher(models, TranscriptionProvider.ChatGpt, "ChatGPT");
+        AddModelLauncher(models, TranscriptionProvider.Gemini, "Gemini");
+        AddModelLauncher(models, TranscriptionProvider.Claude, "Claude");
+
+        AddSection(home, Loc.T("Speed test"));
+        var benchmark = AddCard(home);
+        _benchmarkButton = MakeButton(Loc.T("Start speed test"), HudButton.Kind.Inverse);
+        _benchmarkButton.Click += (_, _) => _host.ToggleModelBenchmark();
+        _benchmarkRow = AddRow(benchmark, Loc.T("Compare every model"),
+            Loc.T("Record once, then time the same audio in ChatGPT, Gemini and Claude."), _benchmarkButton, 210);
 
         AddSection(home, Loc.T("Dictation"));
         var dictation = AddCard(home);
@@ -526,6 +546,11 @@ internal sealed class AppWindow : Form {
         try {
             var s = _host.Settings;
             _modelSeg.SetSilent(ProviderIndex(s.TranscriptionProvider));
+            _benchmarkButton.Text = Loc.T(_host.BenchmarkRecording ? "Finish recording"
+                : _host.BenchmarkRunning ? "Testing…" : "Start speed test");
+            _benchmarkButton.Enabled = !_host.BenchmarkRunning || _host.BenchmarkRecording;
+            _benchmarkRow.Description = _host.BenchmarkStatus;
+            _benchmarkRow.Invalidate();
             _cleanToggle.SetSilent(s.AutoClean);
             _cleanSeg.SetSilent(ProviderIndex(s.CleanProvider));
             _cleanWindowButton.Text = Loc.F(_host.CleanWindowVisible ? "Close {0} window" : "Open {0} window", _host.CleanModelName);
@@ -997,6 +1022,12 @@ internal sealed class AppWindow : Form {
             }
         };
         return seg;
+    }
+
+    private void AddModelLauncher(HudCard card, TranscriptionProvider provider, string name) {
+        var open = MakeButton(Loc.T("Open"), HudButton.Kind.Ghost);
+        open.Click += (_, _) => _host.OpenModel(provider);
+        AddRow(card, name, Loc.T("Open this model directly."), open, 150);
     }
 
     private static int ProviderIndex(TranscriptionProvider provider) => provider switch {
