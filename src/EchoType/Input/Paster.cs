@@ -36,6 +36,32 @@ internal static class Paster {
     public static void Copy(string text) => CopyToClipboard(text);
 
     /// <summary>
+    /// Replaces a just-typed trigger with <paramref name="text"/> using one input batch.
+    /// The complete expansion is placed on the clipboard and pasted in one operation, so
+    /// multiline shortcuts are not replayed line by line as keyboard input.
+    /// </summary>
+    public static void ReplaceTypedText(string text, int charactersToErase) {
+        CopyToClipboard(text);
+
+        var inputs = new List<NativeMethods.INPUT>(charactersToErase * 2 + 8);
+        LogHeldKeyReleases(NativeMethods.AppendHeldKeyReleases(inputs));
+        for (int i = 0; i < charactersToErase; i++) {
+            inputs.Add(KeyInput(NativeMethods.VK_BACK));
+            inputs.Add(KeyInput(NativeMethods.VK_BACK, NativeMethods.KEYEVENTF_KEYUP));
+        }
+        inputs.Add(KeyInput(NativeMethods.VK_CONTROL));
+        inputs.Add(KeyInput(NativeMethods.VK_V));
+        inputs.Add(KeyInput(NativeMethods.VK_V, NativeMethods.KEYEVENTF_KEYUP));
+        inputs.Add(KeyInput(NativeMethods.VK_CONTROL, NativeMethods.KEYEVENTF_KEYUP));
+
+        uint sent = NativeMethods.SendInput(
+            (uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<NativeMethods.INPUT>());
+        Log.Write("text-shortcuts: erased a " + charactersToErase + "-char trigger and pasted "
+            + text.Length + " chars" + (sent == inputs.Count ? "" : " (SendInput sent "
+            + sent + "/" + inputs.Count + ")"));
+    }
+
+    /// <summary>
     /// Puts <paramref name="text"/> on the clipboard after a short delay so a
     /// Ctrl+V already in flight can still read whatever we just pasted. Qt and
     /// Electron apps often read the clipboard on the next event-loop tick.
@@ -249,6 +275,15 @@ internal static class Paster {
         });
         NativeMethods.SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<NativeMethods.INPUT>());
     }
+
+    private static NativeMethods.INPUT KeyInput(uint vk, uint flags = 0) => new() {
+        type = NativeMethods.INPUT_KEYBOARD,
+        U = new NativeMethods.InputUnion { ki = new NativeMethods.KEYBDINPUT {
+            wVk = (ushort)vk,
+            dwFlags = flags,
+            dwExtraInfo = NativeMethods.EchoTypeExtraInfo,
+        } },
+    };
 
     private static void SynthesizeEnter() {
         var extra = NativeMethods.EchoTypeExtraInfo;

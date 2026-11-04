@@ -8,7 +8,7 @@ namespace EchoType.Input;
 /// Text shortcuts in any app: remembers the word being typed (via a second low-level
 /// keyboard hook, translated with the foreground window's keyboard layout) and, when
 /// Space follows a trigger, swallows that Space, erases the trigger with Backspace and
-/// types the expansion plus a space. The clipboard is never used.
+/// pastes the expansion plus a space through the clipboard.
 ///
 /// The word is forgotten on anything that may move the caret or change the target:
 /// Enter, Tab, arrows and other non-character keys, Ctrl/Alt/Win shortcuts, mouse
@@ -18,16 +18,13 @@ namespace EchoType.Input;
 /// Both hooks live on a dedicated thread that does nothing but pump their messages.
 /// Windows waits for every low-level hook on every key and mouse move, so hooks on the
 /// busy UI thread (WebView2, paste sleeps) stall input system-wide, and Windows then
-/// silently drops them. The Backspace/typing is sent from another thread, outside any
+/// silently drops them. The Backspace/paste is sent from another thread, outside any
 /// hook callback: the injected keys pass through these hooks too, and a callback that
 /// waits on them blocks the whole input queue.
 /// </summary>
 internal sealed class TextExpander : IDisposable {
 
     private const int BufferSize = 64;
-    /// <summary>Key events per SendInput call when typing a long expansion.</summary>
-    private const int SendBatch = 200;
-
     private sealed record Entry(string Trigger, string Text);
 
     /// <summary>When false keys pass through untouched and nothing is remembered.</summary>
@@ -57,6 +54,7 @@ internal sealed class TextExpander : IDisposable {
         Update(shortcuts, enabled);
         _pending = new BlockingCollection<Entry>();
         _sender = new Thread(SendLoop) { IsBackground = true, Name = "EchoType text shortcuts (send)" };
+        _sender.SetApartmentState(ApartmentState.STA);
         _sender.Start(_pending);
         using var ready = new ManualResetEventSlim();
         _hookThread = new Thread(HookLoop) {
@@ -271,7 +269,7 @@ internal sealed class TextExpander : IDisposable {
         if (pid == (uint)Environment.ProcessId) {
             return false; // our own editor: let the trigger be typed as-is
         }
-        // Never send input from inside the callback; the sender thread types it.
+        // Never send input from inside the callback; the sender thread pastes it.
         return _pending?.TryAdd(best) == true;
     }
 
@@ -297,48 +295,11 @@ internal sealed class TextExpander : IDisposable {
     }
 
     private static void Send(Entry entry) {
-        // Typed key by key, never pasted, so the text never touches the clipboard (or its
-        // Win+V history). A line break is Shift+Enter: a new line in chat apps, not "send".
+        // Paste the complete expansion at once. In particular, multiline text must not be
+        // replayed as Enter/Shift+Enter keystrokes because chat apps can submit each line.
         string text = entry.Text.ReplaceLineEndings("\n") + " ";
         int erase = entry.Trigger.Count(c => !char.IsLowSurrogate(c));
-        var inputs = new List<NativeMethods.INPUT>(erase * 2 + text.Length * 2);
-        for (int i = 0; i < erase; i++) {
-            inputs.Add(Key(NativeMethods.VK_BACK, 0, 0));
-            inputs.Add(Key(NativeMethods.VK_BACK, 0, NativeMethods.KEYEVENTF_KEYUP));
-        }
-        foreach (char c in text) {
-            if (c == '\n') {
-                inputs.Add(Key(NativeMethods.VK_SHIFT, 0, 0));
-                inputs.Add(Key(NativeMethods.VK_RETURN, 0, 0));
-                inputs.Add(Key(NativeMethods.VK_RETURN, 0, NativeMethods.KEYEVENTF_KEYUP));
-                inputs.Add(Key(NativeMethods.VK_SHIFT, 0, NativeMethods.KEYEVENTF_KEYUP));
-            } else {
-                inputs.Add(Key(0, c, NativeMethods.KEYEVENTF_UNICODE));
-                inputs.Add(Key(0, c, NativeMethods.KEYEVENTF_UNICODE | NativeMethods.KEYEVENTF_KEYUP));
-            }
-        }
-        // Long texts go in batches so slower apps (Electron, terminals) keep up.
-        uint sent = 0;
-        for (int offset = 0; offset < inputs.Count; offset += SendBatch) {
-            var batch = inputs.GetRange(offset, Math.Min(SendBatch, inputs.Count - offset)).ToArray();
-            sent += NativeMethods.SendInput((uint)batch.Length, batch, Marshal.SizeOf<NativeMethods.INPUT>());
-            if (offset + SendBatch < inputs.Count) {
-                Thread.Sleep(15);
-            }
-        }
-        Log.Write("text-shortcuts: expanded a " + erase + "-char trigger, typed " + text.Length + " chars"
-            + (sent == inputs.Count ? "" : " (SendInput sent " + sent + "/" + inputs.Count + ")"));
-    }
-
-    private static NativeMethods.INPUT Key(uint vk, ushort scan, uint flags) {
-        var input = new NativeMethods.INPUT { type = NativeMethods.INPUT_KEYBOARD };
-        input.U.ki = new NativeMethods.KEYBDINPUT {
-            wVk = (ushort)vk,
-            wScan = scan,
-            dwFlags = flags,
-            dwExtraInfo = NativeMethods.EchoTypeExtraInfo,
-        };
-        return input;
+        Paster.ReplaceTypedText(text, erase);
     }
 
     private static bool IsDown(uint vk) => (NativeMethods.GetAsyncKeyState((int)vk) & 0x8000) != 0;
