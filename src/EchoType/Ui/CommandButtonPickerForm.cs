@@ -86,6 +86,7 @@ internal sealed class CommandButtonPickerForm : Form {
             _tcs.TrySetResult(null);
         };
         Loc.ApplyTo(this);
+        DialogTheme.Apply(this);
     }
 
     public void PlaceNearCursor() {

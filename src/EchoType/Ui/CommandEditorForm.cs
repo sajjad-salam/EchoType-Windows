@@ -126,6 +126,8 @@ internal sealed class CommandEditorForm : Form {
         }
         SyncAddEnabled();
         Loc.ApplyTo(this);
+        DialogTheme.Apply(this);
+        DialogTheme.Primary(save);
     }
 
     private void AddAction(CommandButton button, bool focus) {

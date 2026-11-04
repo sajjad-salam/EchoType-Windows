@@ -88,6 +88,8 @@ internal sealed class QuickWordReplacementForm : Form {
         Controls.Add(layout);
         Controls.Add(buttons);
         Loc.ApplyTo(this);
+        DialogTheme.Apply(this);
+        DialogTheme.Primary(add);
         UpdateStatus();
     }
 

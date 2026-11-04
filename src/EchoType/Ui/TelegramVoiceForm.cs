@@ -87,6 +87,8 @@ internal sealed class TelegramVoiceForm : Form {
 
         Controls.Add(layout);
         Loc.ApplyTo(this);
+        DialogTheme.Apply(this);
+        DialogTheme.Primary(save);
     }
 
     private static Label Heading(string text) => new() {

@@ -71,6 +71,8 @@ internal sealed class CleanPromptForm : Form {
         Controls.Add(hint);
         Controls.Add(buttons);
         Loc.ApplyTo(this);
+        DialogTheme.Apply(this);
+        DialogTheme.Primary(save);
     }
 
     protected override void OnShown(EventArgs e) {

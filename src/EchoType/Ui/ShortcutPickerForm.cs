@@ -134,6 +134,8 @@ internal sealed class ShortcutPickerForm : Form {
         Controls.Add(body);
         Controls.Add(buttons);
         Loc.ApplyTo(this);
+        DialogTheme.Apply(this);
+        DialogTheme.Primary(save);
     }
 
     private static TableLayoutPanel Field(string title, Control field, string hint) {

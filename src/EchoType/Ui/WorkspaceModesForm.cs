@@ -102,6 +102,9 @@ internal sealed class WorkspaceModesForm : Form {
         Controls.Add(hint);
         Controls.Add(buttons);
         Loc.ApplyTo(this);
+        DialogTheme.Apply(this);
+        DialogTheme.Primary(save);
+        DialogTheme.Danger(remove);
     }
 
     private static WorkspaceMode Clone(WorkspaceMode m) =>

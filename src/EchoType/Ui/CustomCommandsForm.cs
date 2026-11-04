@@ -84,6 +84,9 @@ internal sealed class CustomCommandsForm : Form {
 
         Reload();
         Loc.ApplyTo(this);
+        DialogTheme.Apply(this);
+        DialogTheme.Primary(add);
+        DialogTheme.Danger(delete);
     }
 
     protected override void OnShown(EventArgs e) {

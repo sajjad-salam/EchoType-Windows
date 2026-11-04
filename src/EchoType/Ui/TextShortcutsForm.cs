@@ -92,6 +92,9 @@ internal sealed class TextShortcutsForm : Form {
         Controls.Add(hint);
         Controls.Add(buttons);
         Loc.ApplyTo(this);
+        DialogTheme.Apply(this);
+        DialogTheme.Primary(save);
+        DialogTheme.Danger(remove);
     }
 
     protected override void OnShown(EventArgs e) {

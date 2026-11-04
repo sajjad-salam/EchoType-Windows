@@ -93,6 +93,8 @@ internal sealed class OpenAiKeyForm : Form {
 
         Controls.Add(layout);
         Loc.ApplyTo(this);
+        DialogTheme.Apply(this);
+        DialogTheme.Primary(save);
     }
 
     private async Task TestAsync() {

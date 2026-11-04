@@ -300,7 +300,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         var commandsRoot = new ToolStripMenuItem(Loc.T("Commands"));
         commandsRoot.DropDownItems.Add(_commandsRoot);
         commandsRoot.DropDownItems.Add(Loc.T("Workspace modes…"), null, (_, _) => EditWorkspaceModes());
-        commandsRoot.DropDownItems.Add(Loc.T("Word replacements…"), null, (_, _) => EditWordReplacements());
+        commandsRoot.DropDownItems.Add(Loc.T("Find & replace…"), null, (_, _) => EditWordReplacements());
         commandsRoot.DropDownItems.Add(new ToolStripSeparator());
         commandsRoot.DropDownItems.Add(_textShortcutsItem);
         commandsRoot.DropDownItems.Add(Loc.T("Text shortcuts…"), null, (_, _) => EditTextShortcuts());
@@ -663,7 +663,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             _settings.WordReplacements = form.Result;
             _settings.Save();
             Log.Write("settings: wordReplacements=" + form.Result.Count);
-            ShowBalloon(Loc.F("Word replacements saved ({0}).", form.Result.Count), OverlayKind.Success);
+            ShowBalloon(Loc.F("Find & replace rules saved ({0}).", form.Result.Count), OverlayKind.Success);
             NotifyUi();
         } catch (Exception ex) {
             Log.Write("word replacements ui: " + ex);

@@ -10,11 +10,9 @@ internal static class Program {
     [STAThread]
     private static void Main(string[] args) {
         ApplicationConfiguration.Initialize();
-        try {
-            Application.SetColorMode(SystemColorMode.Dark);
-        } catch (MissingMethodException) {
-            // WinForms dark mode arrived in .NET 9.
-        }
+        // EchoType's settings surface is deliberately light. Forcing WinForms dark
+        // mode made native title bars and stock controls disagree with the app and
+        // caused unreliable caption repainting on some Windows builds.
         WebView2RuntimeLocator.EnsureNativeLoader();
 
         // Catch UI-thread exceptions so a bad page interaction can't kill the tray app.

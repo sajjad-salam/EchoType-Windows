@@ -84,6 +84,8 @@ internal sealed class ModelShortcutsForm : Form {
         Controls.Add(body);
         Controls.Add(buttons);
         Loc.ApplyTo(this);
+        DialogTheme.Apply(this);
+        DialogTheme.Primary(save);
     }
 
     private TextBox CaptureBox(Func<int> current) => new() {

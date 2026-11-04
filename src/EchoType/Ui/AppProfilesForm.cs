@@ -142,6 +142,9 @@ internal sealed class AppProfilesForm : Form {
         Controls.Add(hint);
         Controls.Add(buttons);
         Loc.ApplyTo(this);
+        DialogTheme.Apply(this);
+        DialogTheme.Primary(save);
+        DialogTheme.Danger(remove);
     }
 
     private static DataGridViewComboBoxColumn MakeChoiceColumn(string name, string header, Choice[] choices, float weight) =>

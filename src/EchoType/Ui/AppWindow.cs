@@ -106,8 +106,6 @@ internal sealed class AppWindow : Form {
     private readonly Panel _sidebar;
     private readonly Panel _header;
     private readonly Panel _scrollHost;
-    private readonly HudCaptionButton _min;
-    private readonly HudCaptionButton _close;
     private readonly List<Page> _pages = [];
     private readonly Dictionary<Control, int> _rowHeights = [];
     private readonly HudCard _statusCard;
@@ -180,7 +178,11 @@ internal sealed class AppWindow : Form {
         _version = typeof(AppWindow).Assembly.GetName().Version?.ToString(3) ?? "";
 
         Text = "EchoType";
-        FormBorderStyle = FormBorderStyle.None;
+        // Keep the native Windows frame. It provides reliable close/minimize hit
+        // targets, DPI handling, snapping, keyboard access and accessibility.
+        FormBorderStyle = FormBorderStyle.Sizable;
+        MaximizeBox = true;
+        MinimizeBox = true;
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
         ShowInTaskbar = true;
@@ -209,13 +211,6 @@ internal sealed class AppWindow : Form {
         };
         _header.Paint += OnHeaderPaint;
         HookDrag(_header);
-
-        _close = new HudCaptionButton { Icon = HudCaptionButton.Glyph.Close };
-        _min = new HudCaptionButton { Icon = HudCaptionButton.Glyph.Minimize };
-        _close.Click += (_, _) => Close();
-        _min.Click += (_, _) => WindowState = FormWindowState.Minimized;
-        _header.Controls.Add(_close);
-        _header.Controls.Add(_min);
 
         _scrollHost = new Panel {
             Dock = DockStyle.Fill,
@@ -342,7 +337,7 @@ internal sealed class AppWindow : Form {
         AddRow(voiceCard, Loc.T("Workspace modes"), Loc.T("Say a word to press a shortcut."), modesButton, 200);
         var wordsButton = MakeButton(Loc.T("Edit…"), HudButton.Kind.Ghost);
         wordsButton.Click += (_, _) => _host.EditWordReplacements();
-        AddRow(voiceCard, Loc.T("Word replacements"), Loc.T("Fix dialect words in every transcript."), wordsButton, 200);
+        AddRow(voiceCard, Loc.T("Find & replace"), Loc.T("Correct words or phrases in every transcript."), wordsButton, 200);
         _addWordKey = AddHotkey(voiceCard, Loc.T("Add word shortcut"), AppShortcut.AddWordReplacement);
         _addWordKey.MultiKey = true;
 
@@ -418,20 +413,10 @@ internal sealed class AppWindow : Form {
             _tick.Start();
         };
         Resize += (_, _) => {
-            PlaceCaptionButtons();
             Relayout();
             _header.Invalidate();
         };
         Deactivate += (_, _) => StopCapture();
-    }
-
-    protected override CreateParams CreateParams {
-        get {
-            var cp = base.CreateParams;
-            cp.Style |= NativeMethods.WS_THICKFRAME;
-            cp.ClassStyle |= NativeMethods.CS_DROPSHADOW;
-            return cp;
-        }
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e) {
@@ -475,32 +460,6 @@ internal sealed class AppWindow : Form {
             e.Handled = true;
         }
         base.OnKeyDown(e);
-    }
-
-    protected override void WndProc(ref Message m) {
-        if (m.Msg == NativeMethods.WM_NCCALCSIZE && m.WParam != IntPtr.Zero) {
-            m.Result = IntPtr.Zero;
-            return;
-        }
-        if (m.Msg == NativeMethods.WM_NCHITTEST) {
-            int x = (short)(m.LParam.ToInt32() & 0xFFFF);
-            int y = (short)((m.LParam.ToInt32() >> 16) & 0xFFFF);
-            var pt = PointToClient(new Point(x, y));
-            int grip = HudTheme.Dip(this, 8);
-            bool left = pt.X <= grip;
-            bool right = pt.X >= ClientSize.Width - grip;
-            bool top = pt.Y <= grip;
-            bool bottom = pt.Y >= ClientSize.Height - grip;
-            if (top && left) { m.Result = (IntPtr)NativeMethods.HTTOPLEFT; return; }
-            if (top && right) { m.Result = (IntPtr)NativeMethods.HTTOPRIGHT; return; }
-            if (bottom && left) { m.Result = (IntPtr)NativeMethods.HTBOTTOMLEFT; return; }
-            if (bottom && right) { m.Result = (IntPtr)NativeMethods.HTBOTTOMRIGHT; return; }
-            if (left) { m.Result = (IntPtr)NativeMethods.HTLEFT; return; }
-            if (right) { m.Result = (IntPtr)NativeMethods.HTRIGHT; return; }
-            if (top) { m.Result = (IntPtr)NativeMethods.HTTOP; return; }
-            if (bottom) { m.Result = (IntPtr)NativeMethods.HTBOTTOM; return; }
-        }
-        base.WndProc(ref m);
     }
 
     protected override void Dispose(bool disposing) {
@@ -726,8 +685,7 @@ internal sealed class AppWindow : Form {
         var page = _pages[_page];
         int w = _header.Width;
         int left = HudTheme.Dip(this, PagePadDip + 4);
-        int buttonsEdge = Loc.Rtl ? w - _min.Right : _min.Left;
-        int right = Math.Max(left + 40, buttonsEdge - HudTheme.Dip(this, 12));
+        int right = Math.Max(left + 40, w - left);
         const TextFormatFlags flags = TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
         TextRenderer.DrawText(e.Graphics, page.Title, HudTheme.Hero,
             Loc.Mirror(new Rectangle(left, HudTheme.Dip(this, 28), right - left, HudTheme.Dip(this, 38)), w),
@@ -823,21 +781,6 @@ internal sealed class AppWindow : Form {
         _header.Height = HudTheme.Dip(this, HeaderHeightDip);
         _translateLanguage.ItemHeight = HudTheme.Dip(this, 28);
         _translateSelectionLanguage.ItemHeight = HudTheme.Dip(this, 28);
-        PlaceCaptionButtons();
-    }
-
-    private void PlaceCaptionButtons() {
-        int pad = HudTheme.Dip(this, 12);
-        _close.Size = new Size(HudTheme.Dip(this, 36), HudTheme.Dip(this, 28));
-        _min.Size = _close.Size;
-        int top = HudTheme.Dip(this, 12);
-        if (Loc.Rtl) {
-            _close.Location = new Point(pad, top);
-            _min.Location = new Point(_close.Right + HudTheme.Dip(this, 4), top);
-            return;
-        }
-        _close.Location = new Point(_header.Width - _close.Width - pad, top);
-        _min.Location = new Point(_close.Left - _min.Width - HudTheme.Dip(this, 4), top);
     }
 
     private void ShowPage(int index) {
