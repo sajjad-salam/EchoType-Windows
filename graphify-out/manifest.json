@@ -1,0 +1,470 @@
+{
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\.github\\workflows\\ci.yml": {
+    "mtime": 1789402068.1911385,
+    "seen": 1793988245.1482642,
+    "ast_hash": "5ab2458360390fb4306a3a270b00e0a5",
+    "semantic_hash": "5ab2458360390fb4306a3a270b00e0a5"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\.github\\workflows\\release.yml": {
+    "mtime": 1789402082.1023536,
+    "seen": 1793988245.1482642,
+    "ast_hash": "24b2484b23ce4cd8aa326948d095c39a",
+    "semantic_hash": "24b2484b23ce4cd8aa326948d095c39a"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\EchoType.slnx": {
+    "mtime": 1789399662.109864,
+    "seen": 1793988245.1482642,
+    "ast_hash": "da8b533e984af0f1382b1eec77d1ed9c",
+    "semantic_hash": "da8b533e984af0f1382b1eec77d1ed9c"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\AppPhase.cs": {
+    "mtime": 1789477712.4254391,
+    "seen": 1793988245.1482642,
+    "ast_hash": "9fd107a8a654163400ca00c9ca01bbaf",
+    "semantic_hash": "9fd107a8a654163400ca00c9ca01bbaf"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\AppProfile.cs": {
+    "mtime": 1793010955.8037422,
+    "seen": 1793988245.1482642,
+    "ast_hash": "b822caa01f0abfe73012ff8457476889",
+    "semantic_hash": "b822caa01f0abfe73012ff8457476889"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Audio\\BackgroundAudioMuter.cs": {
+    "mtime": 1791831729.3795936,
+    "seen": 1793988245.1482642,
+    "ast_hash": "be5888e72bcd6ef6e82d49e79e06eecb",
+    "semantic_hash": "be5888e72bcd6ef6e82d49e79e06eecb"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Audio\\CoreAudio.cs": {
+    "mtime": 1791831711.4922278,
+    "seen": 1793988245.1482642,
+    "ast_hash": "4bfd6cf066e76bebe40f4ee115ad9424",
+    "semantic_hash": "4bfd6cf066e76bebe40f4ee115ad9424"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Audio\\MicInputVolume.cs": {
+    "mtime": 1791831716.289576,
+    "seen": 1793988245.1482642,
+    "ast_hash": "c9fb63f0b5593d7c3b9551a322b896b4",
+    "semantic_hash": "c9fb63f0b5593d7c3b9551a322b896b4"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Audio\\MicLevelMeter.cs": {
+    "mtime": 1791831716.2400708,
+    "seen": 1793988245.1482642,
+    "ast_hash": "764dc542b050c180b0ca14e42ff1eda5",
+    "semantic_hash": "764dc542b050c180b0ca14e42ff1eda5"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\CustomCommand.cs": {
+    "mtime": 1789479668.766555,
+    "seen": 1793988245.1482642,
+    "ast_hash": "eaf1ccd2d5adcfe34ee26b8102b9fddc",
+    "semantic_hash": "eaf1ccd2d5adcfe34ee26b8102b9fddc"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\EchoType.csproj": {
+    "mtime": 1793290637.8970263,
+    "seen": 1793988245.1482642,
+    "ast_hash": "78de0d99d5251d8fca79289f1c2b8c33",
+    "semantic_hash": "78de0d99d5251d8fca79289f1c2b8c33"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Hotkey\\HotkeyChord.cs": {
+    "mtime": 1789479628.241988,
+    "seen": 1793988245.1482642,
+    "ast_hash": "5476fd0cbe7f63691ee31be29f663a12",
+    "semantic_hash": "5476fd0cbe7f63691ee31be29f663a12"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Hotkey\\HotkeyConflicts.cs": {
+    "mtime": 1793290637.89803,
+    "seen": 1793988245.1482642,
+    "ast_hash": "85fcc4c0a3df81c40a2da77112c05450",
+    "semantic_hash": "85fcc4c0a3df81c40a2da77112c05450"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Hotkey\\HotkeyMonitor.cs": {
+    "mtime": 1793379378.3368008,
+    "seen": 1793988245.1482642,
+    "ast_hash": "2f963d0a999105f4e4484364d14663f3",
+    "semantic_hash": "2f963d0a999105f4e4484364d14663f3"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Hotkey\\HotkeyNames.cs": {
+    "mtime": 1789479629.9489744,
+    "seen": 1793988245.1482642,
+    "ast_hash": "b50eda8c5e05a7b6792e0cade000234c",
+    "semantic_hash": "b50eda8c5e05a7b6792e0cade000234c"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Input\\ImageReferences.cs": {
+    "mtime": 1791828671.0125859,
+    "seen": 1793988245.1482642,
+    "ast_hash": "360f6f39d4c3a11d9085d9fb3c0cdc52",
+    "semantic_hash": "360f6f39d4c3a11d9085d9fb3c0cdc52"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Input\\PasteTarget.cs": {
+    "mtime": 1793010956.4012878,
+    "seen": 1793988245.1482642,
+    "ast_hash": "2fd2f3b4d228bd483484c8e43b5b58ea",
+    "semantic_hash": "2fd2f3b4d228bd483484c8e43b5b58ea"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Input\\Paster.cs": {
+    "mtime": 1793988130.4903457,
+    "seen": 1793988245.1482642,
+    "ast_hash": "d0da1564f5edf4fe725f8c7ee521640d",
+    "semantic_hash": "d0da1564f5edf4fe725f8c7ee521640d"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Input\\SelectionCapture.cs": {
+    "mtime": 1793011790.0877042,
+    "seen": 1793988245.1482642,
+    "ast_hash": "686a06f39f1814d9daa7f4b89615929b",
+    "semantic_hash": "686a06f39f1814d9daa7f4b89615929b"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Input\\TextExpander.cs": {
+    "mtime": 1793806733.112595,
+    "seen": 1793988245.1482642,
+    "ast_hash": "32f5069f1ef398e703a3cc3c97f7a10e",
+    "semantic_hash": "32f5069f1ef398e703a3cc3c97f7a10e"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Log.cs": {
+    "mtime": 1789405547.2432616,
+    "seen": 1793988245.1482642,
+    "ast_hash": "8248dd59d489460c07c749ec189636dd",
+    "semantic_hash": "8248dd59d489460c07c749ec189636dd"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Native\\NativeMethods.cs": {
+    "mtime": 1793525323.6637168,
+    "seen": 1793988245.1482642,
+    "ast_hash": "b8cffea8b723b7731761b61a58088e0a",
+    "semantic_hash": "b8cffea8b723b7731761b61a58088e0a"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Native\\VirtualDesktops.cs": {
+    "mtime": 1789456691.753339,
+    "seen": 1793988245.1482642,
+    "ast_hash": "0d1f69dfad8eaa78274cdcfb4f2b8611",
+    "semantic_hash": "0d1f69dfad8eaa78274cdcfb4f2b8611"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Program.cs": {
+    "mtime": 1793808917.0704052,
+    "seen": 1793988245.1482642,
+    "ast_hash": "ecd9b9d730ef98796f650ca50402ff3e",
+    "semantic_hash": "ecd9b9d730ef98796f650ca50402ff3e"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Settings.cs": {
+    "mtime": 1793524763.3352733,
+    "seen": 1793988245.1482642,
+    "ast_hash": "971ab5200ca3e52f45e8e021b533042d",
+    "semantic_hash": "971ab5200ca3e52f45e8e021b533042d"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Sounds.cs": {
+    "mtime": 1793290637.8990312,
+    "seen": 1793988245.1482642,
+    "ast_hash": "89ba76f97e8758b2c3f08906937076d0",
+    "semantic_hash": "89ba76f97e8758b2c3f08906937076d0"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\StartupRegistration.cs": {
+    "mtime": 1791438258.9316556,
+    "seen": 1793988245.1482642,
+    "ast_hash": "53b96ac761aa894ca92a022adcc3d4e7",
+    "semantic_hash": "53b96ac761aa894ca92a022adcc3d4e7"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Telegram\\GeminiWebTranscriber.cs": {
+    "mtime": 1793302113.924948,
+    "seen": 1793988245.1482642,
+    "ast_hash": "0951f03bcf4b2dc121d2e2b848768df8",
+    "semantic_hash": "0951f03bcf4b2dc121d2e2b848768df8"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Telegram\\TelegramBot.cs": {
+    "mtime": 1793291662.1225998,
+    "seen": 1793988245.1482642,
+    "ast_hash": "63253cbc23c24fd849b843aa879d9390",
+    "semantic_hash": "63253cbc23c24fd849b843aa879d9390"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Telegram\\TelegramVoiceRelay.cs": {
+    "mtime": 1793302132.2462664,
+    "seen": 1793988245.1482642,
+    "ast_hash": "0c5bf42ee17defe307ac0e5c61ca92ea",
+    "semantic_hash": "0c5bf42ee17defe307ac0e5c61ca92ea"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\TextShortcut.cs": {
+    "mtime": 1793263186.2293878,
+    "seen": 1793988245.1482642,
+    "ast_hash": "14510408bc5d015a8d6d03644d610e9a",
+    "semantic_hash": "14510408bc5d015a8d6d03644d610e9a"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\TranscriptionProvider.cs": {
+    "mtime": 1791445310.3687658,
+    "seen": 1793988245.1482642,
+    "ast_hash": "6fa18759e30b964171e7d0fc16d75924",
+    "semantic_hash": "6fa18759e30b964171e7d0fc16d75924"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Translation\\ChatGptTranslation.cs": {
+    "mtime": 1793377180.1209807,
+    "seen": 1793988245.1482642,
+    "ast_hash": "20d26a5cc58147e188653974038fbd9c",
+    "semantic_hash": "20d26a5cc58147e188653974038fbd9c"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Translation\\GoogleTranslation.cs": {
+    "mtime": 1793010129.808338,
+    "seen": 1793988245.1482642,
+    "ast_hash": "a195fef9a05946033a3b111112b9075e",
+    "semantic_hash": "a195fef9a05946033a3b111112b9075e"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Translation\\LayoutPreservingTranslation.cs": {
+    "mtime": 1793010129.768072,
+    "seen": 1793988245.1482642,
+    "ast_hash": "b6a96451716790422fbc6d691cbb942a",
+    "semantic_hash": "b6a96451716790422fbc6d691cbb942a"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Translation\\OpenAiTranslation.cs": {
+    "mtime": 1793010075.4482608,
+    "seen": 1793988245.1482642,
+    "ast_hash": "4f5c37dc8fbc289d26a9c7f3cdf33932",
+    "semantic_hash": "4f5c37dc8fbc289d26a9c7f3cdf33932"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\TrayAppContext.cs": {
+    "mtime": 1793988051.7769382,
+    "seen": 1793988245.1482642,
+    "ast_hash": "85a620c1cb064b7715aaf949d70071a8",
+    "semantic_hash": "85a620c1cb064b7715aaf949d70071a8"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\TrayIcons.cs": {
+    "mtime": 1789660483.980407,
+    "seen": 1793988245.1482642,
+    "ast_hash": "e13b75b773db5bf9fbe03ba479c7bcc5",
+    "semantic_hash": "e13b75b773db5bf9fbe03ba479c7bcc5"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\AppProfilesForm.cs": {
+    "mtime": 1793808946.3940072,
+    "seen": 1793988245.1482642,
+    "ast_hash": "b4beb09f1619992d4e60fe0529610529",
+    "semantic_hash": "b4beb09f1619992d4e60fe0529610529"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\AppWindow.cs": {
+    "mtime": 1793809116.4820898,
+    "seen": 1793988245.1482642,
+    "ast_hash": "ae255f9bfcac39921a659655d0e2656f",
+    "semantic_hash": "ae255f9bfcac39921a659655d0e2656f"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\ArabicFont.cs": {
+    "mtime": 1791825782.9047894,
+    "seen": 1793988245.1482642,
+    "ast_hash": "9ca00b1e060ce1b842202f9b3f341024",
+    "semantic_hash": "9ca00b1e060ce1b842202f9b3f341024"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\AskReplyForm.cs": {
+    "mtime": 1793525283.918573,
+    "seen": 1793988245.1482642,
+    "ast_hash": "ff2545c6cc2c81b824620911c9d7a34b",
+    "semantic_hash": "ff2545c6cc2c81b824620911c9d7a34b"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\CleanPromptForm.cs": {
+    "mtime": 1793808946.3949847,
+    "seen": 1793988245.1482642,
+    "ast_hash": "d7e2be2fca5433b7d51b1100d33819f5",
+    "semantic_hash": "d7e2be2fca5433b7d51b1100d33819f5"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\CommandButtonPickerForm.cs": {
+    "mtime": 1793808946.3959634,
+    "seen": 1793988245.1482642,
+    "ast_hash": "02225ae48dddd416ffa1940d80e8fb83",
+    "semantic_hash": "02225ae48dddd416ffa1940d80e8fb83"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\CommandEditorForm.cs": {
+    "mtime": 1793808946.3959634,
+    "seen": 1793988245.1482642,
+    "ast_hash": "b429d53e21f4502b76255d7347f931f7",
+    "semantic_hash": "b429d53e21f4502b76255d7347f931f7"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\CustomCommandsForm.cs": {
+    "mtime": 1793808946.396936,
+    "seen": 1793988245.1482642,
+    "ast_hash": "19a8a102e6621585b5bed4a8e88a60b4",
+    "semantic_hash": "19a8a102e6621585b5bed4a8e88a60b4"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\DialogTheme.cs": {
+    "mtime": 1793809116.4820898,
+    "seen": 1793988245.1482642,
+    "ast_hash": "7f2588139d57b6ca23f77a2f8b65082e",
+    "semantic_hash": "7f2588139d57b6ca23f77a2f8b65082e"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\HudControls.cs": {
+    "mtime": 1793014291.4133646,
+    "seen": 1793988245.1482642,
+    "ast_hash": "262d109f3838b0b1e9d3b35c1a92c395",
+    "semantic_hash": "262d109f3838b0b1e9d3b35c1a92c395"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\HudTheme.cs": {
+    "mtime": 1793014291.4153438,
+    "seen": 1793988245.1482642,
+    "ast_hash": "fdae7303c505d1304efeacc0e1d55ef9",
+    "semantic_hash": "fdae7303c505d1304efeacc0e1d55ef9"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\LayeredSurface.cs": {
+    "mtime": 1789490989.433779,
+    "seen": 1793988245.1482642,
+    "ast_hash": "809e13d35e59d731fb6ddc80179c21cf",
+    "semantic_hash": "809e13d35e59d731fb6ddc80179c21cf"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\Loc.Strings.cs": {
+    "mtime": 1793809237.10412,
+    "seen": 1793988245.1482642,
+    "ast_hash": "8cfb67312842ccacddf48b644968f77a",
+    "semantic_hash": "8cfb67312842ccacddf48b644968f77a"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\Loc.cs": {
+    "mtime": 1793290637.9010296,
+    "seen": 1793988245.1482642,
+    "ast_hash": "70ec79ddb7e506ecd0bd80f66a3fc7bf",
+    "semantic_hash": "70ec79ddb7e506ecd0bd80f66a3fc7bf"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\MarkdownRtf.cs": {
+    "mtime": 1793377094.43854,
+    "seen": 1793988245.1482642,
+    "ast_hash": "d1798e8101fb6d08a5c1a6a3af612cf5",
+    "semantic_hash": "d1798e8101fb6d08a5c1a6a3af612cf5"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\ModelShortcutsForm.cs": {
+    "mtime": 1793808946.3979135,
+    "seen": 1793988245.1482642,
+    "ast_hash": "db689f6ad01131ddf6cfd0a139180d97",
+    "semantic_hash": "db689f6ad01131ddf6cfd0a139180d97"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\OpenAiKeyForm.cs": {
+    "mtime": 1793808946.3979135,
+    "seen": 1793988245.1482642,
+    "ast_hash": "843f0224a60cffb27d7427a49de8f11c",
+    "semantic_hash": "843f0224a60cffb27d7427a49de8f11c"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\QuickWordReplacementForm.cs": {
+    "mtime": 1793808946.3988893,
+    "seen": 1793988245.1482642,
+    "ast_hash": "9591130c12c7ec385c6917eb979e7b5f",
+    "semantic_hash": "9591130c12c7ec385c6917eb979e7b5f"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\ShortcutPickerForm.cs": {
+    "mtime": 1793808946.3988893,
+    "seen": 1793988245.1482642,
+    "ast_hash": "080178a73147c3d02a966edac6b5b75f",
+    "semantic_hash": "080178a73147c3d02a966edac6b5b75f"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\StatusOverlay.cs": {
+    "mtime": 1793377771.8355293,
+    "seen": 1793988245.1482642,
+    "ast_hash": "479128deed994e4e6bbf4473e786b231",
+    "semantic_hash": "479128deed994e4e6bbf4473e786b231"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\TelegramVoiceForm.cs": {
+    "mtime": 1793808946.3998933,
+    "seen": 1793988245.1482642,
+    "ast_hash": "0e864ef8f2eaa2f934204ed2e90149a1",
+    "semantic_hash": "0e864ef8f2eaa2f934204ed2e90149a1"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\TextShortcutsForm.cs": {
+    "mtime": 1793808946.3998933,
+    "seen": 1793988245.1482642,
+    "ast_hash": "5e33bda58c2e370f8fced8f9a93a89ba",
+    "semantic_hash": "5e33bda58c2e370f8fced8f9a93a89ba"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\WordReplacementsForm.cs": {
+    "mtime": 1793809128.4418068,
+    "seen": 1793988245.1482642,
+    "ast_hash": "b957d047435adb87b225d7aecc6380bd",
+    "semantic_hash": "b957d047435adb87b225d7aecc6380bd"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Ui\\WorkspaceModesForm.cs": {
+    "mtime": 1793808946.4008746,
+    "seen": 1793988245.1482642,
+    "ast_hash": "de8b3255572e6fce3d08f9c33327f97e",
+    "semantic_hash": "de8b3255572e6fce3d08f9c33327f97e"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Web\\ChatGPTWebController.cs": {
+    "mtime": 1793377870.344853,
+    "seen": 1793988245.1482642,
+    "ast_hash": "b8e4feb847b84d81f120818781ed8f3c",
+    "semantic_hash": "b8e4feb847b84d81f120818781ed8f3c"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Web\\ChatSite.cs": {
+    "mtime": 1791445310.3740964,
+    "seen": 1793988245.1482642,
+    "ast_hash": "408e9001acaa3c9d730d0e8e5f41f578",
+    "semantic_hash": "408e9001acaa3c9d730d0e8e5f41f578"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Web\\ClaudeSelectors.cs": {
+    "mtime": 1791445310.3740964,
+    "seen": 1793988245.1482642,
+    "ast_hash": "3bbf6af9a2857fc6400fb06c54fcdfd6",
+    "semantic_hash": "3bbf6af9a2857fc6400fb06c54fcdfd6"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Web\\DictationDriver.cs": {
+    "mtime": 1793988130.4923453,
+    "seen": 1793988245.1482642,
+    "ast_hash": "8506edf428d2427be47b6942ec29e625",
+    "semantic_hash": "8506edf428d2427be47b6942ec29e625"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Web\\GeminiSelectors.cs": {
+    "mtime": 1789488387.7757113,
+    "seen": 1793988245.1482642,
+    "ast_hash": "882ef63a1bd7e121afdf8993f68390da",
+    "semantic_hash": "882ef63a1bd7e121afdf8993f68390da"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Web\\MicCapture.cs": {
+    "mtime": 1789799882.98702,
+    "seen": 1793988245.1482642,
+    "ast_hash": "64124bac245351e684edeba700e0ad7f",
+    "semantic_hash": "64124bac245351e684edeba700e0ad7f"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Web\\OfflinePage.cs": {
+    "mtime": 1789412581.3484027,
+    "seen": 1793988245.1482642,
+    "ast_hash": "dc3c514afb33ed03c983aaf1bebc5631",
+    "semantic_hash": "dc3c514afb33ed03c983aaf1bebc5631"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Web\\SelectorOverrides.cs": {
+    "mtime": 1793009856.161259,
+    "seen": 1793988245.1482642,
+    "ast_hash": "45870662c739ba3d6c08e1e65283d16c",
+    "semantic_hash": "45870662c739ba3d6c08e1e65283d16c"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Web\\SelectorSet.cs": {
+    "mtime": 1793009730.7948794,
+    "seen": 1793988245.1482642,
+    "ast_hash": "17e2063fd760aa0264278c90eb57c014",
+    "semantic_hash": "17e2063fd760aa0264278c90eb57c014"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Web\\Selectors.cs": {
+    "mtime": 1793378833.5687897,
+    "seen": 1793988245.1482642,
+    "ast_hash": "c6a0fd461e3dec12e85164e4f91c2f77",
+    "semantic_hash": "c6a0fd461e3dec12e85164e4f91c2f77"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Web\\WebView2RuntimeLocator.cs": {
+    "mtime": 1789484739.1859498,
+    "seen": 1793988245.1482642,
+    "ast_hash": "f032d76c62bd1d27e2a780a01c210364",
+    "semantic_hash": "f032d76c62bd1d27e2a780a01c210364"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\WordReplacement.cs": {
+    "mtime": 1793012135.3266747,
+    "seen": 1793988245.1482642,
+    "ast_hash": "3452407cbd90923056966947a1f3a3ab",
+    "semantic_hash": "3452407cbd90923056966947a1f3a3ab"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\WorkspaceMode.cs": {
+    "mtime": 1793290637.90203,
+    "seen": 1793988245.1482642,
+    "ast_hash": "f0f87ef9b230acdcc55ed50676939091",
+    "semantic_hash": "f0f87ef9b230acdcc55ed50676939091"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\README.md": {
+    "mtime": 1793988148.542632,
+    "seen": 1793988245.1482642,
+    "ast_hash": "734da2235d0a9c892156cdedcb5586f6",
+    "semantic_hash": "734da2235d0a9c892156cdedcb5586f6"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Assets\\Sounds\\done.wav": {
+    "mtime": 1791447083.4984663,
+    "seen": 1793988245.1482642,
+    "ast_hash": "15a9cdaa497f0c0346f1bd1ca81e9e3f",
+    "semantic_hash": "15a9cdaa497f0c0346f1bd1ca81e9e3f"
+  },
+  "C:\\Users\\wtgd5\\Downloads\\projects\\EchoType-Windows\\src\\EchoType\\Assets\\Sounds\\start.wav": {
+    "mtime": 1791447083.4994683,
+    "seen": 1793988245.1482642,
+    "ast_hash": "40e20adc1bd1264ac34d21490501f0b9",
+    "semantic_hash": "40e20adc1bd1264ac34d21490501f0b9"
+  }
+}

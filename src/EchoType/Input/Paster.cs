@@ -154,6 +154,19 @@ internal static class Paster {
 
         PasteTarget? resume = CaptureResume(target);
 
+        // Native Win32 edit controls accept WM_PASTE without foreground activation.
+        // This works for bitmap clipboard formats as well as text and avoids a desktop
+        // switch entirely when the target supports it.
+        if (target != null
+            && resume != null
+            && !pressEnterAfterPaste
+            && target.AcceptsBackgroundPaste) {
+            CopyImageToClipboard(image);
+            if (target.TryBackgroundPaste()) {
+                return DeliverResult.Pasted(keptUserFocus: true);
+            }
+        }
+
         if (target != null) {
             if (!target.Restore()) {
                 CopyImageToClipboard(image);

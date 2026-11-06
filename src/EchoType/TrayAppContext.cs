@@ -69,8 +69,9 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     /// </summary>
     private ChatGPTWebController? _cleanWeb;
     /// <summary>
-    /// Third hidden window that answers Ask model. Null when the Ask model is the same as
-    /// the transcription or cleaning model (that window answers instead).
+    /// Dedicated hidden window that answers Ask model. It intentionally never shares the
+    /// transcription or cleaning page: an Ask turn must not become the next dictation page
+    /// or make its provider look like the newly selected transcription provider.
     /// </summary>
     private ChatGPTWebController? _askWeb;
     private readonly ToolStripMenuItem _chatgptAskItem;
@@ -445,31 +446,17 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// Brings the cleaning and Ask windows in step with settings. An Ask window that is no
-    /// longer needed is closed before the cleaning window changes site, so two windows never
-    /// load the same model's profile at once.
+    /// Brings the cleaning and Ask windows in step with settings. Ask always owns a separate
+    /// controller, even when its provider matches transcription or cleaning.
     /// </summary>
     private void ApplyReplySites() {
-        if (_askWeb != null && AskSharesWindow) {
-            _askWeb.Dispose();
-            _askWeb = null;
-        }
         ApplyCleanSite();
         ApplyAskSite();
     }
 
-    /// <summary>True when the transcription or cleaning window already runs the Ask model.</summary>
-    private bool AskSharesWindow =>
-        _settings.AskProvider == _settings.TranscriptionProvider || _settings.AskProvider == _settings.CleanProvider;
-
     private void ApplyAskSite() {
         var site = ChatSite.For(_settings.AskProvider);
-        if (AskSharesWindow) {
-            if (_askWeb != null) {
-                _askWeb.Dispose();
-                _askWeb = null;
-            }
-        } else if (_askWeb == null) {
+        if (_askWeb == null) {
             _askWeb = new ChatGPTWebController(site);
             WarmupAskWindow();
         } else if (_askWeb.Site.Id != site.Id) {
@@ -2326,9 +2313,9 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     /// <summary>Cleaning-model window: Auto Clean, custom commands and selection rewrites.</summary>
     private ChatGPTWebController Gen => _cleanWeb ?? _web;
 
-    /// <summary>Ask-model window: its own, or the transcription/cleaning window when the model is the same.</summary>
+    /// <summary>Ask-model window. It is kept separate from dictation and cleaning.</summary>
     private ChatGPTWebController AskWeb =>
-        _askWeb ?? (_settings.AskProvider == _settings.TranscriptionProvider ? _web : Gen);
+        _askWeb ?? throw new InvalidOperationException("Ask model window has not been initialized");
 
     /// <summary>
     /// Window that answers <paramref name="job"/>. Ask model uses the Ask model;

@@ -880,14 +880,61 @@ internal sealed class DictationDriver {
             } catch (e) {}
             return E.isImagePlaceholder(E.elementText(node));
           };
-          E.lastAssistantNode = () => {
-            const nodes = E.messageNodes(S.assistant);
-            for (let i = nodes.length - 1; i >= 0; i--) {
-              if (E.messageText(nodes[i])) return nodes[i];
-              if (E.collectImages(nodes[i]).length) return nodes[i];
-              if (E.nodeLooksBusy(nodes[i])) return nodes[i];
+          // ChatGPT sometimes renders a generated-image card as a sibling of the
+          // assistant text instead of inside the element carrying the assistant-role
+          // attribute. In that layout the normal assistant selectors only see the
+          // short "image created" sentence. Find a large media/busy node after the
+          // latest user turn and treat its surrounding card as the assistant turn.
+          E.generatedMediaNode = () => {
+            const users = E.messageNodes(S.user);
+            const user = users.length ? users[users.length - 1] : null;
+            const composer = E.composer();
+            const hits = deepQueryAll('img, video, [aria-busy="true"], [role="progressbar"], progress');
+            for (let i = hits.length - 1; i >= 0; i--) {
+              const el = hits[i];
+              if (!el || E.inSideChrome(el) || (composer && (composer === el || composer.contains(el)))) continue;
+              if (user && (user === el || user.contains(el))) continue; // prompt attachment, not a reply
+              if (user && !(user.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+              let qualifies = false;
+              if (el.tagName === 'IMG') {
+                const r = el.getBoundingClientRect ? el.getBoundingClientRect() : { width: 0, height: 0 };
+                const w = el.naturalWidth || r.width || 0, h = el.naturalHeight || r.height || 0;
+                qualifies = (w >= 96 && h >= 96) || (!el.complete && r.width >= 96 && r.height >= 64);
+              } else if (el.tagName === 'VIDEO') {
+                qualifies = isVisible(el);
+              } else {
+                qualifies = isVisible(el);
+              }
+              if (!qualifies) continue;
+
+              let card = el;
+              for (let p = el.parentElement, depth = 0; p && depth < 7; p = p.parentElement, depth++) {
+                if (p === document.body || p.tagName === 'MAIN' || p.tagName === 'FORM') break;
+                if (user && (user.contains(p) || p.contains(user))) break;
+                card = p;
+                if (p.matches && p.matches('article, [data-turn="assistant"], [data-message-author-role="assistant"], [data-testid*="conversation-turn"], [data-testid*="generated-image" i]')) break;
+              }
+              return card;
             }
             return null;
+          };
+          E.lastAssistantNode = () => {
+            const nodes = E.messageNodes(S.assistant);
+            let assistant = null;
+            for (let i = nodes.length - 1; i >= 0; i--) {
+              if (E.messageText(nodes[i]) || E.collectImages(nodes[i]).length || E.nodeLooksBusy(nodes[i])) {
+                assistant = nodes[i];
+                break;
+              }
+            }
+            const media = E.generatedMediaNode();
+            if (!assistant) return media;
+            if (!media || assistant === media || assistant.contains(media)) return assistant;
+            // Prefer a later standalone media card; if the card surrounds the text,
+            // return it so both the text and image are collected together.
+            if (media.contains(assistant)
+                || (assistant.compareDocumentPosition(media) & Node.DOCUMENT_POSITION_FOLLOWING)) return media;
+            return assistant;
           };
           E.assistantTurnKey = () => {
             const nodes = E.messageNodes(S.assistant);
@@ -898,7 +945,8 @@ internal sealed class DictationDriver {
               if (nodes[i] === n) { idx = i; break; }
             }
             const id = (n.getAttribute('data-message-id') || n.id || '').slice(0, 80);
-            return idx + ':' + id;
+            const media = E.collectImages(n).map(function (x) { return x.src; }).join('|').slice(0, 160);
+            return idx + ':' + id + ':' + media;
           };
           E.imagePending = () => {
             const node = E.lastAssistantNode();
@@ -2048,12 +2096,12 @@ internal sealed class DictationDriver {
     }
 
     /// <summary>
-    /// Waits until the composer text is stable, then pauses so the page can enable
-    /// Send. Large prompts get a 3 s pause — a 400 ms wait is enough for short ones.
+    /// Waits until the composer text is stable. SendPromptAsync separately waits for
+    /// the actual Send control, so a fixed multi-second pause here only adds latency.
     /// </summary>
     private async Task WaitUntilComposerPopulatedAsync(string expected) {
         if (expected.Length < LargeComposerChars) {
-            await Task.Delay(400);
+            await Task.Delay(150);
             return;
         }
 
@@ -2074,8 +2122,8 @@ internal sealed class DictationDriver {
             await Task.Delay(150);
         }
 
-        Log.Write($"driver: composer populated ({last.Length} chars, expected {expected.Length}), waiting 3000ms before send");
-        await Task.Delay(3000);
+        Log.Write($"driver: composer populated ({last.Length} chars, expected {expected.Length})");
+        await Task.Delay(200);
         await PokeComposerAsync();
     }
 
