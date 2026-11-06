@@ -74,6 +74,12 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     /// or make its provider look like the newly selected transcription provider.
     /// </summary>
     private ChatGPTWebController? _askWeb;
+    /// <summary>
+    /// User-opened model pages that are not the active transcription model. These
+    /// windows are intentionally independent: opening one must never change the
+    /// saved transcription provider or redirect the active dictation controller.
+    /// </summary>
+    private readonly Dictionary<TranscriptionProvider, ChatGPTWebController> _modelWindows = [];
     private readonly ToolStripMenuItem _chatgptAskItem;
     private readonly ToolStripMenuItem _geminiAskItem;
     private readonly ToolStripMenuItem _claudeAskItem;
@@ -3209,10 +3215,19 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     }
 
     private void OpenModel(TranscriptionProvider provider) {
-        SelectModel(provider);
         if (_settings.TranscriptionProvider == provider) {
             OpenModelWindow();
+            return;
         }
+
+        if (!_modelWindows.TryGetValue(provider, out ChatGPTWebController? web)) {
+            web = new ChatGPTWebController(ChatSite.For(provider));
+            _modelWindows.Add(provider, web);
+        }
+        Log.Write("model-window: opened " + web.Site.DisplayName
+            + " without changing transcription provider " + _web.Site.DisplayName);
+        web.ShowLoginWindow();
+        NotifyUi();
     }
 
     private void ToggleModelBenchmark() {
@@ -4260,6 +4275,10 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         _cleanWeb?.Dispose();
         _askWeb?.Dispose();
         _translateWeb?.Dispose();
+        foreach (ChatGPTWebController modelWindow in _modelWindows.Values) {
+            modelWindow.Dispose();
+        }
+        _modelWindows.Clear();
         if (_window is { IsDisposed: false } window) {
             window.Hide();
             window.Dispose();
