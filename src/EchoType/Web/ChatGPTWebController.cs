@@ -264,6 +264,40 @@ internal sealed class ChatGPTWebController : IDisposable {
         }
     }
 
+    /// <summary>
+    /// Startup model race: unlike <see cref="EnsureReadyAsync"/>, do not accept a page
+    /// that merely has a composer. The provider wins only after its dictation control is
+    /// present and usable, which is what the first recording actually needs.
+    /// </summary>
+    public async Task<ReadyOutcome> EnsureDictationReadyAsync() {
+        ReadyOutcome outcome = await EnsureReadyAsync();
+        if (outcome != ReadyOutcome.Ready || _driver == null) {
+            return outcome;
+        }
+
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (DateTime.UtcNow < deadline) {
+            if (_disposed || _driver == null) {
+                return ReadyOutcome.NotReady;
+            }
+            try {
+                PageState state = await _driver.StateAsync();
+                if (state.IsChatReady) {
+                    return ReadyOutcome.Ready;
+                }
+                if (state.LoginMarker && !state.ComposerPresent) {
+                    return ReadyOutcome.LoggedOut;
+                }
+            } catch (DriverException) {
+                // The SPA may still be replacing its composer; keep probing briefly.
+            }
+            await Task.Delay(200);
+        }
+
+        Log.Write("webview: dictation-ready timeout (composer loaded, mic unavailable)");
+        return ReadyOutcome.Timeout;
+    }
+
     private async Task<ReadyOutcome> EnsureReadyCoreAsync() {
         // Offline: fail fast instead of loading a blank page for 25 s (mac parity).
         if (!_isOnline && _webview == null) {

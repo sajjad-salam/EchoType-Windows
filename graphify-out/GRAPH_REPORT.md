@@ -1,356 +1,330 @@
 # Graph Report - EchoType-Windows  (2026-11-06)
 
 ## Corpus Check
-- 78 files · ~112,371 words
-- Verdict: corpus is large enough that graph structure adds value.
-- Unclassified: 3 file(s) not represented in the graph (top: (none) 2, .ttf 1)
+- cluster-only mode — file stats not available
 
 ## Summary
-- 2083 nodes · 5892 edges · 87 communities (59 shown, 28 thin omitted)
-- Extraction: 94% EXTRACTED · 6% INFERRED · 0% AMBIGUOUS · INFERRED: 343 edges (avg confidence: 0.85)
-- Token cost: 0 input · 0 output
+- 2118 nodes · 5900 edges · 90 communities (52 shown, 38 thin omitted)
+- Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 307 edges (avg confidence: 0.85)
+- Token cost: 19,430 input · 3,955 output
+
+## Graph Freshness
+- Built from commit: `3010bb5c`
+- Run `git rev-parse HEAD` and compare to check if the graph is stale.
+- Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
-- WebView2 Runtime
-- Virtual Desktops
-- Translation Parsing
-- Dictation Jobs and Sounds
-- Application Settings
-- Hotkey Naming
-- Application Window
-- Tray Application Lifecycle
-- Native Interop Structures
-- Async and JSON Utilities
-- Audio Session Metadata
-- Hotkey Chords
-- Window Event Handling
-- Dictation Accessibility
-- Paste Delivery
-- Audio Capture Interfaces
-- Status Overlay
-- Web Selector Sets
-- Keyboard Hook
-- Application Profiles
-- Native Input Injection
-- Ask Reply UI
-- UI Page Composition
-- Media Session Control
-- Text Expansion
-- Prompt Dialogs
-- Model Benchmarking
-- Ask Job State
-- ChatGPT Translation
-- Application Phases
-- Window and Focus Detection
-- App Shortcut Settings
-- Core Namespaces
-- Word Replacements
-- Selection Capture
-- Product Capabilities
-- Assistant Reply State
-- Audio Endpoint Volume
-- Core Audio Client
-- Release Workflow
-- Image Drag UI
-- Text Shortcuts
-- Command Editor Rows
-- Quick Word Replacement
-- Chat Provider Definitions
-- CI Workflow
-- Workspace Modes
-- Model Shortcut Form
-- Telegram and Translation
-- Tray Icons
-- Arabic Font Loading
-- Audio Devices
-- Custom Commands UI
+- ChatGPT WebView Automation
+- Layout-Preserving Translation
+- Dictation Driver Waits
+- Audio Session COM Interfaces
+- Tray App Core
+- Settings & Hotkey Preferences
+- App Profiles Configuration
+- Main Window Lifecycle
+- Gemini Web Transcriber
+- Transcript Delivery Pipeline
+- Clean Prompt Dialog
+- Virtual Desktop Window Grouping
+- Background Audio Muting
+- Win32 Native Interop
+- Status Overlay HUD
+- Mic Level Metering
+- Text Expander Engine
+- Assistant Reply Capture
+- Keyboard Hook Monitor
+- Window Layout Builder
+- AI Site UI Selectors
+- Hotkey Row Controls
+- Hotkey Chord Model
 - Custom Command Model
-- Google Translation
-- Application Models
-- Audio Session Enumeration
-- Model Selector UI
-- WebView2 Locator
-- Language and Provider Controls
-- Workspace Modes UI
-- Web Controller
-- Chat Sites
-- Toggle Controls
-- Bitmap Interop
-- Logging
-- Command Picker
-- Driver Errors
-- Project Configuration
-- Command Buttons
+- Clipboard Copy Results
+- Dictation Job State
+- Workspace Modes Editor
+- Settings Shortcut Fields
+- Settings Editor Launchers
+- Selection Capture & Background Paste
+- Synthesized Input Injection
+- Audio Device Enumeration
+- Command Editor Form
+- Command Reply Error Handling
+- High-Level Feature Groups
+- Paste Target Detection
+- Shortcut Picker Forms
+- Caption Buttons & Drag
+- Audio Client Interfaces
+- Accessibility Tree Reading
+- Fonts & Colors
+- UI Source Files
+- Release Workflow
+- Grid Editor Forms
+- CI Workflow
+- Sound Wave Generation
+- Input & Native Files
+- Translation Source Files
+- Model Shortcuts Form
+- Toggle & Nav Controls
+- HUD Button Styles
+- Custom Commands Form
+- Web Selector Files
+- Localization & RTL
+- Virtual Desktop 24H2 API
+- Language Combo & DPI
+- Audio Module Files
+- Tray Icons & Phases
+- Virtual Desktop Win11 API
+- Segmented Control
+- Virtual Desktop Win10 API
+- Visual Theme Files
+- Chat Site Profiles
+- Startup Model Benchmark
+- Google Translation Engine
+- Core Data Files
+- Image References
+- Transcription Providers
+- Logging Utilities
+- Driver Failure Reasons
+- Arabic Font Loading
+- Project & Dependencies
+- Application View Collection
+- Hotkey Conflict Detection
 - Program Entry Point
-- Selector Overrides
-- Simple Audio Volume
-- Button Kinds
-- Overlay Modes
-- Overlay Kinds
+- ChatGPT Translation
+- Overlay Notification Kinds
 - Motion States
+- WebView Host Form
+- Claude Selectors
 
 ## God Nodes (most connected - your core abstractions)
-1. `TrayAppContext` - 261 edges
-2. `ChatGPTWebController` - 109 edges
-3. `DictationDriver` - 105 edges
-4. `AppWindow` - 96 edges
-5. `Settings` - 88 edges
-6. `HotkeyChord` - 77 edges
-7. `NativeMethods` - 72 edges
-8. `IAppWindowHost` - 60 edges
+1. `TrayAppContext` - 267 edges
+2. `ChatGPTWebController` - 115 edges
+3. `DictationDriver` - 104 edges
+4. `AppWindow` - 94 edges
+5. `Settings` - 87 edges
+6. `NativeMethods` - 72 edges
+7. `HotkeyChord` - 59 edges
+8. `IAppWindowHost` - 59 edges
 9. `StatusOverlay` - 57 edges
 10. `AskReplyForm` - 55 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `CommandEditorForm` --calls--> `CommandButton`  [INFERRED]
   src/EchoType/Ui/CommandEditorForm.cs → src/EchoType/CustomCommand.cs
-- `TrayAppContext` --references--> `AppPhase`  [EXTRACTED]
-  src/EchoType/TrayAppContext.cs → src/EchoType/AppPhase.cs
-- `IAppWindowHost` --references--> `AppPhase`  [EXTRACTED]
-  src/EchoType/Ui/AppWindow.cs → src/EchoType/AppPhase.cs
-- `Settings` --references--> `AppProfile`  [EXTRACTED]
-  src/EchoType/Settings.cs → src/EchoType/AppProfile.cs
-- `DictationJob` --references--> `AppProfile`  [EXTRACTED]
-  src/EchoType/TrayAppContext.cs → src/EchoType/AppProfile.cs
+- `GeminiWebTranscriber` --references--> `ChatGPTWebController`  [EXTRACTED]
+  src/EchoType/Telegram/GeminiWebTranscriber.cs → src/EchoType/Web/ChatGPTWebController.cs
+- `DictationJob` --references--> `ChatGPTWebController`  [EXTRACTED]
+  src/EchoType/TrayAppContext.cs → src/EchoType/Web/ChatGPTWebController.cs
+- `StartupModelCandidate` --references--> `ChatGPTWebController`  [EXTRACTED]
+  src/EchoType/TrayAppContext.cs → src/EchoType/Web/ChatGPTWebController.cs
+- `StartupModelProbe` --references--> `ChatGPTWebController`  [EXTRACTED]
+  src/EchoType/TrayAppContext.cs → src/EchoType/Web/ChatGPTWebController.cs
 
 ## Import Cycles
 - None detected.
 
 ## Hyperedges (group relationships)
-- **Independent Provider Roles** — readme_transcription_provider, readme_auto_clean, readme_ask_model [EXTRACTED 1.00]
 - **Original Input Context Restoration** — readme_targeted_paste, readme_clipboard, readme_virtual_desktop [EXTRACTED 1.00]
+- **Independent Provider Roles** — readme_transcription_provider, readme_auto_clean, readme_ask_model [EXTRACTED 1.00]
 
-## Communities (87 total, 28 thin omitted)
+## Communities (90 total, 38 thin omitted)
 
-### Community 0 - "WebView2 Runtime"
+### Community 0 - "ChatGPT WebView Automation"
 Cohesion: 0.06
 Nodes (13): ChatGPTWebController, ChatThreadSends, Driver, ForceNewChatThread, HasWebView, IsInteractive, IsLoginWindowVisible, IsOnline (+5 more)
 
-### Community 1 - "Virtual Desktops"
+### Community 1 - "Layout-Preserving Translation"
 Cohesion: 0.05
-Nodes (12): IApplicationView, IApplicationViewCollection, IServiceProvider10, IVirtualDesktop10, IVirtualDesktop11, IVirtualDesktop24H2, IVirtualDesktopManager, IVirtualDesktopManagerInternal10 (+4 more)
+Nodes (19): LayoutPreservingTranslation, Part, PieceTranslator, AskReplyForm, CaptionText, CreateParams, ShowWithoutActivation, Block (+11 more)
 
-### Community 2 - "Translation Parsing"
+### Community 2 - "Dictation Driver Waits"
+Cohesion: 0.10
+Nodes (8): BenchmarkResult, DictationDriver, SupportsLiveTranscript, UserScript, DriverException, Kind, PageState, IsChatReady
+
+### Community 3 - "Audio Session COM Interfaces"
 Cohesion: 0.07
-Nodes (17): ImageReferences, Result, LayoutPreservingTranslation, Part, PieceTranslator, Block, Kind, Bullet (+9 more)
+Nodes (8): IAudioSessionControl, IAudioSessionControl2, IAudioSessionManager2, IMMDevice, IAudioEndpointVolume, IMMDevice, IMMDevice, IMMDeviceEnumerator
 
-### Community 3 - "Dictation Jobs and Sounds"
-Cohesion: 0.08
-Nodes (8): Sounds, CustomDir, AskReplyContent, WorkStage, Cleaning, Thinking, Transcribing, Translating
+### Community 4 - "Tray App Core"
+Cohesion: 0.04
+Nodes (25): TrayAppContext, AskModelName, AskWeb, AskWindowVisible, BenchmarkRecording, BenchmarkRunning, BenchmarkStatus, ClassicTranslationEngine (+17 more)
 
-### Community 4 - "Application Settings"
+### Community 5 - "Settings & Hotkey Preferences"
 Cohesion: 0.03
 Nodes (58): Settings, ActiveCommands, AddWordReplacementChord, AddWordReplacementVks, AppProfiles, AskModelVk, AskProvider, AskProviderName (+50 more)
 
-### Community 5 - "Hotkey Naming"
-Cohesion: 0.07
-Nodes (4): HotkeyNames, ShortcutPickerForm, Chord, HotkeyVk
-
-### Community 6 - "Application Window"
+### Community 6 - "App Profiles Configuration"
 Cohesion: 0.05
+Nodes (14): AppProfile, Apps, AutoClean, CleanPrompt, DisplayName, PressEnter, TranslateTo, AppProfilesForm (+6 more)
+
+### Community 7 - "Main Window Lifecycle"
+Cohesion: 0.06
 Nodes (19): AppWindow, IAppWindowHost, AskModelName, AskWindowVisible, BenchmarkRecording, BenchmarkRunning, BenchmarkStatus, CleanModelName (+11 more)
 
-### Community 7 - "Tray Application Lifecycle"
-Cohesion: 0.05
-Nodes (26): TrayAppContext, AskModelName, AskSharesWindow, AskWeb, AskWindowVisible, BenchmarkRecording, BenchmarkRunning, BenchmarkStatus (+18 more)
-
-### Community 8 - "Native Interop Structures"
-Cohesion: 0.09
-Nodes (8): BLENDFUNCTION, HARDWAREINPUT, LowLevelKeyboardProc, LowLevelMouseProc, NativeMethods, POINT, RECT, SIZE
-
-### Community 9 - "Async and JSON Utilities"
-Cohesion: 0.08
+### Community 8 - "Gemini Web Transcriber"
+Cohesion: 0.07
 Nodes (13): GeminiWebTranscriber, TelegramBot, TelegramException, Code, TelegramIncoming, AudioFileId, AudioMime, AudioSize (+5 more)
 
-### Community 10 - "Audio Session Metadata"
-Cohesion: 0.08
-Nodes (6): IAudioSessionControl, IAudioSessionControl2, IMMDevice, IMMDevice, IMMDevice, IMMDeviceEnumerator
+### Community 12 - "Clean Prompt Dialog"
+Cohesion: 0.10
+Nodes (15): CleanPromptForm, Result, DialogTheme, OpenAiKeyForm, Result, QuickWordReplacementForm, From, OpenFullList (+7 more)
 
-### Community 11 - "Hotkey Chords"
-Cohesion: 0.09
-Nodes (8): HotkeyChord, Count, IsEmpty, K1, K2, K3, LegacyVk, HotkeyConflicts
-
-### Community 13 - "Window Event Handling"
-Cohesion: 0.07
-Nodes (12): HudButton, StyleKind, HudHotkeyRow, CapturePreview, Capturing, MultiKey, Optional, Title (+4 more)
-
-### Community 15 - "Dictation Accessibility"
-Cohesion: 0.12
-Nodes (4): AxBox, DictationDriver, SupportsLiveTranscript, UserScript
-
-### Community 16 - "Paste Delivery"
+### Community 13 - "Virtual Desktop Window Grouping"
 Cohesion: 0.11
-Nodes (8): DeliverResult, KeptUserFocus, Outcome, PasteTarget, AcceptsBackgroundPaste, Description, ProcessName, StillExists
+Nodes (9): IApplicationView, IServiceProvider10, IVirtualDesktop10, IVirtualDesktop11, IVirtualDesktop24H2, IVirtualDesktopManager, SwitcherForm, CreateParams (+1 more)
 
-### Community 17 - "Audio Capture Interfaces"
+### Community 14 - "Background Audio Muting"
+Cohesion: 0.14
+Nodes (5): BackgroundAudioMuter, IAudioSessionEnumerator, IMMDeviceCollection, ISimpleAudioVolume, PausedMedia
+
+### Community 15 - "Win32 Native Interop"
+Cohesion: 0.08
+Nodes (14): BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, HARDWAREINPUT, KBDLLHOOKSTRUCT, LowLevelKeyboardProc, LowLevelMouseProc, MOUSEINPUT (+6 more)
+
+### Community 16 - "Status Overlay HUD"
+Cohesion: 0.10
+Nodes (10): Mode, Hidden, Listening, Notice, Working, StatusOverlay, CreateParams, IsCancelable (+2 more)
+
+### Community 17 - "Mic Level Metering"
 Cohesion: 0.10
 Nodes (4): IAudioCaptureClient, IAudioMeterInformation, MicLevelMeter, Level
 
-### Community 18 - "Status Overlay"
-Cohesion: 0.13
-Nodes (5): StatusOverlay, CreateParams, IsCancelable, ParkAfterMs, ShowWithoutActivation
+### Community 18 - "Text Expander Engine"
+Cohesion: 0.09
+Nodes (5): Entry, TextExpander, TextShortcut, Text, Trigger
 
-### Community 19 - "Web Selector Sets"
+### Community 19 - "Assistant Reply Capture"
+Cohesion: 0.10
+Nodes (12): AssistantImage, CaptureState, CommandTurnSnapshot, Empty, ModelReply, Empty, HasLoadedImage, IsEmpty (+4 more)
+
+### Community 21 - "Window Layout Builder"
+Cohesion: 0.08
+Nodes (16): Page, Blocks, Body, Nav, Subtitle, Title, HudCard, Accent (+8 more)
+
+### Community 22 - "AI Site UI Selectors"
 Cohesion: 0.06
 Nodes (31): SelectorSet, Assistant, AssistantMarkdown, Cancel, CancelCss, Composer, DictatingCss, GeneratingCss (+23 more)
 
-### Community 23 - "Application Profiles"
-Cohesion: 0.10
-Nodes (10): AppProfile, Apps, AutoClean, CleanPrompt, DisplayName, PressEnter, TranslateTo, AppProfilesForm (+2 more)
+### Community 24 - "Hotkey Row Controls"
+Cohesion: 0.09
+Nodes (10): HudHotkeyRow, CapturePreview, Capturing, MultiKey, Optional, Title, Value, HudNavItem (+2 more)
 
-### Community 24 - "Native Input Injection"
-Cohesion: 0.15
-Nodes (7): Outcome, CopiedToClipboard, Pasted, Paster, INPUT, InputUnion, KEYBDINPUT
-
-### Community 25 - "Ask Reply UI"
-Cohesion: 0.11
-Nodes (4): AskReplyForm, CaptionText, CreateParams, ShowWithoutActivation
-
-### Community 26 - "UI Page Composition"
-Cohesion: 0.10
-Nodes (14): Page, Blocks, Body, Nav, Subtitle, Title, HudCard, Accent (+6 more)
-
-### Community 27 - "Media Session Control"
-Cohesion: 0.23
-Nodes (3): BackgroundAudioMuter, IMMDeviceCollection, PausedMedia
-
-### Community 29 - "Prompt Dialogs"
-Cohesion: 0.13
-Nodes (8): CleanPromptForm, Result, DialogTheme, OpenAiKeyForm, Result, WebViewHostForm, ShowWithoutActivation, SuppressActivation
-
-### Community 30 - "Model Benchmarking"
+### Community 25 - "Hotkey Chord Model"
 Cohesion: 0.12
-Nodes (5): TranscriptionProvider, ChatGpt, Claude, Gemini, BenchmarkResult
+Nodes (7): HotkeyChord, Count, IsEmpty, K1, K2, K3, LegacyVk
 
-### Community 31 - "Ask Job State"
+### Community 26 - "Custom Command Model"
+Cohesion: 0.09
+Nodes (17): CommandButton, DisplayName, Id, Name, Prompt, CustomCommand, Buttons, Chord (+9 more)
+
+### Community 29 - "Clipboard Copy Results"
+Cohesion: 0.16
+Nodes (7): DeliverResult, KeptUserFocus, Outcome, Outcome, CopiedToClipboard, Pasted, Paster
+
+### Community 30 - "Dictation Job State"
 Cohesion: 0.08
 Nodes (24): DictationJob, AskImages, AskModel, Cancel, Cancelled, Command, Delivered, Generating (+16 more)
 
-### Community 32 - "ChatGPT Translation"
-Cohesion: 0.11
-Nodes (9): ChatGptTranslation, AssistantImage, CaptureState, DriverException, Kind, PageState, IsChatReady, SelectorHealth (+1 more)
+### Community 31 - "Workspace Modes Editor"
+Cohesion: 0.16
+Nodes (6): WorkspaceModesForm, Result, WorkspaceMode, Keywords, Name, Shortcut
 
-### Community 33 - "Application Phases"
-Cohesion: 0.11
-Nodes (9): AppPhase, ChoosingAction, Engaging, Generating, Idle, Listening, Transcribing, Waking (+1 more)
-
-### Community 34 - "Window and Focus Detection"
-Cohesion: 0.15
-Nodes (4): KBDLLHOOKSTRUCT, MOUSEINPUT, MSG, IVirtualDesktopManagerInternal11
-
-### Community 35 - "App Shortcut Settings"
+### Community 32 - "Settings Shortcut Fields"
 Cohesion: 0.11
 Nodes (13): AppShortcut, AddWordReplacement, AskModel, AutoClean, ChatGpt, Claude, Dictation, Gemini (+5 more)
 
-### Community 36 - "Core Namespaces"
+### Community 35 - "Synthesized Input Injection"
+Cohesion: 0.25
+Nodes (3): INPUT, InputUnion, KEYBDINPUT
+
+### Community 36 - "Audio Device Enumeration"
+Cohesion: 0.13
+Nodes (3): IMMDeviceEnumerator, IMMDeviceEnumerator, MicInputVolume
+
+### Community 37 - "Command Editor Form"
 Cohesion: 0.15
-Nodes (3): EchoType.Input, EchoType.Audio, EchoType.Native
+Nodes (3): ActionRow, CommandEditorForm, Result
 
-### Community 37 - "Word Replacements"
-Cohesion: 0.17
-Nodes (5): WordReplacementsForm, Result, WordReplacement, From, To
+### Community 38 - "Command Reply Error Handling"
+Cohesion: 0.12
+Nodes (9): ReadyOutcome, LoggedOut, NotReady, Offline, Ready, RuntimeMissing, Timeout, UiChanged (+1 more)
 
-### Community 40 - "Assistant Reply State"
+### Community 40 - "Paste Target Detection"
+Cohesion: 0.16
+Nodes (5): PasteTarget, AcceptsBackgroundPaste, Description, ProcessName, StillExists
+
+### Community 41 - "Shortcut Picker Forms"
+Cohesion: 0.12
+Nodes (4): HotkeyNames, ShortcutPickerForm, Chord, HotkeyVk
+
+### Community 42 - "Caption Buttons & Drag"
+Cohesion: 0.11
+Nodes (5): Glyph, Close, Minimize, HudCaptionButton, Icon
+
+### Community 45 - "Accessibility Tree Reading"
 Cohesion: 0.18
-Nodes (8): CommandTurnSnapshot, Empty, ModelReply, Empty, HasLoadedImage, IsEmpty, Videos, ReplyState
+Nodes (3): AxBox, SelectorOverrides, FilePath
 
-### Community 43 - "Release Workflow"
+### Community 47 - "UI Source Files"
+Cohesion: 0.14
+Nodes (3): EchoType.Telegram, EchoType.Ui, EchoType.Hotkey
+
+### Community 48 - "Release Workflow"
 Cohesion: 0.11
 Nodes (17): jobs, release, name, on, push, permissions, contents, tags (+9 more)
 
-### Community 44 - "Image Drag UI"
-Cohesion: 0.12
-Nodes (5): Glyph, Close, Minimize, HudCaptionButton, Icon
-
-### Community 45 - "Text Shortcuts"
-Cohesion: 0.15
-Nodes (6): Entry, TextShortcut, Text, Trigger, TextShortcutsForm, Result
-
-### Community 46 - "Command Editor Rows"
-Cohesion: 0.18
-Nodes (3): ActionRow, CommandEditorForm, Result
-
-### Community 47 - "Quick Word Replacement"
-Cohesion: 0.15
-Nodes (8): QuickWordReplacementForm, From, OpenFullList, To, TelegramVoiceForm, TelegramChatId, TelegramEnabled, TelegramToken
-
-### Community 48 - "Chat Provider Definitions"
-Cohesion: 0.12
-Nodes (9): EchoType.Web, ClaudeSelectors, Claude, GeminiSelectors, Gemini, MicCapture, OfflinePage, Selectors (+1 more)
-
-### Community 49 - "CI Workflow"
+### Community 50 - "CI Workflow"
 Cohesion: 0.12
 Nodes (16): runs-on, steps, jobs, build, name, on, pull_request, push (+8 more)
 
-### Community 50 - "Workspace Modes"
+### Community 55 - "Toggle & Nav Controls"
+Cohesion: 0.14
+Nodes (3): HudToggleRow, Checked, Description
+
+### Community 56 - "HUD Button Styles"
+Cohesion: 0.15
+Nodes (7): HudButton, StyleKind, Kind, Danger, Ghost, Inverse, Primary
+
+### Community 58 - "Web Selector Files"
+Cohesion: 0.14
+Nodes (7): EchoType.Web, GeminiSelectors, Gemini, MicCapture, OfflinePage, Selectors, ChatGpt
+
+### Community 59 - "Localization & RTL"
+Cohesion: 0.15
+Nodes (3): Arabic, Rtl, Loc
+
+### Community 63 - "Tray Icons & Phases"
 Cohesion: 0.19
-Nodes (4): WorkspaceMode, Keywords, Name, Shortcut
+Nodes (9): AppPhase, ChoosingAction, Engaging, Generating, Idle, Listening, Transcribing, Waking (+1 more)
 
-### Community 52 - "Telegram and Translation"
-Cohesion: 0.23
-Nodes (4): EchoType.Telegram, EchoType.Translation, EchoType.Ui, EchoType.Hotkey
-
-### Community 53 - "Tray Icons"
-Cohesion: 0.16
-Nodes (4): TrayIcons, Arabic, Rtl, Loc
-
-### Community 59 - "Custom Command Model"
-Cohesion: 0.16
-Nodes (10): CustomCommand, Buttons, Chord, DisplayName, HotkeyVk, HotkeyVks, Id, Name (+2 more)
-
-### Community 61 - "Application Models"
-Cohesion: 0.22
-Nodes (3): EchoType, StartupRegistration, Command
-
-### Community 63 - "Model Selector UI"
+### Community 65 - "Segmented Control"
 Cohesion: 0.21
 Nodes (4): HudSegmented, ArabicItemFont, Items, SelectedIndex
 
-### Community 65 - "Language and Provider Controls"
-Cohesion: 0.17
-Nodes (3): LanguageItem, HudCommandList, Items
+### Community 67 - "Visual Theme Files"
+Cohesion: 0.18
+Nodes (5): WorkStage, Cleaning, Thinking, Transcribing, Translating
 
-### Community 67 - "Web Controller"
-Cohesion: 0.17
-Nodes (9): ReadyOutcome, LoggedOut, NotReady, Offline, Ready, RuntimeMissing, Timeout, UiChanged (+1 more)
-
-### Community 68 - "Chat Sites"
+### Community 68 - "Chat Site Profiles"
 Cohesion: 0.17
 Nodes (12): ChatSite, ChatGpt, ChatUrl, Claude, DisplayName, Gemini, Id, LoginTitle (+4 more)
 
-### Community 71 - "Toggle Controls"
+### Community 73 - "Transcription Providers"
 Cohesion: 0.22
-Nodes (3): HudToggleRow, Checked, Description
+Nodes (4): TranscriptionProvider, ChatGpt, Claude, Gemini
 
-### Community 72 - "Bitmap Interop"
-Cohesion: 0.28
-Nodes (3): BITMAPINFO, BITMAPINFOHEADER, LayeredSurface
-
-### Community 73 - "Logging"
+### Community 74 - "Logging Utilities"
 Cohesion: 0.25
 Nodes (5): Log, AppDataDirectory, ExeDirectoryFilePath, FilePath, ProjectRootFilePath
 
-### Community 75 - "Driver Errors"
+### Community 76 - "Driver Failure Reasons"
 Cohesion: 0.25
 Nodes (8): DriverFailure, ButtonNotFound, JavaScript, LoggedOut, NotReady, Offline, Timeout, UiChanged
 
-### Community 76 - "Project Configuration"
+### Community 78 - "Project & Dependencies"
 Cohesion: 0.33
 Nodes (4): net10.0-windows10.0.19041.0, GTranslate (2.4.0), Microsoft.Web.WebView2 (1.0.2792.45), Microsoft.NET.Sdk
 
-### Community 77 - "Command Buttons"
-Cohesion: 0.33
-Nodes (5): CommandButton, DisplayName, Id, Name, Prompt
-
-### Community 83 - "Button Kinds"
-Cohesion: 0.40
-Nodes (5): Kind, Danger, Ghost, Inverse, Primary
-
-### Community 84 - "Overlay Modes"
-Cohesion: 0.40
-Nodes (5): Mode, Hidden, Listening, Notice, Working
-
-### Community 85 - "Overlay Kinds"
+### Community 85 - "Overlay Notification Kinds"
 Cohesion: 0.40
 Nodes (5): OverlayKind, Error, Info, Success, Warning
 
@@ -358,25 +332,29 @@ Nodes (5): OverlayKind, Error, Info, Success, Warning
 Cohesion: 0.50
 Nodes (4): Motion, Idle, In, Out
 
+### Community 87 - "WebView Host Form"
+Cohesion: 0.67
+Nodes (3): WebViewHostForm, ShowWithoutActivation, SuppressActivation
+
 ## Knowledge Gaps
-- **367 isolated node(s):** `Idle`, `Waking`, `Engaging`, `Listening`, `Transcribing` (+362 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 517 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **28 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **366 isolated node(s):** `ChatThreadSends`, `Driver`, `ForceNewChatThread`, `HasWebView`, `IsInteractive` (+361 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 536 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **38 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `TrayAppContext` connect `Tray Application Lifecycle` to `WebView2 Runtime`, `Dictation Jobs and Sounds`, `Application Settings`, `Hotkey Naming`, `Application Window`, `Async and JSON Utilities`, `Hotkey Chords`, `Dictation Driver Operations`, `Settings Actions`, `Dictation Accessibility`, `Paste Delivery`, `Audio Capture Interfaces`, `Keyboard Hook`, `Cancellation Flow`, `Application Profiles`, `UI Page Composition`, `Media Session Control`, `Text Expansion`, `Prompt Dialogs`, `Model Benchmarking`, `Ask Job State`, `Application Phases`, `Text Shortcuts`, `Telegram and Translation`, `Tray Icons`, `Custom Command Model`, `Google Translation`, `Command Retry Policy`, `Command Picker`, `Program Entry Point`, `Translation Settings`?**
-  _High betweenness centrality (0.331) - this node is a cross-community bridge._
+- **Why does `TrayAppContext` connect `Tray App Core` to `ChatGPT WebView Automation`, `Dictation Driver Waits`, `Settings & Hotkey Preferences`, `Gemini Web Transcriber`, `Dictation Session Flow`, `Hotkey Registration`, `Transcript Delivery Pipeline`, `Clean Prompt Dialog`, `Background Audio Muting`, `Win32 Native Interop`, `Mic Level Metering`, `Text Expander Engine`, `Keyboard Hook Monitor`, `Site & Model Binding`, `Foreground Window Control`, `Clipboard Copy Results`, `Dictation Job State`, `Settings Editor Launchers`, `Command Reply Error Handling`, `Model Shortcuts Form`, `Localization & RTL`, `Audio Module Files`, `Tray Icons & Phases`, `Startup Model Benchmark`, `Google Translation Engine`, `Program Entry Point`, `Job Cancellation`?**
+  _High betweenness centrality (0.162) - this node is a cross-community bridge._
 - **Are the 6 inferred relationships involving `TrayAppContext` (e.g. with `Program.Main()` and `HotkeyMonitor.Start()`) actually correct?**
   _`TrayAppContext` has 6 INFERRED edges - model-reasoned connections that need verification._
-- **What connects `Idle`, `Waking`, `Engaging` to the rest of the system?**
-  _367 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `WebView2 Runtime` be split into smaller, more focused modules?**
-  _Cohesion score 0.056910569105691054 - nodes in this community are weakly interconnected._
-- **Why does `Settings` connect `Application Settings` to `Hotkey Naming`, `Word Replacements`, `Tray Application Lifecycle`, `Application Window`, `Async and JSON Utilities`, `Custom Command Model`, `Hotkey Chords`, `Text Shortcuts`, `Settings Actions`, `Command Editor Rows`, `Workspace Modes`, `Model Shortcut Form`, `Application Profiles`, `Custom Commands UI`, `Media Session Control`, `Google Translation`, `Application Models`, `Model Benchmarking`?**
-  _High betweenness centrality (0.099) - this node is a cross-community bridge._
-- **Are the 4 inferred relationships involving `ChatGPTWebController` (e.g. with `GeminiWebTranscriber.TranscribeAsync()` and `TrayAppContext.ApplyAskSite()`) actually correct?**
-  _`ChatGPTWebController` has 4 INFERRED edges - model-reasoned connections that need verification._
-- **Should `Virtual Desktops` be split into smaller, more focused modules?**
-  _Cohesion score 0.05179982440737489 - nodes in this community are weakly interconnected._
+- **What connects `ChatThreadSends`, `Driver`, `ForceNewChatThread` to the rest of the system?**
+  _366 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Should `ChatGPT WebView Automation` be split into smaller, more focused modules?**
+  _Cohesion score 0.05942571785268414 - nodes in this community are weakly interconnected._
+- **Why does `AppWindow` connect `Main Window Lifecycle` to `Hotkey Registration`, `Clean Prompt Dialog`, `Background Audio Muting`, `Window Layout Builder`, `Custom Control Painting`, `Hotkey Row Controls`, `Foreground Window Control`, `Settings Shortcut Fields`, `Settings Editor Launchers`, `Shortcut Picker Forms`, `Caption Buttons & Drag`, `Translation Source Files`, `Model Shortcuts Form`, `Toggle & Nav Controls`, `HUD Button Styles`, `Localization & RTL`, `Language Combo & DPI`, `Segmented Control`, `Transcription Providers`, `Animation Ticks`?**
+  _High betweenness centrality (0.091) - this node is a cross-community bridge._
+- **Are the 5 inferred relationships involving `ChatGPTWebController` (e.g. with `GeminiWebTranscriber.TranscribeAsync()` and `TrayAppContext.ApplyAskSite()`) actually correct?**
+  _`ChatGPTWebController` has 5 INFERRED edges - model-reasoned connections that need verification._
+- **Should `Layout-Preserving Translation` be split into smaller, more focused modules?**
+  _Cohesion score 0.050543637966500146 - nodes in this community are weakly interconnected._

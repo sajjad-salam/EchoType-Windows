@@ -502,7 +502,7 @@ internal static partial class Loc {
         ["Gemini is signed out. Pick Gemini in EchoType, log in, then send the voice note again."] = "Gemini مو مسجّل دخول. اختار Gemini بـ EchoType وسجّل دخول، وبعدين أرسل الرسالة الصوتية مرة ثانية.",
         ["Gemini isn't ready ({0})."] = "Gemini مو جاهز ({0}).",
         ["Couldn't open a new Gemini chat."] = "ما كدرت أفتح محادثة جديدة بـ Gemini.",
-        ["Gemini didn't accept the voice note file."] = "Gemini ما قبل ملف الرسالة الصوتية.",
+        ["Couldn't upload the voice note to Gemini."] = "ما كدرت أرفع ملف الرسالة الصوتية إلى Gemini.",
         ["Gemini didn't answer in time."] = "Gemini ما رد بالوقت.",
         ["(No speech found in this voice note.)"] = "(ما لكيت كلام بهاي الرسالة الصوتية.)",
         ["Couldn't transcribe this voice note: "] = "ما كدرت أفرغ هاي الرسالة الصوتية: ",

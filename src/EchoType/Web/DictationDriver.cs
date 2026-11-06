@@ -280,6 +280,16 @@ internal sealed class DictationDriver {
             return null;
           };
           E.button = (kind) => {
+            if (kind === 'attach') {
+              const re = /^(upload|attach|add|insert)\s+(file|files|attachment)s?$|^(open|show)\s+(upload|attach).*(menu|options)?$|إرفاق\s*(ملف|ملفات)?|إضافة\s*(ملف|ملفات)|تحميل\s*(ملف|ملفات)|رفع\s*(ملف|ملفات)|فتح.{0,20}(إرفاق|تحميل|رفع|إضافة)/i;
+              for (const b of buttons()) {
+                if (!isVisible(b) || b.disabled || b.getAttribute('aria-disabled') === 'true') continue;
+                const text = ((label(b) || '') + ' ' + (b.getAttribute('title') || '') + ' '
+                  + (b.textContent || '')).replace(/\s+/g, ' ').trim();
+                if (re.test(text)) return b;
+              }
+              return null;
+            }
             const allow = kind === 'send' || kind === 'stop' || kind === 'newChat' || kind === 'start' || kind === 'submit';
             const found = E.findCss(S[kind + 'Css']) || E.findButton(S[kind], allow);
             if (found) return found;
@@ -594,8 +604,9 @@ internal sealed class DictationDriver {
           E.attachmentCount = () => {
             const a = E.attachArea();
             if (!a) return -1;
-            return a.querySelectorAll('img, [data-testid*="attachment" i], [data-testid*="file-thumbnail" i], '
+            return a.querySelectorAll('img, audio, video, [data-testid*="attachment" i], [data-test-id*="attachment" i], [data-testid*="file-thumbnail" i], '
               + '[class*="attachment" i], [class*="file-preview" i], [class*="uploader-file" i], '
+              + '[class*="file-chip" i], [class*="upload-preview" i], '
               + 'button[aria-label*="remove" i]').length;
           };
           E.attachBusy = () => {
@@ -623,17 +634,21 @@ internal sealed class DictationDriver {
             return 'ok';
           };
           E.markFileInput = (count, kind) => {
-            document.querySelectorAll('[data-et-file]').forEach(function (n) { n.removeAttribute('data-et-file'); });
-            const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
+            deepQueryAll('[data-et-file]').forEach(function (n) { n.removeAttribute('data-et-file'); });
+            window.__etFileInput = null;
+            const inputs = Array.from(deepQueryAll('input[type="file"]'));
             if (!inputs.length) return 'none';
             const fits = inputs.filter(function (i) { return count < 2 || i.multiple; });
             const pool = fits.length ? fits : inputs;
             const wants = new RegExp(kind || 'image', 'i');
             const pick = pool.find(function (i) { return wants.test(i.accept || ''); })
-              || pool.find(function (i) { return !i.accept; }) || pool[0];
+              || pool.find(function (i) { return !i.accept || /\*\/\*/.test(i.accept); })
+              || pool.find(function (i) { return i.multiple; }) || pool[0];
             pick.setAttribute('data-et-file', '1');
+            window.__etFileInput = pick;
             return 'ok';
           };
+          E.fileInput = () => window.__etFileInput || null;
           E.newChat = () => {
             const b = E.button('newChat');
             if (!b) return 'no-new-chat';
@@ -2175,13 +2190,25 @@ internal sealed class DictationDriver {
         }
 
         bool attached = false;
+        bool visuallyConfirmed = false;
         try {
             string pasted = await EvalAsync("__echotype.pasteFiles()");
             Log.Write("driver: pasted " + paths.Count + " file(s) into the composer (" + pasted + ")");
-            attached = pasted == "ok" && await AwaitAttachmentAsync(before, TimeSpan.FromSeconds(3));
+            visuallyConfirmed = pasted == "ok" && await AwaitAttachmentAsync(before, TimeSpan.FromSeconds(3));
+            attached = visuallyConfirmed;
             if (!attached) {
                 Log.Write("driver: no attachment after paste, trying the file input");
-                attached = await SetFileInputAsync(paths) && await AwaitAttachmentAsync(before, TimeSpan.FromSeconds(4));
+                bool inputAccepted = await SetFileInputAsync(paths);
+                if (inputAccepted) {
+                    visuallyConfirmed = await AwaitAttachmentAsync(before, TimeSpan.FromSeconds(8));
+                    // DOM.setFileInputFiles succeeding is the trusted browser upload path.
+                    // Gemini often consumes and clears its hidden input before rendering an
+                    // audio chip, so absence of a thumbnail is not proof that it rejected it.
+                    attached = true;
+                    if (!visuallyConfirmed) {
+                        Log.Write("driver: file input accepted the upload; no visual attachment card was exposed");
+                    }
+                }
             }
         } finally {
             try { _ = await EvalAsync("__echotype.clearFiles()"); } catch (DriverException) { /* best effort */ }
@@ -2190,7 +2217,7 @@ internal sealed class DictationDriver {
             Log.Write("driver: could not see an attachment in the composer");
             return false;
         }
-        await AwaitUploadAsync(TimeSpan.FromSeconds(30));
+        await AwaitUploadAsync(TimeSpan.FromSeconds(30), visuallyConfirmed ? TimeSpan.FromMilliseconds(800) : TimeSpan.FromSeconds(3));
         return true;
     }
 
@@ -2223,9 +2250,9 @@ internal sealed class DictationDriver {
     }
 
     /// <summary>Waits until no upload spinner is left and Send is enabled.</summary>
-    private async Task AwaitUploadAsync(TimeSpan cap) {
+    private async Task AwaitUploadAsync(TimeSpan cap, TimeSpan minimumWait) {
         DateTime started = DateTime.UtcNow;
-        await Task.Delay(800);
+        await Task.Delay(minimumWait);
         while (DateTime.UtcNow - started < cap) {
             bool busy = await EvalAsync("__echotype.attachBusy()") == "true";
             if (!busy && await EvalAsync("__echotype.sendReady()") == "ok") {
@@ -2241,12 +2268,22 @@ internal sealed class DictationDriver {
     private async Task<bool> SetFileInputAsync(IReadOnlyList<string> paths) {
         try {
             string kind = JsonSerializer.Serialize(FileMime(paths[0]).Split('/')[0]);
-            if (await EvalAsync("__echotype.markFileInput(" + paths.Count + ", " + kind + ")") != "ok") {
-                Log.Write("driver: no file input on the page");
+            string marked = await EvalAsync("__echotype.markFileInput(" + paths.Count + ", " + kind + ")");
+            if (marked != "ok") {
+                // Gemini lazily creates its hidden file input only after the attachment
+                // control/menu is opened. Use a trusted CDP click, then probe again.
+                Log.Write("driver: no file input yet, opening the attachment control");
+                if (await TryClickKindAsync("attach")) {
+                    await Task.Delay(400);
+                    marked = await EvalAsync("__echotype.markFileInput(" + paths.Count + ", " + kind + ")");
+                }
+            }
+            if (marked != "ok") {
+                Log.Write("driver: no file input on the page after opening attachments");
                 return false;
             }
             string evaluated = await _webview.CallDevToolsProtocolMethodAsync("Runtime.evaluate",
-                JsonSerializer.Serialize(new { expression = "document.querySelector('input[data-et-file]')" }));
+                JsonSerializer.Serialize(new { expression = "window.__echotype.fileInput()" }));
             using var doc = JsonDocument.Parse(evaluated);
             if (!doc.RootElement.TryGetProperty("result", out var result)
                 || !result.TryGetProperty("objectId", out var objectId)) {

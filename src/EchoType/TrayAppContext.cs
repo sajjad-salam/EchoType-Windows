@@ -61,7 +61,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     private readonly ToolStripMenuItem _toggleModeItem;
     private readonly Control _marshal = new(); // UI-thread marshal target for the hook
     private readonly Settings _settings;
-    private readonly ChatGPTWebController _web;
+    private ChatGPTWebController _web;
     /// <summary>
     /// Second hidden window that runs Auto Clean, custom commands and selection rewrites
     /// so dictation and cleaning never wait on each other. Null when the cleaning
@@ -150,6 +150,8 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     private int _longEmptyPieces; // consecutive; 3 stops restarting
     private DateTime _pieceStartedAt;
     private int _warmupEpoch;
+    private int _startupModelRaceEpoch;
+    private List<ChatGPTWebController>? _startupModelCandidates;
 
     public TrayAppContext() {
         _settings = Settings.Load();
@@ -346,10 +348,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         };
         _tray.DoubleClick += (_, _) => ShowAppWindow();
 
-        _web.LoginStateChanged += OnLoginStateChanged;
-        _web.ReachabilityChanged += OnReachabilityChanged;
-        _web.InteractiveChanged += OnInteractiveChanged;
-        _web.MissingUiPartChanged += OnMissingUiPartChanged;
+        BindTranscriptionWeb(_web);
 
         // BeginInvoke on this control is how the keyboard hook reaches the UI
         // thread. A Control with no HWND throws, which kills the hook — Right
@@ -374,8 +373,9 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey={HotkeyNames.For(_settings.DictationChord)}, askModelVk=0x{_settings.AskModelVk:X2}, askModel={_settings.AskProviderName}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateSelection={HotkeyNames.For(_settings.TranslateSelectionChord)}, translateTo={_settings.TranslateTargetLanguage}, translateSelectionTo={_settings.TranslateSelectionTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating}, longDictation={_settings.LongDictation})");
         StartupRegistration.Apply(_settings.StartWithWindows);
         // Stay in the tray on launch. Double-click the icon (or Open EchoType) to show the window.
-        _ = WarmupAsync(); // alwaysReady: load the selected model at launch (mac applyPolicyAtLaunch)
-        ApplyReplySites(); // windows for the cleaning and Ask models, warmed in parallel
+        // Open all transcription providers together. The first page whose composer and
+        // dictation mic are genuinely ready becomes this launch's default transcriber.
+        _ = SelectFastestStartupModelAsync();
         _ = WarmupTranslateWindowAsync();
     }
 
@@ -945,6 +945,12 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
 
     /// <summary>Starts a recording session for <paramref name="chord"/> (the recorder is idle).</summary>
     private void BeginSession(HotkeyChord chord, bool isDictation) {
+        if (_startupModelCandidates != null) {
+            // The user asked to record before the race finished. Keep the model already
+            // shown in the UI; never swap WebViews underneath a live microphone session.
+            CancelStartupModelRace();
+            ApplyReplySites();
+        }
         _hotkeyHeld = true;
         _sessionChord = chord;
         _holdStartedAt = DateTime.UtcNow;
@@ -3171,6 +3177,10 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         vk <= 0 ? name : name + " (" + HotkeyNames.For(vk) + ")";
 
     private void SelectModel(TranscriptionProvider provider) {
+        if (_startupModelCandidates != null) {
+            CancelStartupModelRace();
+            ApplyReplySites();
+        }
         if (_settings.TranscriptionProvider == provider) {
             SyncModelMenu();
             return;
@@ -3675,6 +3685,129 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         }
     }
 
+    /// <summary>
+    /// Starts ChatGPT, Gemini and Claude together and promotes the first page whose
+    /// dictation control is ready. Logged-out, offline and composer-only pages cannot win.
+    /// </summary>
+    private async Task SelectFastestStartupModelAsync() {
+        int epoch = ++_startupModelRaceEpoch;
+        var candidates = new List<StartupModelCandidate>();
+        foreach (TranscriptionProvider provider in Enum.GetValues<TranscriptionProvider>()) {
+            ChatGPTWebController web = provider == _settings.TranscriptionProvider
+                ? _web
+                : new ChatGPTWebController(ChatSite.For(provider), keepStandby: true);
+            candidates.Add(new StartupModelCandidate(provider, web));
+        }
+        _startupModelCandidates = candidates.Select(c => c.Web).ToList();
+        Log.Write("launch: racing transcription pages: "
+            + string.Join(", ", candidates.Select(c => c.Web.Site.DisplayName)));
+
+        var pending = candidates
+            .Select(ProbeStartupModelAsync)
+            .ToList();
+        StartupModelProbe? winner = null;
+        var outcomes = new List<StartupModelProbe>();
+        while (pending.Count > 0 && epoch == _startupModelRaceEpoch) {
+            Task<StartupModelProbe> completed = await Task.WhenAny(pending);
+            pending.Remove(completed);
+            StartupModelProbe probe = await completed;
+            outcomes.Add(probe);
+            Log.Write("launch: model race " + probe.Web.Site.DisplayName + " -> "
+                + probe.Outcome + " in " + probe.Elapsed.TotalSeconds.ToString("0.0") + "s");
+            if (probe.Outcome == ReadyOutcome.Ready) {
+                winner = probe;
+                break;
+            }
+        }
+
+        if (epoch != _startupModelRaceEpoch) {
+            return; // manual model choice or an early recording took ownership
+        }
+
+        if (winner != null && !IsBusy) {
+            ChatGPTWebController previous = _web;
+            if (!ReferenceEquals(previous, winner.Web)) {
+                UnbindTranscriptionWeb(previous);
+                _web = winner.Web;
+                BindTranscriptionWeb(_web);
+            }
+            _settings.TranscriptionProvider = winner.Provider;
+            _settings.Save();
+            _loggedIn = true;
+            _online = true;
+            _engagementFailures = 0;
+            SyncModelMenu();
+            UpdateLoginMenuItem();
+            UpdateStatusIcon();
+            UpdateStatusText();
+            RebuildCommandsMenu();
+            Log.Write("launch: fastest transcription model selected: " + _web.Site.DisplayName);
+        } else {
+            string summary = string.Join(", ", outcomes.Select(o => o.Web.Site.DisplayName + "=" + o.Outcome));
+            Log.Write("launch: no dictation-ready model won the startup race; keeping "
+                + _web.Site.DisplayName + (summary.Length > 0 ? " (" + summary + ")" : ""));
+            await WarmupAsync();
+        }
+
+        foreach (StartupModelCandidate candidate in candidates) {
+            if (!ReferenceEquals(candidate.Web, _web)) {
+                candidate.Web.Dispose();
+            }
+        }
+        _startupModelCandidates = null;
+        ApplyReplySites();
+    }
+
+    private static async Task<StartupModelProbe> ProbeStartupModelAsync(StartupModelCandidate candidate) {
+        var timer = Stopwatch.StartNew();
+        ReadyOutcome outcome;
+        try {
+            outcome = await candidate.Web.EnsureDictationReadyAsync();
+        } catch (Exception ex) {
+            Log.Write("launch: model race probe failed for " + candidate.Web.Site.DisplayName + ": " + ex.Message);
+            outcome = ReadyOutcome.NotReady;
+        }
+        return new StartupModelProbe(candidate.Provider, candidate.Web, outcome, timer.Elapsed);
+    }
+
+    private void CancelStartupModelRace() {
+        if (_startupModelCandidates == null) {
+            return;
+        }
+        _startupModelRaceEpoch++;
+        foreach (ChatGPTWebController candidate in _startupModelCandidates) {
+            if (!ReferenceEquals(candidate, _web)) {
+                candidate.Dispose();
+            }
+        }
+        _startupModelCandidates = null;
+        Log.Write("launch: model race cancelled; keeping " + _web.Site.DisplayName);
+    }
+
+    private void BindTranscriptionWeb(ChatGPTWebController web) {
+        web.LoginStateChanged += OnLoginStateChanged;
+        web.ReachabilityChanged += OnReachabilityChanged;
+        web.InteractiveChanged += OnInteractiveChanged;
+        web.MissingUiPartChanged += OnMissingUiPartChanged;
+    }
+
+    private void UnbindTranscriptionWeb(ChatGPTWebController web) {
+        web.LoginStateChanged -= OnLoginStateChanged;
+        web.ReachabilityChanged -= OnReachabilityChanged;
+        web.InteractiveChanged -= OnInteractiveChanged;
+        web.MissingUiPartChanged -= OnMissingUiPartChanged;
+    }
+
+    private sealed record StartupModelCandidate(
+        TranscriptionProvider Provider,
+        ChatGPTWebController Web);
+
+    private sealed record StartupModelProbe(
+        TranscriptionProvider Provider,
+        ChatGPTWebController Web,
+        ReadyOutcome Outcome,
+        TimeSpan Elapsed);
+
 #if DEBUG
     /// <summary>Menu-driven end-to-end test without the hotkey: simulate a 5 s hold.</summary>
     private async void DebugStart() {
@@ -4112,6 +4245,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
 
     protected override void ExitThreadCore() {
         Log.Write("shutdown");
+        CancelStartupModelRace();
         StopListenWatch();
         StopMicLevelPump();
         RestoreOtherApps();

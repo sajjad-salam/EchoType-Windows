@@ -52,7 +52,7 @@ internal sealed class GeminiWebTranscriber : IDisposable {
             await driver.SetComposerAsync(TranscribePrompt);
             if (!await driver.AttachFilesAsync([path])) {
                 await driver.ClearComposerAsync();
-                throw new InvalidOperationException(Loc.T("Gemini didn't accept the voice note file."));
+                throw new InvalidOperationException(Loc.T("Couldn't upload the voice note to Gemini."));
             }
             cancel.ThrowIfCancellationRequested();
             await driver.SendPromptAsync();
