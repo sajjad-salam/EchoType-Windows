@@ -16,11 +16,13 @@ internal static class VirtualDesktops {
     private static readonly Guid VirtualDesktopManagerClsid = new("AA509086-5CA9-4C25-8F95-589D3C07B48A");
     private static readonly Guid AppOnAllDesktops = new("BB64D5B7-4DE3-4AB2-A87C-DB7601AEA7DC");
     private static readonly Guid WindowOnAllDesktops = new("C2DDEA68-66F2-4CF9-8264-1BFD00FBBBAC");
+    private static readonly Guid VirtualDesktopPinnedAppsClsid = new("B5A399E7-1C87-46B8-88E9-FC5747B171BD");
 
     private static IVirtualDesktopManager? _manager;
     private static object? _internal;
     private static Guid _internalIid;
     private static IApplicationViewCollection? _views;
+    private static IVirtualDesktopPinnedApps? _pinnedApps;
     private static bool _comInitAttempted;
 
     public static bool TryGetDesktopId(IntPtr hwnd, out Guid desktopId) {
@@ -88,6 +90,31 @@ internal static class VirtualDesktops {
             return true;
         } catch (Exception ex) {
             Log.Write("paste: SwitchTo view failed: " + ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Shows <paramref name="hwnd"/> on every virtual desktop (like "Show this window on all
+    /// desktops" in Task View), so it follows the user when they switch desktops. False when
+    /// the shell has no view for the window yet (it is created shortly after the window is
+    /// shown or restyled) or the service is unavailable; the caller may retry.
+    /// </summary>
+    public static bool TryPinToAllDesktops(IntPtr hwnd) {
+        EnsureCom();
+        if (_views == null || _pinnedApps == null || hwnd == IntPtr.Zero) {
+            return false;
+        }
+        try {
+            if (_views.GetViewForHwnd(hwnd, out IApplicationView view) != 0 || view == null) {
+                return false;
+            }
+            if (!_pinnedApps.IsViewPinned(view)) {
+                _pinnedApps.PinView(view);
+            }
+            return true;
+        } catch (Exception ex) {
+            Log.Write("desktops: pin to all desktops failed: " + ex.Message);
             return false;
         }
     }
@@ -220,6 +247,11 @@ internal static class VirtualDesktops {
             if (shell.QueryService(ref viewsIid, ref viewsIid, out object views) == 0) {
                 _views = (IApplicationViewCollection)views;
             }
+            Guid pinnedService = VirtualDesktopPinnedAppsClsid;
+            Guid pinnedIid = typeof(IVirtualDesktopPinnedApps).GUID;
+            if (shell.QueryService(ref pinnedService, ref pinnedIid, out object pinned) == 0) {
+                _pinnedApps = (IVirtualDesktopPinnedApps)pinned;
+            }
             Log.Write("paste: virtual-desktop COM "
                 + (_internal != null ? "internal=yes" : "internal=no")
                 + (_views != null ? " views=yes" : " views=no")
@@ -284,12 +316,29 @@ internal static class VirtualDesktops {
         int QueryService(ref Guid guidService, ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out object ppvObject);
     }
 
+    // An IInspectable interface, declared as IUnknown with IInspectable's three methods
+    // spelled out: .NET (Core) can't marshal InterfaceIsIInspectable.
     [ComImport]
-    [InterfaceType(ComInterfaceType.InterfaceIsIInspectable)]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     [Guid("372E1D3B-38D3-42E4-A15B-8AB2B178F513")]
     private interface IApplicationView {
+        void GetIids();
+        void GetRuntimeClassName();
+        void GetTrustLevel();
         int SetFocus();
         int SwitchTo();
+    }
+
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("4CE81583-1E4C-4632-A621-07A53543148F")]
+    private interface IVirtualDesktopPinnedApps {
+        bool IsAppIdPinned([MarshalAs(UnmanagedType.LPWStr)] string appId);
+        void PinAppID([MarshalAs(UnmanagedType.LPWStr)] string appId);
+        void UnpinAppID([MarshalAs(UnmanagedType.LPWStr)] string appId);
+        bool IsViewPinned(IApplicationView view);
+        void PinView(IApplicationView view);
+        void UnpinView(IApplicationView view);
     }
 
     [ComImport]

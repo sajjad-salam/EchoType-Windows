@@ -989,6 +989,7 @@ internal sealed class ChatGPTWebController : IDisposable {
         // rendering. WS_EX_NOACTIVATE + WS_EX_TOOLWINDOW keep it out of Alt+Tab and
         // unable to steal focus.
         form.SuppressActivation = true;
+        form.TopMost = false;
         form.Location = new Point(-32000, -32000);
         // A minimized or maximized window only stores that move for later (and a minimized one
         // stops rendering): restore it, which lands it offscreen.
@@ -1021,11 +1022,32 @@ internal sealed class ChatGPTWebController : IDisposable {
             _controller.IsVisible = true;
             SyncWebViewBounds();
         }
+        // Like the reply popup: above other apps, and on every virtual desktop so it
+        // follows the user when they switch desktops.
+        _form.TopMost = true;
         _form.Show();
         _form.BringToFront();
         _form.Activate();
         _controller?.MoveFocus(CoreWebView2MoveFocusReason.Programmatic);
+        _ = PinToAllDesktopsAsync();
         Log.Write("webview: login window shown");
+    }
+
+    /// <summary>
+    /// Pins the shown window to all virtual desktops. The shell creates the window's view a
+    /// moment after it loses WS_EX_TOOLWINDOW, so retry briefly until it exists.
+    /// </summary>
+    private async Task PinToAllDesktopsAsync() {
+        for (int attempt = 0; attempt < 20; attempt++) {
+            if (!_loginVisible || _form.IsDisposed) {
+                return;
+            }
+            if (Native.VirtualDesktops.TryPinToAllDesktops(_form.Handle)) {
+                return;
+            }
+            await Task.Delay(100);
+        }
+        Log.Write("webview: could not pin the window to all desktops");
     }
 
     /// <summary>Redraws the caption after a WS_EX_TOOLWINDOW change; Windows caches the frame until SWP_FRAMECHANGED.</summary>
@@ -1274,6 +1296,8 @@ internal sealed class ChatGPTWebController : IDisposable {
                 ShowInTaskbar = true,
                 BackColor = Color.White,
                 MinimumSize = new Size(420, 520),
+                // Otherwise it opens behind the always-on-top model window.
+                TopMost = _loginVisible,
             };
             popup.Show();
             var controller = await _env.CreateCoreWebView2ControllerAsync(popup.Handle);
