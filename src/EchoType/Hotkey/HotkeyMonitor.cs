@@ -71,6 +71,8 @@ internal sealed class HotkeyMonitor : IDisposable {
     private int _pressedCount;
     private readonly uint[] _swallowed = new uint[MaxPressed];
     private int _swallowedCount;
+    private readonly uint[] _tapSwallowed = new uint[MaxPressed];
+    private int _tapSwallowedCount;
     private readonly uint[] _captureKeys = new uint[HotkeyChord.MaxKeys];
     private int _captureCount;
     private readonly uint[] _captureHeld = new uint[MaxPressed];
@@ -141,6 +143,7 @@ internal sealed class HotkeyMonitor : IDisposable {
         _tapDownVk = 0;
         _pressedCount = 0;
         _swallowedCount = 0;
+        _tapSwallowedCount = 0;
         ResetCapture();
         if (_held) {
             _held = false;
@@ -218,25 +221,8 @@ internal sealed class HotkeyMonitor : IDisposable {
                             HandleCaptureUp(distinguished);
                             return new IntPtr(1);
                         }
-                    } else if (TryMatchList(_tapList, kbd, out uint tap)) {
-                        // Tap keys must not participate in the hold state machine:
-                        // pressing one during dictation must not end the hold.
-                        if (down) {
-                            AddPressed(DistinguishedVk(kbd));
-                            if (_tapDownVk == 0) {
-                                _tapDownVk = tap;
-                                _tapVk = tap;
-                                PostToUi(_raiseTap);
-                            }
-                            return new IntPtr(1);
-                        }
-                        if (up) {
-                            RemovePressed(DistinguishedVk(kbd));
-                            if (_tapDownVk == tap || _tapDownVk != 0) {
-                                _tapDownVk = 0;
-                            }
-                            return new IntPtr(1);
-                        }
+                    } else if (TryHandleTap(kbd, down, up)) {
+                        return new IntPtr(1);
                     } else if (TryHandleHold(kbd, down, up)) {
                         return new IntPtr(1);
                     } else if (down && EscSwallowActive && kbd.vkCode == NativeMethods.VK_ESCAPE) {
@@ -313,6 +299,99 @@ internal sealed class HotkeyMonitor : IDisposable {
     private bool CaptureContains(uint vk) {
         for (int i = 0; i < _captureCount; i++) {
             if (HotkeyChord.SameKey(_captureKeys[i], vk) || _captureKeys[i] == vk) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Tap matching plus swallowing. Returns true when the event should be eaten.
+    /// A tap hotkey is a single key, so it fires only when pressed on its own:
+    /// with Ctrl/Shift/Alt/Win held (e.g. Ctrl+Shift+PageUp for a PageUp tap) the
+    /// event passes through to the hold matcher and the focused app untouched.
+    /// Tap keys that do fire stay out of the hold state machine, so pressing one
+    /// during dictation does not end the hold.
+    /// </summary>
+    private bool TryHandleTap(NativeMethods.KBDLLHOOKSTRUCT kbd, bool down, bool up) {
+        if (!TryMatchList(_tapList, kbd, out uint tap)) {
+            return false;
+        }
+        uint distinguished = DistinguishedVk(kbd);
+        if (down) {
+            if (TapSwallowedContains(distinguished)) {
+                // Auto-repeat of a tap we already took: keep eating it.
+                return true;
+            }
+            if (OtherModifierDown(tap)) {
+                return false;
+            }
+            AddTapSwallowed(distinguished);
+            AddPressed(distinguished);
+            if (_tapDownVk == 0) {
+                _tapDownVk = tap;
+                _tapVk = tap;
+                PostToUi(_raiseTap);
+            }
+            return true;
+        }
+        if (up) {
+            if (!RemoveTapSwallowed(distinguished)) {
+                // Its key-down passed through (modifier held); let the hold path
+                // and the app see the matching key-up.
+                return false;
+            }
+            RemovePressed(distinguished);
+            _tapDownVk = 0;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// True when Ctrl, Shift, Alt or Win is physically down, ignoring the modifier
+    /// family of <paramref name="tapVk"/> itself (so a Right Ctrl tap still works).
+    /// GetAsyncKeyState is accurate for keys pressed before the current event.
+    /// </summary>
+    private static bool OtherModifierDown(uint tapVk) {
+        for (int i = 0; i < TapModifiers.Length; i++) {
+            uint mod = TapModifiers[i];
+            if (HotkeyChord.SameKey(mod, tapVk)) {
+                continue;
+            }
+            if ((NativeMethods.GetAsyncKeyState((int)mod) & 0x8000) != 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static readonly uint[] TapModifiers = [
+        NativeMethods.VK_LCONTROL, NativeMethods.VK_RCONTROL,
+        NativeMethods.VK_LSHIFT, NativeMethods.VK_RSHIFT,
+        NativeMethods.VK_LMENU, NativeMethods.VK_RMENU,
+        NativeMethods.VK_LWIN, NativeMethods.VK_RWIN,
+    ];
+
+    private bool TapSwallowedContains(uint vk) {
+        for (int i = 0; i < _tapSwallowedCount; i++) {
+            if (_tapSwallowed[i] == vk) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void AddTapSwallowed(uint vk) {
+        if (!TapSwallowedContains(vk) && _tapSwallowedCount < MaxPressed) {
+            _tapSwallowed[_tapSwallowedCount++] = vk;
+        }
+    }
+
+    private bool RemoveTapSwallowed(uint vk) {
+        for (int i = 0; i < _tapSwallowedCount; i++) {
+            if (_tapSwallowed[i] == vk) {
+                _tapSwallowed[i] = _tapSwallowed[--_tapSwallowedCount];
                 return true;
             }
         }
