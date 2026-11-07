@@ -14,6 +14,9 @@ internal enum AppShortcut {
     PressEnter,
     AutoClean,
     ModelWindow,
+    ChatGptWindow,
+    GeminiWindow,
+    ClaudeWindow,
     ChatGpt,
     Gemini,
     Claude,
@@ -138,6 +141,9 @@ internal sealed class AppWindow : Form {
     private readonly HudHotkeyRow _claudeKey;
     private readonly HudHotkeyRow _enterKey;
     private readonly HudHotkeyRow _windowKey;
+    private readonly HudHotkeyRow _chatgptWindowKey;
+    private readonly HudHotkeyRow _geminiWindowKey;
+    private readonly HudHotkeyRow _claudeWindowKey;
     private readonly HudCommandList _commands;
     private readonly HudToggleRow _muteToggle;
     private readonly HudToggleRow _longDictationToggle;
@@ -234,8 +240,11 @@ internal sealed class AppWindow : Form {
         AddSection(home, Loc.T("Model windows"));
         var models = AddCard(home);
         AddModelLauncher(models, TranscriptionProvider.ChatGpt, "ChatGPT");
+        _chatgptWindowKey = AddHotkey(models, Loc.F("{0} window shortcut", "ChatGPT"), AppShortcut.ChatGptWindow);
         AddModelLauncher(models, TranscriptionProvider.Gemini, "Gemini");
+        _geminiWindowKey = AddHotkey(models, Loc.F("{0} window shortcut", "Gemini"), AppShortcut.GeminiWindow);
         AddModelLauncher(models, TranscriptionProvider.Claude, "Claude");
+        _claudeWindowKey = AddHotkey(models, Loc.F("{0} window shortcut", "Claude"), AppShortcut.ClaudeWindow);
 
         AddSection(home, Loc.T("Speed test"));
         var benchmark = AddCard(home);
@@ -560,7 +569,10 @@ internal sealed class AppWindow : Form {
             _enterKey.Value = HotkeyLabel(s.PressEnterToggleVk);
             _cleanKey.Value = HotkeyLabel(s.AutoCleanToggleVk);
             _windowKey.Value = HotkeyLabel(s.OpenModelWindowVk);
-            foreach (var row in new[] { _dictationKey, _secondDictationKey, _askModelKey, _translateKey, _translateSelectionKey, _addWordKey, _chatgptKey, _geminiKey, _claudeKey, _enterKey, _cleanKey, _windowKey }) {
+            _chatgptWindowKey.Value = HotkeyLabel(s.OpenChatGptWindowVk);
+            _geminiWindowKey.Value = HotkeyLabel(s.OpenGeminiWindowVk);
+            _claudeWindowKey.Value = HotkeyLabel(s.OpenClaudeWindowVk);
+            foreach (var row in new[] { _dictationKey, _secondDictationKey, _askModelKey, _translateKey, _translateSelectionKey, _addWordKey, _chatgptKey, _geminiKey, _claudeKey, _enterKey, _cleanKey, _windowKey, _chatgptWindowKey, _geminiWindowKey, _claudeWindowKey }) {
                 row.Invalidate();
             }
             _loginButton.Text = !_host.Online ? Loc.T("Retry connection")

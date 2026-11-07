@@ -1102,6 +1102,18 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         }
         if (_settings.OpenModelWindowVk != 0 && vk == (uint)_settings.OpenModelWindowVk) {
             OpenModelWindow();
+            return;
+        }
+        if (_settings.OpenChatGptWindowVk != 0 && vk == (uint)_settings.OpenChatGptWindowVk) {
+            ToggleModel(TranscriptionProvider.ChatGpt);
+            return;
+        }
+        if (_settings.OpenGeminiWindowVk != 0 && vk == (uint)_settings.OpenGeminiWindowVk) {
+            ToggleModel(TranscriptionProvider.Gemini);
+            return;
+        }
+        if (_settings.OpenClaudeWindowVk != 0 && vk == (uint)_settings.OpenClaudeWindowVk) {
+            ToggleModel(TranscriptionProvider.Claude);
         }
     }
 
@@ -3238,6 +3250,21 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         NotifyUi();
     }
 
+    /// <summary>Per-model window shortcut: opens that model's window, or hides it when it is already showing.</summary>
+    private void ToggleModel(TranscriptionProvider provider) {
+        if (_settings.TranscriptionProvider == provider) {
+            OpenModelWindow();
+            return;
+        }
+        if (_modelWindows.TryGetValue(provider, out ChatGPTWebController? web) && web.IsLoginWindowVisible) {
+            web.HideLoginWindow();
+            Log.Write("model-window: shortcut hid " + web.Site.DisplayName);
+            NotifyUi();
+            return;
+        }
+        OpenModel(provider);
+    }
+
     private void ToggleModelBenchmark() {
         if (_benchmarkRecording) {
             _ = FinishModelBenchmarkAsync();
@@ -4193,6 +4220,9 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             AppShortcut.PressEnter => _settings.PressEnterToggleVk,
             AppShortcut.AutoClean => _settings.AutoCleanToggleVk,
             AppShortcut.ModelWindow => _settings.OpenModelWindowVk,
+            AppShortcut.ChatGptWindow => _settings.OpenChatGptWindowVk,
+            AppShortcut.GeminiWindow => _settings.OpenGeminiWindowVk,
+            AppShortcut.ClaudeWindow => _settings.OpenClaudeWindowVk,
             AppShortcut.ChatGpt => _settings.ChatGptSwitchVk,
             AppShortcut.Gemini => _settings.GeminiSwitchVk,
             AppShortcut.Claude => _settings.ClaudeSwitchVk,
@@ -4216,6 +4246,15 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
                 break;
             case AppShortcut.ModelWindow:
                 _settings.OpenModelWindowVk = vk;
+                break;
+            case AppShortcut.ChatGptWindow:
+                _settings.OpenChatGptWindowVk = vk;
+                break;
+            case AppShortcut.GeminiWindow:
+                _settings.OpenGeminiWindowVk = vk;
+                break;
+            case AppShortcut.ClaudeWindow:
+                _settings.OpenClaudeWindowVk = vk;
                 break;
             case AppShortcut.ChatGpt:
                 _settings.ChatGptSwitchVk = vk;

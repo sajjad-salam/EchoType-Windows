@@ -91,6 +91,17 @@ internal static class HotkeyConflicts {
                 ? "That key is already the model window shortcut."
                 : "That shortcut uses the model window key.";
         }
+        foreach (var (windowVk, name) in new[] {
+                     (settings.OpenChatGptWindowVk, "ChatGPT"),
+                     (settings.OpenGeminiWindowVk, "Gemini"),
+                     (settings.OpenClaudeWindowVk, "Claude"),
+                 }) {
+            if (ConflictsWithReserved(chord, windowVk, ignoreVks)) {
+                return chord.Count == 1
+                    ? $"That key already opens the {name} window."
+                    : $"That shortcut uses the {name} window key.";
+            }
+        }
 
         foreach (var cmd in settings.ActiveCommands) {
             var other = cmd.Chord;

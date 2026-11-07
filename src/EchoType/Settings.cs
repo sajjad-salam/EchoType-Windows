@@ -251,6 +251,18 @@ internal sealed class Settings {
     [JsonPropertyName("openModelWindowVk")]
     public int OpenModelWindowVk { get; set; }
 
+    /// <summary>Tap key that opens/closes the ChatGPT window directly. 0 = none.</summary>
+    [JsonPropertyName("openChatGptWindowVk")]
+    public int OpenChatGptWindowVk { get; set; }
+
+    /// <summary>Tap key that opens/closes the Gemini window directly. 0 = none.</summary>
+    [JsonPropertyName("openGeminiWindowVk")]
+    public int OpenGeminiWindowVk { get; set; }
+
+    /// <summary>Tap key that opens/closes the Claude window directly. 0 = none.</summary>
+    [JsonPropertyName("openClaudeWindowVk")]
+    public int OpenClaudeWindowVk { get; set; }
+
     /// <summary>"chatgpt", "gemini" or "claude". Unknown values fall back to ChatGPT.</summary>
     [JsonPropertyName("transcriptionProvider")]
     public string TranscriptionProviderName { get; set; } = "chatgpt";
@@ -389,6 +401,15 @@ internal sealed class Settings {
             }
             if (OpenModelWindowVk > 0) {
                 yield return OpenModelWindowVk;
+            }
+            if (OpenChatGptWindowVk > 0) {
+                yield return OpenChatGptWindowVk;
+            }
+            if (OpenGeminiWindowVk > 0) {
+                yield return OpenGeminiWindowVk;
+            }
+            if (OpenClaudeWindowVk > 0) {
+                yield return OpenClaudeWindowVk;
             }
         }
     }
