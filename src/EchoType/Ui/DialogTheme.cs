@@ -149,7 +149,10 @@ internal static class DialogTheme {
             Padding = new Padding(10, 5, 10, 5),
             Font = HudTheme.BodyText,
         };
-        grid.AlternatingRowsDefaultCellStyle = new DataGridViewCellStyle(grid.DefaultCellStyle) {
+        // Only the background: alternating-row styles outrank column styles, so copying the
+        // grid default here would also force WrapMode=False onto every other row and turn
+        // a column's multi-line editor single-line (pasted text then stops at the first line).
+        grid.AlternatingRowsDefaultCellStyle = new DataGridViewCellStyle {
             BackColor = Alternating,
         };
         grid.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle(grid.ColumnHeadersDefaultCellStyle) {

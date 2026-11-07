@@ -65,6 +65,15 @@ internal sealed class TextShortcutsForm : Form {
             // Wrap mode makes the editing box multi-line, so Shift+Enter inserts a line break.
             DefaultCellStyle = { WrapMode = DataGridViewTriState.True },
         });
+        // Always edit the text as multi-line, whatever row styles say: a single-line box
+        // keeps only the first line of pasted text and ignores Shift+Enter.
+        _grid.EditingControlShowing += (_, e) => {
+            if (_grid.CurrentCell?.ColumnIndex == 1 && e.Control is TextBox box) {
+                box.Multiline = true;
+                box.AcceptsReturn = true;
+                box.WordWrap = true;
+            }
+        };
         foreach (var shortcut in Result) {
             _grid.Rows.Add(shortcut.Trigger, shortcut.Text);
         }
