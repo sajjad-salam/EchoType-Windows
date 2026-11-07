@@ -75,7 +75,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     /// </summary>
     private ChatGPTWebController? _askWeb;
     /// <summary>
-    /// User-opened model pages that are not the active transcription model. These
+    /// Preloaded model pages that are not the active transcription model. These
     /// windows are intentionally independent: opening one must never change the
     /// saved transcription provider or redirect the active dictation controller.
     /// </summary>
@@ -157,7 +157,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     private DateTime _pieceStartedAt;
     private int _warmupEpoch;
     private int _startupModelRaceEpoch;
-    private List<ChatGPTWebController>? _startupModelCandidates;
+    private List<StartupModelCandidate>? _startupModelCandidates;
 
     public TrayAppContext() {
         _settings = Settings.Load();
@@ -952,8 +952,8 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     /// <summary>Starts a recording session for <paramref name="chord"/> (the recorder is idle).</summary>
     private void BeginSession(HotkeyChord chord, bool isDictation) {
         if (_startupModelCandidates != null) {
-            // The user asked to record before the race finished. Keep the model already
-            // shown in the UI; never swap WebViews underneath a live microphone session.
+            // The user asked to record before model selection finished. Keep the model
+            // already shown in the UI; the other pages continue preloading in the background.
             CancelStartupModelRace();
             ApplyReplySites();
         }
@@ -3197,7 +3197,15 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             return;
         }
 
-        _web.SwitchSite(ChatSite.For(provider));
+        TranscriptionProvider previousProvider = _settings.TranscriptionProvider;
+        ChatGPTWebController previous = _web;
+        if (!_modelWindows.Remove(provider, out ChatGPTWebController? selected)) {
+            selected = new ChatGPTWebController(ChatSite.For(provider), keepStandby: true);
+        }
+        UnbindTranscriptionWeb(previous);
+        _web = selected;
+        BindTranscriptionWeb(_web);
+        _modelWindows[previousProvider] = previous;
         _settings.TranscriptionProvider = provider;
         _settings.Save();
         _loggedIn = true;
@@ -3221,7 +3229,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         }
 
         if (!_modelWindows.TryGetValue(provider, out ChatGPTWebController? web)) {
-            web = new ChatGPTWebController(ChatSite.For(provider));
+            web = new ChatGPTWebController(ChatSite.For(provider), keepStandby: true);
             _modelWindows.Add(provider, web);
         }
         Log.Write("model-window: opened " + web.Site.DisplayName
@@ -3334,6 +3342,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     private ChatGPTWebController? ExistingWebFor(TranscriptionProvider provider) {
         string id = ChatSite.For(provider).Id;
         if (_web.Site.Id == id) return _web;
+        if (_modelWindows.TryGetValue(provider, out ChatGPTWebController? modelWindow)) return modelWindow;
         if (_cleanWeb?.Site.Id == id) return _cleanWeb;
         if (_askWeb?.Site.Id == id) return _askWeb;
         return null;
@@ -3701,8 +3710,9 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     }
 
     /// <summary>
-    /// Starts ChatGPT, Gemini and Claude together and promotes the first page whose
-    /// dictation control is ready. Logged-out, offline and composer-only pages cannot win.
+    /// Starts ChatGPT, Gemini and Claude together, keeps every page preloaded, and promotes
+    /// the first page whose dictation control is ready. Logged-out, offline and
+    /// composer-only pages cannot win.
     /// </summary>
     private async Task SelectFastestStartupModelAsync() {
         int epoch = ++_startupModelRaceEpoch;
@@ -3713,7 +3723,15 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
                 : new ChatGPTWebController(ChatSite.For(provider), keepStandby: true);
             candidates.Add(new StartupModelCandidate(provider, web));
         }
-        _startupModelCandidates = candidates.Select(c => c.Web).ToList();
+        // Give every non-active provider a permanent owner before loading starts.
+        // These controllers stay alive after the race so opening a model later uses
+        // the page that was preloaded at launch instead of starting from scratch.
+        foreach (StartupModelCandidate candidate in candidates) {
+            if (!ReferenceEquals(candidate.Web, _web)) {
+                _modelWindows[candidate.Provider] = candidate.Web;
+            }
+        }
+        _startupModelCandidates = candidates;
         Log.Write("launch: racing transcription pages: "
             + string.Join(", ", candidates.Select(c => c.Web.Site.DisplayName)));
 
@@ -3724,14 +3742,22 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         var outcomes = new List<StartupModelProbe>();
         while (pending.Count > 0 && epoch == _startupModelRaceEpoch) {
             Task<StartupModelProbe> completed = await Task.WhenAny(pending);
+            if (epoch != _startupModelRaceEpoch) {
+                return;
+            }
             pending.Remove(completed);
             StartupModelProbe probe = await completed;
+            if (epoch != _startupModelRaceEpoch) {
+                return;
+            }
             outcomes.Add(probe);
             Log.Write("launch: model race " + probe.Web.Site.DisplayName + " -> "
                 + probe.Outcome + " in " + probe.Elapsed.TotalSeconds.ToString("0.0") + "s");
-            if (probe.Outcome == ReadyOutcome.Ready) {
+            if (winner == null && probe.Outcome == ReadyOutcome.Ready) {
                 winner = probe;
-                break;
+                if (!IsBusy) {
+                    PromoteStartupModel(winner);
+                }
             }
         }
 
@@ -3739,38 +3765,38 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             return; // manual model choice or an early recording took ownership
         }
 
-        if (winner != null && !IsBusy) {
-            ChatGPTWebController previous = _web;
-            if (!ReferenceEquals(previous, winner.Web)) {
-                UnbindTranscriptionWeb(previous);
-                _web = winner.Web;
-                BindTranscriptionWeb(_web);
-            }
-            _settings.TranscriptionProvider = winner.Provider;
-            _settings.Save();
-            _loggedIn = true;
-            _online = true;
-            _engagementFailures = 0;
-            SyncModelMenu();
-            UpdateLoginMenuItem();
-            UpdateStatusIcon();
-            UpdateStatusText();
-            RebuildCommandsMenu();
-            Log.Write("launch: fastest transcription model selected: " + _web.Site.DisplayName);
-        } else {
+        if (winner == null) {
             string summary = string.Join(", ", outcomes.Select(o => o.Web.Site.DisplayName + "=" + o.Outcome));
             Log.Write("launch: no dictation-ready model won the startup race; keeping "
                 + _web.Site.DisplayName + (summary.Length > 0 ? " (" + summary + ")" : ""));
             await WarmupAsync();
         }
 
-        foreach (StartupModelCandidate candidate in candidates) {
-            if (!ReferenceEquals(candidate.Web, _web)) {
-                candidate.Web.Dispose();
-            }
-        }
         _startupModelCandidates = null;
         ApplyReplySites();
+    }
+
+    private void PromoteStartupModel(StartupModelProbe winner) {
+        ChatGPTWebController previous = _web;
+        TranscriptionProvider previousProvider = _settings.TranscriptionProvider;
+        if (!ReferenceEquals(previous, winner.Web)) {
+            UnbindTranscriptionWeb(previous);
+            _modelWindows.Remove(winner.Provider);
+            _web = winner.Web;
+            BindTranscriptionWeb(_web);
+            _modelWindows[previousProvider] = previous;
+        }
+        _settings.TranscriptionProvider = winner.Provider;
+        _settings.Save();
+        _loggedIn = true;
+        _online = true;
+        _engagementFailures = 0;
+        SyncModelMenu();
+        UpdateLoginMenuItem();
+        UpdateStatusIcon();
+        UpdateStatusText();
+        RebuildCommandsMenu();
+        Log.Write("launch: fastest transcription model selected: " + _web.Site.DisplayName);
     }
 
     private static async Task<StartupModelProbe> ProbeStartupModelAsync(StartupModelCandidate candidate) {
@@ -3790,13 +3816,8 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             return;
         }
         _startupModelRaceEpoch++;
-        foreach (ChatGPTWebController candidate in _startupModelCandidates) {
-            if (!ReferenceEquals(candidate, _web)) {
-                candidate.Dispose();
-            }
-        }
         _startupModelCandidates = null;
-        Log.Write("launch: model race cancelled; keeping " + _web.Site.DisplayName);
+        Log.Write("launch: model selection cancelled; background model preloading continues");
     }
 
     private void BindTranscriptionWeb(ChatGPTWebController web) {
