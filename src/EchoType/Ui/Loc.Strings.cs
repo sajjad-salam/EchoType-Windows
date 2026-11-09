@@ -516,5 +516,7 @@ internal static partial class Loc {
         ["Send me a voice note and I'll reply with its text. Then send a text message (for example \"organize the text\") and Gemini will answer it in the same chat."] = "أرسلي رسالة صوتية وأرد عليك بنصها. بعدها أرسل رسالة نصية (مثلًا \"رتب النص\") وGemini يجاوبك بنفس المحادثة.",
         ["(Gemini sent an empty reply.)"] = "(Gemini رجّع رد فارغ.)",
         ["Couldn't get Gemini's answer: "] = "ما كدرت أجيب رد Gemini: ",
+        ["Gemini answered with an error (it may be limiting requests right now). Try again in a few minutes."] = "Gemini رجّع خطأ (يمكن دا يحدد الطلبات هسه). جرّب بعد كم دقيقة.",
+        ["Google is asking to confirm you're not a robot. The Gemini window is open on your PC: solve the check there, then send the voice note again."] = "Google يطلب تأكيد إنك مو روبوت. نافذة Gemini انفتحت على الحاسبة: حل التحقق بيها، وبعدين أرسل الرسالة الصوتية مرة ثانية.",
     };
 }

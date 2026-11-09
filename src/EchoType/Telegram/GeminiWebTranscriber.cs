@@ -11,7 +11,7 @@ namespace EchoType.Telegram;
 /// </summary>
 internal sealed class GeminiWebTranscriber : IDisposable {
 
-    private const int MaxAttempts = 3;
+    private const int MaxAttempts = 2;
 
     /// <summary>
     /// How long a sent voice note may sit with no sign of an answer before the send counts
@@ -64,8 +64,9 @@ internal sealed class GeminiWebTranscriber : IDisposable {
                     await Task.Delay(1000, cancel);
                 }
                 try {
-                    // Always a freshly loaded, settled Gemini page: attach, prompt, send.
-                    bool fresh = await driver.ReloadChatHomeAsync();
+                    // An empty, settled Gemini chat (reloaded after a failed try): attach, prompt, send.
+                    bool fresh = attempt == 1 ? await driver.EnsureEmptyChatAsync() : await driver.ReloadChatHomeAsync();
+                    ThrowIfRobotCheck();
                     if (!fresh) {
                         failure = Loc.T("Couldn't open a new Gemini chat.");
                         Log.Write("telegram: no fresh Gemini chat (attempt " + attempt + ")");
@@ -83,12 +84,18 @@ internal sealed class GeminiWebTranscriber : IDisposable {
                     string urlBefore = driver.CurrentUrl;
                     await driver.SendPromptAsync();
                     if (!await AwaitReplyStartAsync(driver, previous, urlBefore, cancel)) {
+                        ThrowIfRobotCheck();
                         failure = Loc.T("Gemini didn't answer in time.");
                         Log.Write("telegram: Gemini never started answering (attempt " + attempt + "), url " + driver.CurrentUrl);
                         continue;
                     }
                     ModelReply reply = await AwaitReplyAsync(driver, previous, ReplyTimeout);
                     await driver.ClearComposerAsync();
+                    if (IsGeminiErrorReply(reply.Text)) {
+                        failure = Loc.T("Gemini answered with an error (it may be limiting requests right now). Try again in a few minutes.");
+                        Log.Write("telegram: Gemini error reply (attempt " + attempt + "): " + reply.Text);
+                        continue;
+                    }
                     _hasConversation = true;
                     return CleanTranscript(reply.Text);
                 } catch (Exception ex) when ((ex is DriverException or InvalidOperationException) && !cancel.IsCancellationRequested) {
@@ -125,8 +132,30 @@ internal sealed class GeminiWebTranscriber : IDisposable {
         await driver.SendPromptAsync();
         ModelReply reply = await AwaitReplyAsync(driver, previous, FollowUpReplyTimeout);
         await driver.ClearComposerAsync();
+        if (IsGeminiErrorReply(reply.Text)) {
+            Log.Write("telegram: Gemini error reply to a prompt: " + reply.Text);
+            throw new InvalidOperationException(
+                Loc.T("Gemini answered with an error (it may be limiting requests right now). Try again in a few minutes."));
+        }
         _hasConversation = true;
         return reply.Text.Trim();
+    }
+
+    /// <summary>
+    /// Gemini's own failure bubbles ("I seem to be encountering an error…", "Sorry,
+    /// something went wrong…"), which must not be passed off as a transcript.
+    /// </summary>
+    internal static bool IsGeminiErrorReply(string text) {
+        string t = text.Trim();
+        if (t.Length == 0 || t.Length > 220) {
+            return false;
+        }
+        string[] patterns = [
+            "encountering an error", "something went wrong", "try your request again",
+            "can i try something else for you", "i'm having a hard time fulfilling",
+            "حدث خطأ", "حدث خطأ ما", "أواجه خطأ", "يبدو أنني أواجه", "حاول مرة أخرى", "هناك خطأ ما",
+        ];
+        return patterns.Any(p => t.Contains(p, StringComparison.OrdinalIgnoreCase));
     }
 
     private async Task<DictationDriver> ReadyDriverAsync(CancellationToken cancel) {
@@ -135,8 +164,10 @@ internal sealed class GeminiWebTranscriber : IDisposable {
             _web = new ChatGPTWebController(ChatSite.Gemini);
             _hasConversation = false;
         }
+        ThrowIfRobotCheck();
         var ready = await _web.EnsureReadyAsync();
         cancel.ThrowIfCancellationRequested();
+        ThrowIfRobotCheck();
         if (ready == ReadyOutcome.LoggedOut) {
             throw new InvalidOperationException(
                 Loc.T("Gemini is signed out. Pick Gemini in EchoType, log in, then send the voice note again."));
@@ -146,6 +177,23 @@ internal sealed class GeminiWebTranscriber : IDisposable {
         }
         return _web.Driver ?? throw new InvalidOperationException(Loc.F("Gemini isn't ready ({0}).", "no driver"));
     }
+
+    /// <summary>
+    /// On Google's "unusual traffic" page nothing will work and every retry makes it
+    /// worse: show the window so the user can solve the check, and stop.
+    /// </summary>
+    private void ThrowIfRobotCheck() {
+        if (_web is not { IsGoogleRobotCheck: true }) {
+            return;
+        }
+        Log.Write("telegram: Google robot check on the Gemini page, showing the window");
+        _web.ShowLoginWindow();
+        throw new GeminiRobotCheckException(Loc.T(
+            "Google is asking to confirm you're not a robot. The Gemini window is open on your PC: solve the check there, then send the voice note again."));
+    }
+
+    /// <summary>True on the robot check page, for callers that wait for the user to solve it.</summary>
+    public bool IsBlockedByRobotCheck => _web is { IsGoogleRobotCheck: true };
 
     /// <summary>True once Gemini shows it got the prompt: a real chat URL, generating, or reply text.</summary>
     private static async Task<bool> AwaitReplyStartAsync(
@@ -209,3 +257,6 @@ internal sealed class GeminiWebTranscriber : IDisposable {
         return text;
     }
 }
+
+/// <summary>Google's robot check is up; retrying can't help until a person solves it.</summary>
+internal sealed class GeminiRobotCheckException(string message) : Exception(message);

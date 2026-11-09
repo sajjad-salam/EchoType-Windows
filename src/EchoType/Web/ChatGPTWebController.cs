@@ -185,6 +185,17 @@ internal sealed class ChatGPTWebController : IDisposable {
 
     public DictationDriver? Driver => _driver;
 
+    public string CurrentUrl => _webview?.Source ?? "";
+
+    /// <summary>
+    /// Google's "unusual traffic" robot check (google.com/sorry). Nothing works in this
+    /// profile until a person solves it in the window.
+    /// </summary>
+    public bool IsGoogleRobotCheck => IsRobotCheckUrl(CurrentUrl);
+
+    public static bool IsRobotCheckUrl(string url) =>
+        url.Contains("google.com/sorry", StringComparison.OrdinalIgnoreCase);
+
     public ChatSite Site => _site;
 
     /// <summary>
@@ -437,6 +448,12 @@ internal sealed class ChatGPTWebController : IDisposable {
                 Log.Write("webview: went offline during load");
                 SetInteractive(false);
                 return ReadyOutcome.Offline;
+            }
+            if (IsGoogleRobotCheck) {
+                Log.Write("webview: Google robot check page (unusual traffic)");
+                _loading = false;
+                SetInteractive(false);
+                return ReadyOutcome.NotReady;
             }
             if (_navCompletedGeneration != _navGeneration) {
                 if (DateTime.UtcNow > deadline) {

@@ -20,6 +20,14 @@ internal static class Program {
         Application.ThreadException += (_, e) => Log.Write("unhandled: " + e.Exception);
         AppDomain.CurrentDomain.UnhandledException += (_, e) => Log.Write("fatal: " + e.ExceptionObject);
 
+        // Developer check of the Telegram voice path without Telegram:
+        //   EchoType.exe --transcribe-test <audio file> <result file> [follow-up prompt]
+        // Close the tray app first (both use the same Gemini browser profile).
+        if (args.Length >= 3 && args[0] == "--transcribe-test") {
+            Telegram.TranscribeTest.Run(args[1], args[2], args.Length >= 4 ? args[3] : null);
+            return;
+        }
+
         using var mutex = new Mutex(initiallyOwned: true, @"Local\EchoType.SingleInstance", out bool createdNew);
         if (!createdNew && args.Contains(RestartArg)) {
             // Language switch: the previous instance is shutting down; take over once it has.

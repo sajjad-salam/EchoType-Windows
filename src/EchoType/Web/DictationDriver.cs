@@ -370,7 +370,7 @@ internal sealed class DictationDriver {
           };
           E.inSideChrome = (el) => {
             try {
-              return !!(el.closest && el.closest('nav, aside, [role="navigation"], [role="complementary"], [data-test-id="conversation-list"]'));
+              return !!(el.closest && el.closest('nav, aside, header, [role="navigation"], [role="complementary"], [role="banner"], [data-test-id="conversation-list"], .side-nav-menu-button, side-nav-sparkle-button, bard-sidenav, mat-sidenav'));
             } catch (e) { return false; }
           };
           E.composerPick = (list) => {
@@ -903,6 +903,10 @@ internal sealed class DictationDriver {
           E.generatedMediaNode = () => {
             const users = E.messageNodes(S.user);
             const user = users.length ? users[users.length - 1] : null;
+            // A generated image/video always answers a prompt. With no user turn on the
+            // page, any image is page chrome (Gemini's sidebar sparkle button matched
+            // here and made every empty chat look like it still had a reply).
+            if (!user) return null;
             const composer = E.composer();
             const hits = deepQueryAll('img, video, [aria-busy="true"], [role="progressbar"], progress');
             for (let i = hits.length - 1; i >= 0; i--) {
@@ -2087,6 +2091,10 @@ internal sealed class DictationDriver {
             DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(25);
             bool newDocument = false;
             while (DateTime.UtcNow < deadline) {
+                if (ChatGPTWebController.IsRobotCheckUrl(CurrentUrl)) {
+                    Log.Write("driver: Google robot check page, not waiting for the chat");
+                    return false;
+                }
                 try {
                     if (!newDocument) {
                         newDocument = await EvalLiteAsync("window.__etNavToken || ''") != token;
@@ -2112,8 +2120,10 @@ internal sealed class DictationDriver {
             // Gemini first shows a server-rendered composer, then its app boots and swaps
             // in a new one — dropping any text or file put in before. Wait for the load to
             // finish and for the composer to stay the same element.
-            await Task.WhenAny(loaded.Task, Task.Delay(deadline - DateTime.UtcNow));
-            return await AwaitComposerSettledAsync(deadline);
+            // Gemini's load event can come 20 s+ late (background requests); the composer
+            // swap is what matters, so don't let the load wait eat the whole budget.
+            await Task.WhenAny(loaded.Task, Task.Delay(TimeSpan.FromSeconds(6)));
+            return await AwaitComposerSettledAsync(DateTime.UtcNow + TimeSpan.FromSeconds(15));
         } finally {
             _webview.NavigationCompleted -= OnLoaded;
         }
@@ -2126,11 +2136,11 @@ internal sealed class DictationDriver {
     private async Task<bool> AwaitComposerSettledAsync(DateTime deadline) {
         const string mark = """
             (function(){
-              if (document.readyState !== 'complete') return 'loading';
+              if (document.readyState === 'loading') return 'loading';
               const c = window.__echotype && window.__echotype.composer();
-              if (!c) return 'none';
-              if (c.getAttribute('data-et-settle') === '1') return 'same';
-              c.setAttribute('data-et-settle', '1');
+              if (!c || !c.isConnected) return 'none';
+              if (window.__etSettleEl === c) return 'same';
+              window.__etSettleEl = c;
               return 'marked';
             })()
             """;
@@ -2492,6 +2502,24 @@ internal sealed class DictationDriver {
         } catch (DriverException) {
             return false;
         }
+    }
+
+    /// <summary>
+    /// An empty, ready chat with a composer that's done swapping. Uses the page as it is
+    /// when it's already empty; reloads the chat home only when it isn't (each reload is
+    /// traffic Google counts toward its robot check).
+    /// </summary>
+    public async Task<bool> EnsureEmptyChatAsync() {
+        try {
+            if (await ConversationIsFreshAsync() && (await StateAsync()) is { LoggedIn: true, ComposerPresent: true, Dictating: false }
+                && await AwaitComposerSettledAsync(DateTime.UtcNow + TimeSpan.FromSeconds(10))) {
+                Log.Write("driver: page is already an empty chat");
+                return true;
+            }
+        } catch (DriverException ex) {
+            Log.Write("driver: empty-chat probe failed: " + ex.Message);
+        }
+        return await ReloadChatHomeAsync();
     }
 
     /// <summary>Reloads the chat home page and waits for an empty, ready chat.</summary>
