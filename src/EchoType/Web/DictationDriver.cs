@@ -2073,36 +2073,88 @@ internal sealed class DictationDriver {
         } catch (DriverException) {
             // no document to tag; the new page is checked the same way
         }
+        var loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnLoaded(object? sender, CoreWebView2NavigationCompletedEventArgs e) => loaded.TrySetResult();
+        _webview.NavigationCompleted += OnLoaded;
         try {
-            _webview.Navigate(_chatUrl);
-        } catch (Exception ex) {
-            Log.Write("driver: home navigation failed: " + ex.Message);
+            try {
+                _webview.Navigate(_chatUrl);
+            } catch (Exception ex) {
+                Log.Write("driver: home navigation failed: " + ex.Message);
+                return false;
+            }
+
+            DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(25);
+            bool newDocument = false;
+            while (DateTime.UtcNow < deadline) {
+                try {
+                    if (!newDocument) {
+                        newDocument = await EvalLiteAsync("window.__etNavToken || ''") != token;
+                        if (!newDocument) {
+                            await Task.Delay(150);
+                            continue;
+                        }
+                        Log.Write("driver: home navigation committed");
+                    }
+                    var st = await StateAsync();
+                    if (st.LoggedIn && st.ComposerPresent && !st.Dictating) {
+                        break;
+                    }
+                } catch (DriverException) {
+                    // page still swapping
+                }
+                await Task.Delay(250);
+            }
+            if (!newDocument || DateTime.UtcNow >= deadline) {
+                Log.Write("driver: home navigation did not become interactive in time");
+                return false;
+            }
+            // Gemini first shows a server-rendered composer, then its app boots and swaps
+            // in a new one — dropping any text or file put in before. Wait for the load to
+            // finish and for the composer to stay the same element.
+            await Task.WhenAny(loaded.Task, Task.Delay(deadline - DateTime.UtcNow));
+            return await AwaitComposerSettledAsync(deadline);
+        } finally {
+            _webview.NavigationCompleted -= OnLoaded;
+        }
+    }
+
+    /// <summary>
+    /// True once the page has loaded and the composer element hasn't been replaced for a
+    /// moment (a marker set on it is still there 1.2 s later).
+    /// </summary>
+    private async Task<bool> AwaitComposerSettledAsync(DateTime deadline) {
+        const string mark = """
+            (function(){
+              if (document.readyState !== 'complete') return 'loading';
+              const c = window.__echotype && window.__echotype.composer();
+              if (!c) return 'none';
+              if (c.getAttribute('data-et-settle') === '1') return 'same';
+              c.setAttribute('data-et-settle', '1');
+              return 'marked';
+            })()
+            """;
+        int stableChecks = 0;
+        while (DateTime.UtcNow < deadline) {
+            string result;
+            try {
+                result = await EvalAsync(mark);
+            } catch (DriverException) {
+                result = "error";
+            }
+            stableChecks = result == "same" ? stableChecks + 1 : 0;
+            if (stableChecks >= 3) {
+                Log.Write("driver: page settled, composer stable");
+                return true;
+            }
+            await Task.Delay(400);
+        }
+        Log.Write("driver: composer never settled after navigation");
+        try {
+            return (await StateAsync()) is { LoggedIn: true, ComposerPresent: true };
+        } catch (DriverException) {
             return false;
         }
-
-        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
-        bool newDocument = false;
-        while (DateTime.UtcNow < deadline) {
-            try {
-                if (!newDocument) {
-                    newDocument = await EvalLiteAsync("window.__etNavToken || ''") != token;
-                    if (!newDocument) {
-                        await Task.Delay(150);
-                        continue;
-                    }
-                    Log.Write("driver: home navigation committed");
-                }
-                var st = await StateAsync();
-                if (st.LoggedIn && st.ComposerPresent && !st.Dictating) {
-                    return true;
-                }
-            } catch (DriverException) {
-                // page still swapping
-            }
-            await Task.Delay(250);
-        }
-        Log.Write("driver: home navigation did not become interactive in time");
-        return false;
     }
 
     public async Task SetComposerAsync(string text) {

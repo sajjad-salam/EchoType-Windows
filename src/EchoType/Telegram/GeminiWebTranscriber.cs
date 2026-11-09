@@ -64,7 +64,8 @@ internal sealed class GeminiWebTranscriber : IDisposable {
                     await Task.Delay(1000, cancel);
                 }
                 try {
-                    bool fresh = attempt == 1 ? await driver.StartNewChatAsync() : await driver.ReloadChatHomeAsync();
+                    // Always a freshly loaded, settled Gemini page: attach, prompt, send.
+                    bool fresh = await driver.ReloadChatHomeAsync();
                     if (!fresh) {
                         failure = Loc.T("Couldn't open a new Gemini chat.");
                         Log.Write("telegram: no fresh Gemini chat (attempt " + attempt + ")");
