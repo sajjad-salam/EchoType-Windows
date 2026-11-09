@@ -2421,6 +2421,38 @@ internal sealed class DictationDriver {
         return st?.Reply ?? ModelReply.Empty;
     }
 
+    /// <summary>The page URL (Gemini moves from /app to /app/&lt;id&gt; once a chat really exists).</summary>
+    public string CurrentUrl => _webview.Source ?? "";
+
+    /// <summary>
+    /// True once the model is working on the prompt sent after <paramref name="previous"/>:
+    /// it's generating or a new reply has text. Used to spot a send the site silently
+    /// dropped (the user bubble shows, but no answer ever starts).
+    /// </summary>
+    public async Task<bool> ReplyStartedAsync(CommandTurnSnapshot previous) {
+        try {
+            var st = await ReadReplyStateAsync();
+            if (st == null) {
+                return false;
+            }
+            return st.Generating
+                || (!st.Reply.IsEmpty && (st.AssistantKey != previous.AssistantKey || st.Reply.Text != previous.Reply.Text));
+        } catch (DriverException) {
+            return false;
+        }
+    }
+
+    /// <summary>Reloads the chat home page and waits for an empty, ready chat.</summary>
+    public async Task<bool> ReloadChatHomeAsync() {
+        if (!await NavigateToChatHomeAsync()) {
+            return false;
+        }
+        if (await AwaitFreshConversationAsync(TimeSpan.FromSeconds(5))) {
+            return true;
+        }
+        return await StartNewChatAsync();
+    }
+
     public async Task<CommandTurnSnapshot> SnapshotCommandTurnAsync() {
         var st = await ReadReplyStateAsync();
         return st == null

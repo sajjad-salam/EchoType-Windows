@@ -11,7 +11,17 @@ namespace EchoType.Telegram;
 /// </summary>
 internal sealed class GeminiWebTranscriber : IDisposable {
 
-    private static readonly TimeSpan FirstReplyTimeout = TimeSpan.FromSeconds(60);
+    private const int MaxAttempts = 3;
+
+    /// <summary>
+    /// How long a sent voice note may sit with no sign of an answer before the send counts
+    /// as dropped and is retried. Gemini opens the chat (/app/&lt;id&gt;) or starts
+    /// generating within seconds when it really got the prompt.
+    /// </summary>
+    private static readonly TimeSpan ReplyStartTimeout = TimeSpan.FromSeconds(35);
+
+    /// <summary>Once Gemini is answering, a long voice note can take a while to finish.</summary>
+    private static readonly TimeSpan ReplyTimeout = TimeSpan.FromSeconds(120);
 
     private const string TranscribePrompt =
         "Transcribe the attached audio exactly as spoken. Output ONLY the spoken words: no introduction, no comments, "
@@ -44,33 +54,48 @@ internal sealed class GeminiWebTranscriber : IDisposable {
         await File.WriteAllBytesAsync(path, audio, cancel);
         try {
             driver.InvalidateWaits();
-            CommandTurnSnapshot previous = CommandTurnSnapshot.Empty;
-            bool attached = false;
-            // A cold window can still be swapping pages while the first try runs, which
-            // drops the upload; one more try from a fresh chat on the settled page.
-            for (int attempt = 1; attempt <= 2 && !attached; attempt++) {
-                if (!await driver.StartNewChatAsync()) {
-                    throw new InvalidOperationException(Loc.T("Couldn't open a new Gemini chat."));
+            string failure = Loc.T("Couldn't upload the voice note to Gemini.");
+            // Gemini sometimes loses a try: the upload lands on a page that's still loading,
+            // or the prompt shows in the chat but the answer never starts (the URL stays at
+            // /app). Each retry starts over on a freshly reloaded page.
+            for (int attempt = 1; attempt <= MaxAttempts; attempt++) {
+                cancel.ThrowIfCancellationRequested();
+                if (attempt > 1) {
+                    await Task.Delay(1000, cancel);
                 }
-                previous = await driver.SnapshotCommandTurnAsync();
-                await driver.SetComposerAsync(TranscribePrompt);
-                attached = await driver.AttachFilesAsync([path]);
-                if (!attached) {
-                    await driver.ClearComposerAsync();
-                    Log.Write("telegram: voice note upload failed (attempt " + attempt + ")");
+                try {
+                    bool fresh = attempt == 1 ? await driver.StartNewChatAsync() : await driver.ReloadChatHomeAsync();
+                    if (!fresh) {
+                        failure = Loc.T("Couldn't open a new Gemini chat.");
+                        Log.Write("telegram: no fresh Gemini chat (attempt " + attempt + ")");
+                        continue;
+                    }
+                    CommandTurnSnapshot previous = await driver.SnapshotCommandTurnAsync();
+                    await driver.SetComposerAsync(TranscribePrompt);
+                    if (!await driver.AttachFilesAsync([path])) {
+                        await driver.ClearComposerAsync();
+                        failure = Loc.T("Couldn't upload the voice note to Gemini.");
+                        Log.Write("telegram: voice note upload failed (attempt " + attempt + ")");
+                        continue;
+                    }
                     cancel.ThrowIfCancellationRequested();
-                    await Task.Delay(1500, cancel);
+                    string urlBefore = driver.CurrentUrl;
+                    await driver.SendPromptAsync();
+                    if (!await AwaitReplyStartAsync(driver, previous, urlBefore, cancel)) {
+                        failure = Loc.T("Gemini didn't answer in time.");
+                        Log.Write("telegram: Gemini never started answering (attempt " + attempt + "), url " + driver.CurrentUrl);
+                        continue;
+                    }
+                    ModelReply reply = await AwaitReplyAsync(driver, previous, ReplyTimeout);
+                    await driver.ClearComposerAsync();
+                    _hasConversation = true;
+                    return CleanTranscript(reply.Text);
+                } catch (Exception ex) when ((ex is DriverException or InvalidOperationException) && !cancel.IsCancellationRequested) {
+                    failure = ex.Message;
+                    Log.Write("telegram: transcription attempt " + attempt + " failed: " + ex.Message);
                 }
             }
-            if (!attached) {
-                throw new InvalidOperationException(Loc.T("Couldn't upload the voice note to Gemini."));
-            }
-            cancel.ThrowIfCancellationRequested();
-            await driver.SendPromptAsync();
-            ModelReply reply = await AwaitReplyAsync(driver, previous, FirstReplyTimeout);
-            await driver.ClearComposerAsync();
-            _hasConversation = true;
-            return CleanTranscript(reply.Text);
+            throw new InvalidOperationException(failure);
         } finally {
             try {
                 File.Delete(path);
@@ -119,6 +144,26 @@ internal sealed class GeminiWebTranscriber : IDisposable {
             throw new InvalidOperationException(Loc.F("Gemini isn't ready ({0}).", ready));
         }
         return _web.Driver ?? throw new InvalidOperationException(Loc.F("Gemini isn't ready ({0}).", "no driver"));
+    }
+
+    /// <summary>True once Gemini shows it got the prompt: a real chat URL, generating, or reply text.</summary>
+    private static async Task<bool> AwaitReplyStartAsync(
+        DictationDriver driver, CommandTurnSnapshot previous, string urlBefore, CancellationToken cancel) {
+        DateTime deadline = DateTime.UtcNow + ReplyStartTimeout;
+        while (DateTime.UtcNow < deadline) {
+            cancel.ThrowIfCancellationRequested();
+            string url = driver.CurrentUrl;
+            if (url != urlBefore && url.Contains("/app/", StringComparison.Ordinal)) {
+                Log.Write("telegram: Gemini opened the chat " + url);
+                return true;
+            }
+            if (await driver.ReplyStartedAsync(previous)) {
+                Log.Write("telegram: Gemini is answering");
+                return true;
+            }
+            await Task.Delay(500, cancel);
+        }
+        return false;
     }
 
     private static async Task<ModelReply> AwaitReplyAsync(DictationDriver driver, CommandTurnSnapshot previous, TimeSpan timeout) {
