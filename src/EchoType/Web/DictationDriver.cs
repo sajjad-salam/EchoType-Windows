@@ -281,7 +281,7 @@ internal sealed class DictationDriver {
           };
           E.button = (kind) => {
             if (kind === 'attach') {
-              const re = /^(upload|attach|add|insert)\s+(file|files|attachment)s?$|^(open|show)\s+(upload|attach).*(menu|options)?$|إرفاق\s*(ملف|ملفات)?|إضافة\s*(ملف|ملفات)|تحميل\s*(ملف|ملفات)|رفع\s*(ملف|ملفات)|فتح.{0,20}(إرفاق|تحميل|رفع|إضافة)/i;
+              const re = /^(upload|attach|add|insert)\s+(file|files|attachment)s?$|^(upload|attach|add)\b.{0,20}\bfiles?\b|^(open|show)\s+(upload|attach).*(menu|options)?$|إرفاق\s*(ملف|ملفات)?|إضافة\s*(ملف|ملفات)|تحميل\s*(ملف|ملفات)|رفع\s*(ملف|ملفات)|فتح.{0,20}(إرفاق|تحميل|رفع|إضافة)/i;
               for (const b of buttons()) {
                 if (!isVisible(b) || b.disabled || b.getAttribute('aria-disabled') === 'true') continue;
                 const text = ((label(b) || '') + ' ' + (b.getAttribute('title') || '') + ' '
@@ -2064,6 +2064,15 @@ internal sealed class DictationDriver {
             return false;
         }
         Log.Write("driver: loading " + _chatUrl + " to force a fresh chat");
+        // Navigate() returns at once and the old document stays live (composer and all)
+        // until the new one commits. Tag the old document so the wait below only accepts
+        // the new page; otherwise text and files go into a page that's about to be wiped.
+        string token = Guid.NewGuid().ToString("N");
+        try {
+            _ = await EvalLiteAsync("(window.__etNavToken = '" + token + "', 'ok')");
+        } catch (DriverException) {
+            // no document to tag; the new page is checked the same way
+        }
         try {
             _webview.Navigate(_chatUrl);
         } catch (Exception ex) {
@@ -2072,8 +2081,17 @@ internal sealed class DictationDriver {
         }
 
         DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        bool newDocument = false;
         while (DateTime.UtcNow < deadline) {
             try {
+                if (!newDocument) {
+                    newDocument = await EvalLiteAsync("window.__etNavToken || ''") != token;
+                    if (!newDocument) {
+                        await Task.Delay(150);
+                        continue;
+                    }
+                    Log.Write("driver: home navigation committed");
+                }
                 var st = await StateAsync();
                 if (st.LoggedIn && st.ComposerPresent && !st.Dictating) {
                     return true;

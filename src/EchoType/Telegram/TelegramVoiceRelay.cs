@@ -5,7 +5,8 @@ namespace EchoType.Telegram;
 /// <summary>
 /// While EchoType runs, voice notes sent to the user's Telegram bot from their chat are
 /// downloaded, transcribed by Gemini web (hidden window, no API key) and the text is sent
-/// back to that chat as a reply.
+/// back to that chat as a reply. A text message afterwards is sent as a prompt to the same
+/// Gemini chat (so "organize the text" works on the transcript) and the answer comes back.
 /// Other chats only get their chat id (to help with setup).
 /// </summary>
 internal sealed class TelegramVoiceRelay : IDisposable {
@@ -53,8 +54,15 @@ internal sealed class TelegramVoiceRelay : IDisposable {
             return;
         }
         if (message.AudioFileId == null) {
-            await _bot.SendMessageAsync(_chatId,
-                Loc.T("Send me a voice note and I'll reply with its text."), message.MessageId, cancel);
+            string prompt = message.Text.Trim();
+            // Bot commands (/start, /help) and empty messages just get the usage hint.
+            if (prompt.Length == 0 || prompt.StartsWith('/')) {
+                await _bot.SendMessageAsync(_chatId,
+                    Loc.T("Send me a voice note and I'll reply with its text. Then send a text message (for example \"organize the text\") and Gemini will answer it in the same chat."),
+                    message.MessageId, cancel);
+                return;
+            }
+            await AnswerPromptAsync(message, prompt, cancel);
             return;
         }
         var started = DateTime.UtcNow;
@@ -72,6 +80,28 @@ internal sealed class TelegramVoiceRelay : IDisposable {
         } catch (Exception ex) when (!cancel.IsCancellationRequested) {
             Log.Write("telegram: voice note " + message.MessageId + " failed: " + ex.Message);
             reply = Loc.T("Couldn't transcribe this voice note: ") + ex.Message;
+        } finally {
+            typing.Cancel();
+        }
+        await typingLoop;
+        await _bot.SendMessageAsync(_chatId, reply, message.MessageId, cancel);
+    }
+
+    /// <summary>A text message after a voice note: the prompt goes to the same Gemini chat.</summary>
+    private async Task AnswerPromptAsync(TelegramIncoming message, string prompt, CancellationToken cancel) {
+        var started = DateTime.UtcNow;
+        Log.Write("telegram: prompt " + message.MessageId + " (" + prompt.Length + " chars)");
+        using var typing = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        var typingLoop = KeepTypingAsync(typing.Token);
+        string reply;
+        try {
+            string answer = await OnUiAsync(() => _gemini.AskAsync(prompt, cancel));
+            reply = answer.Length > 0 ? answer : Loc.T("(Gemini sent an empty reply.)");
+            Log.Write("telegram: prompt " + message.MessageId + " answered, " + answer.Length + " chars in "
+                + (int)(DateTime.UtcNow - started).TotalMilliseconds + " ms");
+        } catch (Exception ex) when (!cancel.IsCancellationRequested) {
+            Log.Write("telegram: prompt " + message.MessageId + " failed: " + ex.Message);
+            reply = Loc.T("Couldn't get Gemini's answer: ") + ex.Message;
         } finally {
             typing.Cancel();
         }

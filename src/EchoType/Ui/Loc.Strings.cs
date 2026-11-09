@@ -513,5 +513,8 @@ internal static partial class Loc {
         ["Gemini didn't answer in time."] = "Gemini ما رد بالوقت.",
         ["(No speech found in this voice note.)"] = "(ما لكيت كلام بهاي الرسالة الصوتية.)",
         ["Couldn't transcribe this voice note: "] = "ما كدرت أفرغ هاي الرسالة الصوتية: ",
+        ["Send me a voice note and I'll reply with its text. Then send a text message (for example \"organize the text\") and Gemini will answer it in the same chat."] = "أرسلي رسالة صوتية وأرد عليك بنصها. بعدها أرسل رسالة نصية (مثلًا \"رتب النص\") وGemini يجاوبك بنفس المحادثة.",
+        ["(Gemini sent an empty reply.)"] = "(Gemini رجّع رد فارغ.)",
+        ["Couldn't get Gemini's answer: "] = "ما كدرت أجيب رد Gemini: ",
     };
 }
