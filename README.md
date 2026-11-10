@@ -23,7 +23,27 @@ If you **select text first**, then record an instruction, EchoType sends the sel
 
 Pick **ChatGPT**, **Gemini** or **Claude** from the window or the tray menu, or assign tap shortcuts to switch between them. Each model has its own login session. At launch EchoType opens all three pages in parallel and makes the first signed-in page whose dictation microphone is actually ready the transcription model; composer-only or logged-out pages cannot win. A manual model choice or an early recording cancels that startup race so the app never switches models underneath you. Custom-command prompts are shared by all of them and always use whichever model is selected.
 
-**Listening HUD.** While you speak, the pill at the bottom of the screen shows a live wave of your voice's frequencies (a short FFT of the microphone, low pitches on the left, high on the right), not just its loudness. Its **✕** button cancels the recording: nothing is pasted, and clicking it doesn't take focus from the app you're typing in. The same ✕ is on the progress pill while EchoType transcribes or waits for a reply. When you stop recording the pill turns into **Processing…** for about a second and slides away: the transcript, Auto Clean, command or translation finishes in the background and still pastes into the field you started in (the tray icon stays blue meanwhile, and a double-tap of Right Ctrl still cancels). Change how long it stays with `progressPillHideMs` in `config.json` (0 keeps the pill up until the work ends).
+**Listening HUD.** While you speak, the pill at the bottom of the screen shows a live wave of your voice's frequencies (a short FFT of the microphone, low pitches on the left, high on the right), not just its loudness. Its **✕** button cancels the recording: nothing is pasted, and clicking it doesn't take focus from the app you're typing in. The same ✕ is on the progress pill while EchoType transcribes or waits for a reply. When you stop recording the pill turns into **Processing…** for about a second and slides away: the transcript, Auto Clean, command or translation finishes in the background and still pastes into the field you started in (the tray icon stays blue meanwhile, and a double-tap of Right Ctrl still cancels). Change how long it stays with `progressPillHideMs` (window → **Advanced**, or `config.json`; 0 keeps the pill up until the work ends).
+
+**Setup wizard.** On the very first launch a four-step wizard checks the Windows microphone privacy switch and the WebView2 runtime, lets you sign in to ChatGPT, Gemini and Claude (with a live status for each), asks how you want to record, and ends with a test dictation that shows what EchoType heard. Run it again any time from **Settings → Setup** or tray → **More → Run setup again…**.
+
+**Health card.** The **Home** page shows the same checks while EchoType runs: microphone access, WebView2, and each model window (ready, loading, signed out, offline, or "the page changed — EchoType can't find its mic button"), plus the cleaning, Ask and translation windows when you use them. Every problem has a one-click fix next to it (open Windows settings, sign in, reload).
+
+**History.** Everything EchoType pastes or shows — dictations, Auto Clean results, command and Ask replies, translations, and the transcript of anything that failed — is kept in **History** (window → **History**, or tray → **History…**). Search it, **Copy** an entry, **Paste into previous app**, or select a misheard word and click **Fix a word…** to add a word replacement. Set a **Paste last result** shortcut to paste the newest entry again into whatever field has focus. History is stored only on this PC in `%APPDATA%\EchoType\history.json` (the last 200 entries by default); turn it off or change the size on the **History** page.
+
+**Action palette (one key for everything).** Set an **Action palette** shortcut under **Shortcuts** (e.g. Ctrl+Space). Pressing it opens a small list next to the cursor with every action: Dictate, Ask, Translate speech, each custom command, Translate selected text, Paste last result, History, Add word replacement, switch transcription model, and Auto Clean / Auto Enter on or off. Press 1–9, type a few letters, or use the arrow keys and Enter. Recordings started from the palette are always press-to-stop: press the palette key (or the dictation key) again to finish, Esc to cancel. The **All shortcuts** list on the same page shows every key you have set.
+
+**Spoken shortcuts.** Turn on **Spoken shortcuts** (Shortcuts page, or the wizard) and a plain dictation that starts with "ask …" / "اسأل …" goes to the Ask model, and "translate …" / "ترجم …" is translated — no separate keys needed. Only the first word counts, so "I want to ask you…" is still pasted as dictated.
+
+**Automatic model switch.** If the transcription model's page is signed out or its UI changed, EchoType switches to another model whose page is signed in and ready, so the next recording works. Turn it off with **Settings → Switch models when one stops working**.
+
+**Updates and page fixes.** Once a day EchoType checks GitHub Releases; when a newer version is out, **Settings → Updates** shows **Install update** (it downloads the release, replaces the files after EchoType exits and starts it again) or **Skip this version**. It also downloads the community selector fixes in [`selectors/selectors.json`](selectors/selectors.json) to `%APPDATA%\EchoType\selectors.remote.json`, so when a chat site changes its page one fix in this repo reaches everyone without a new build (your own `selectors.json` still wins). Both can be turned off on the Settings page.
+
+**Search, Advanced page, backup.** Type in the search box at the top of the window (Ctrl+F) to find any setting and jump to it. Options that used to be `config.json`-only — the progress pill time, the OpenAI translation model, the custom sounds folder — are on the **Advanced** page, and **Translate with ChatGPT** is on the Translate page. **Settings → Backup → Export…** saves your commands, word replacements, text shortcuts, workspace modes, per-app profiles and options to one file (without your OpenAI API key); **Import…** merges such a file into yours — lists only, or lists plus preferences. Imported commands whose keys clash with yours are added without a key.
+
+**Resizable reply windows.** The Ask model reply and Translate selection popups can be resized from any edge or the corner grip; the reply text grows with the window. Double-click the popup's title to switch between a large reading size and the size you had. Each kind of popup reopens at the size you last dragged it to (until EchoType restarts).
+
+**Tray menu.** The everyday items are on top — Open EchoType, History, Paste last result, Add word replacement, transcription model, recording mode, Auto Clean and Auto Enter. Everything else is under **More** (and in the window).
 
 **Record again while it processes.** You don't have to wait for a recording to finish processing: press the shortcut again and the next recording starts straight away on EchoType's second, preloaded page of the transcription model while the first one is transcribed on the page that recorded it. Results paste in the order you recorded them, and never while you are speaking (a result that is ready waits until you stop). If the second page isn't ready yet (two recordings within a few seconds), the press is remembered and the recording starts as soon as the previous transcript is in. Replies from the cleaning, Ask and translation windows are answered one after another. A double-tap of Right Ctrl, or the ✕ on the progress pill, cancels everything that is still processing.
 
@@ -172,6 +192,12 @@ The command’s key is reserved (swallowed) while EchoType is running, same as t
 - `showAskReplyWindow` — `true` (default): Ask model replies also open in a popup with Copy buttons. `false`: they are only pasted / copied.
 - `muteOtherAppsWhileDictating` — `true` (default): other apps that are playing sound are paused when they support it, or muted otherwise, then restored when you stop. Also toggled from the window or tray menu.
 - `longDictation` — `false` (default). When `true`, a recording the site cuts off while you're still holding the key (or haven't pressed it again) is restarted, and all the pieces are pasted as one text. Also toggled from the window or tray menu.
+- `historyEnabled` / `historyLimit` — keep History (default `true`, last `200` entries).
+- `pasteLastVks` / `actionPaletteVks` — one to three keys for **Paste last result** and the **Action palette**; empty (default) = off.
+- `voicePrefixes` — `false` (default). `true` routes dictations starting with "ask …"/"اسأل …" to the Ask model and "translate …"/"ترجم …" to Translate.
+- `autoFailover` — `true` (default): switch to another ready model when the transcription page is signed out or changed.
+- `checkForUpdates` / `remoteSelectors` — `true` (default): daily GitHub release check / download the community selector fixes. `skippedUpdateVersion` remembers **Skip this version**.
+- `setupCompleted` — `false` makes the setup wizard open at the next launch.
 - `customCommands` — global recording-key commands, managed from the window or tray menu. Used with whichever model is selected. `hotkeyVk` `165` = Right Alt. They follow `toggleRecording`. Each command has a `buttons` list (1–8). A single button is sent right after dictation; two or more show a chooser. The top-level `prompt` is kept in sync with the first button so older builds still load the file.
 
 ## Build
@@ -225,11 +251,13 @@ Flags (`hasDictationShortcut`, `liveTranscript`, …), `loggedOutMarker` and `tr
 
 Ported: hidden ChatGPT/Gemini webview with persistent login, hold-to-talk and press-to-start/stop recording, the full start/submit/cancel ladder with its fallbacks, transcript scraping with the same timings, paste-anywhere with clipboard restore, offline/logged-out handling, self-heal reload after repeated failures.
 
-Not yet ported (follow-ups): history window, keep-warm/unload webview policy, self-updater.
+Not yet ported (follow-ups): keep-warm/unload webview policy.
 
 ## Privacy
 
 EchoType records nothing itself. Audio goes from your microphone directly to chatgpt.com or gemini.google.com inside that site's own web session; the app reads only the resulting text from the page and writes it to your clipboard. No keys, no accounts, no telemetry.
+
+History (`%APPDATA%\EchoType\history.json`) never leaves your PC; turn it off or clear it from the History page. The only requests EchoType makes on its own are to GitHub: the daily release check (`api.github.com`) and the selector-fix file (`raw.githubusercontent.com`). Both send nothing beyond a plain HTTP request with a generic `EchoType-Windows/<version>` user agent, and both can be turned off under **Settings → Updates & reliability**.
 
 ## License
 

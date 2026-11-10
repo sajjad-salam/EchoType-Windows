@@ -1,3 +1,4 @@
+using EchoType.Health;
 using EchoType.Hotkey;
 using EchoType.Native;
 using EchoType.Translation;
@@ -20,6 +21,8 @@ internal enum AppShortcut {
     ChatGpt,
     Gemini,
     Claude,
+    PasteLast,
+    ActionPalette,
 }
 
 internal interface IAppWindowHost {
@@ -51,16 +54,12 @@ internal interface IAppWindowHost {
     /// <summary>Fills the live voice spectrum (0–1 per bar); false when none is available.</summary>
     bool CopyMicSpectrum(float[] dest);
     string StatusText { get; }
-    bool BenchmarkRecording { get; }
-    bool BenchmarkRunning { get; }
-    string BenchmarkStatus { get; }
     /// <summary>Saves the interface language ("en" / "ar") and restarts EchoType to apply it.</summary>
     void SetUiLanguage(string code);
     void SetShowAskReplyWindow(bool value);
     event Action? UiChanged;
     void SelectModel(TranscriptionProvider provider);
     void OpenModel(TranscriptionProvider provider);
-    void ToggleModelBenchmark();
     void SetToggleRecording(bool toggle);
     void SetMuteOthers(bool value);
     void SetLongDictation(bool value);
@@ -79,6 +78,39 @@ internal interface IAppWindowHost {
     void OpenCommands();
     void OpenLog();
     void Quit();
+
+    // Health card and setup wizard
+    IReadOnlyList<EchoType.Health.HealthItem> Health { get; }
+    void FixHealth(string id);
+    void ShowSetupWizard();
+    // History
+    void OpenHistory();
+    void SetHistoryEnabled(bool value);
+    void SetHistoryLimit(int limit);
+    bool TrySetPasteLastChord(HotkeyChord chord);
+    // Action palette and spoken prefixes
+    bool TrySetActionPaletteChord(HotkeyChord chord);
+    void SetVoicePrefixes(bool value);
+    // Reliability and updates
+    void SetAutoFailover(bool value);
+    string UpdateStatus { get; }
+    bool UpdateAvailable { get; }
+    bool UpdateBusy { get; }
+    void CheckForUpdates();
+    void InstallUpdate();
+    void SkipUpdate();
+    void SetCheckForUpdates(bool value);
+    void SetRemoteSelectors(bool value);
+    // Advanced options and settings transfer
+    void SetTranslateWithChatGpt(bool value);
+    void ToggleTranslateWindow();
+    bool TranslateWindowVisible { get; }
+    void SetProgressPillHideMs(int ms);
+    void SetOpenAiTranslationModel(string model);
+    void OpenConfigFolder();
+    void OpenSoundsFolder();
+    void ExportSettings();
+    void ImportSettings();
 }
 
 /// <summary>
@@ -101,6 +133,15 @@ internal sealed class AppWindow : Form {
     private const string GlyphKeyboard = "";
     private const string GlyphCommand = "";
     private const string GlyphSettings = "";
+    private const string GlyphHistory = "\uE81C";
+    private const string GlyphAdvanced = "\uE90F";
+
+    /// <summary>Health card rows in display order; rows the host doesn't report are hidden.</summary>
+    private static readonly (string Id, string Title)[] HealthIds = [
+        ("mic", "Microphone"), ("webview", "WebView2 runtime"),
+        ("chatgpt", "ChatGPT"), ("gemini", "Gemini"), ("claude", "Claude"),
+        ("clean", "Cleaning model"), ("ask", "Ask model"), ("translate", "ChatGPT (translation)"),
+    ];
 
     private static int _lastPage;
 
@@ -113,8 +154,6 @@ internal sealed class AppWindow : Form {
     private readonly HudCard _statusCard;
     private readonly HudButton _loginButton;
     private readonly HudSegmented _modelSeg;
-    private readonly HudButton _benchmarkButton;
-    private readonly HudSettingRow _benchmarkRow;
     private readonly HudSegmented _modeSeg;
     private readonly HudHotkeyRow _dictationKey;
     private readonly HudHotkeyRow _secondDictationKey;
@@ -150,6 +189,35 @@ internal sealed class AppWindow : Form {
     private readonly HudToggleRow _clipboardToggle;
     private readonly HudToggleRow _startupToggle;
     private readonly HudSegmented _languageSeg;
+    private readonly Dictionary<string, HudSettingRow> _healthRows = [];
+    private readonly Dictionary<string, HudButton> _healthButtons = [];
+    /// <summary>Rows currently left out of their card's layout (e.g. health checks that don't apply).</summary>
+    private readonly HashSet<Control> _collapsed = [];
+    private readonly System.Windows.Forms.Timer _healthTick;
+    private readonly HudToggleRow _historyToggle;
+    private readonly NumericUpDown _historyLimit;
+    private readonly HudHotkeyRow _pasteLastKey;
+    private readonly HudHotkeyRow _paletteKey;
+    private readonly HudToggleRow _voicePrefixToggle;
+    private readonly HudCommandList _allShortcuts;
+    private readonly HudToggleRow _chatGptTranslateToggle;
+    private readonly HudButton _translateWindowButton;
+    private readonly HudSettingRow _updateRow;
+    private readonly HudButton _updateButton;
+    private readonly HudSettingRow _skipUpdateRow;
+    private readonly HudToggleRow _updatesToggle;
+    private readonly HudToggleRow _remoteSelectorsToggle;
+    private readonly HudToggleRow _failoverToggle;
+    private readonly NumericUpDown _pillMs;
+    private readonly TextBox _openAiModel;
+    private readonly TextBox _search;
+    private readonly ListBox _searchResults;
+    private readonly List<SearchEntry> _searchIndex = [];
+    private readonly Dictionary<HudCard, int> _cardPage = [];
+    private List<SearchEntry> _searchShown = [];
+
+    /// <summary>A searchable setting: its words, the page it lives on and the row to scroll to.</summary>
+    private sealed record SearchEntry(string Title, string? Description, int Page, Control Row);
     private readonly string _version;
     private readonly float[] _spectrum = new float[24];
     private readonly System.Windows.Forms.Timer _tick;
@@ -189,7 +257,7 @@ internal sealed class AppWindow : Form {
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Dpi;
         ShowInTaskbar = true;
-        MinimumSize = new Size(760, 520);
+        MinimumSize = new Size(760, 580); // eight sidebar pages
         Size = new Size(920, 680);
         BackColor = HudTheme.Paper;
         ForeColor = HudTheme.Ink;
@@ -234,6 +302,19 @@ internal sealed class AppWindow : Form {
         _loginButton.Click += (_, _) => _host.ToggleLoginWindow();
         _statusCard.Controls.Add(_loginButton);
 
+        AddSection(home, Loc.T("Health"));
+        var health = AddCard(home);
+        foreach (var (id, title) in HealthIds) {
+            string captured = id;
+            var fix = MakeButton(Loc.T("Open"), HudButton.Kind.Ghost);
+            fix.Click += (_, _) => {
+                _host.FixHealth(captured);
+                SyncHealth();
+            };
+            _healthRows[id] = AddRow(health, Loc.T(title), Loc.T("Checking…"), fix, 150);
+            _healthButtons[id] = fix;
+        }
+
         AddSection(home, Loc.T("Model windows"));
         var models = AddCard(home);
         AddModelLauncher(models, TranscriptionProvider.ChatGpt, "ChatGPT");
@@ -242,13 +323,6 @@ internal sealed class AppWindow : Form {
         _geminiWindowKey = AddHotkey(models, Loc.F("{0} window shortcut", "Gemini"), AppShortcut.GeminiWindow);
         AddModelLauncher(models, TranscriptionProvider.Claude, "Claude");
         _claudeWindowKey = AddHotkey(models, Loc.F("{0} window shortcut", "Claude"), AppShortcut.ClaudeWindow);
-
-        AddSection(home, Loc.T("Speed test"));
-        var benchmark = AddCard(home);
-        _benchmarkButton = MakeButton(Loc.T("Start speed test"), HudButton.Kind.Inverse);
-        _benchmarkButton.Click += (_, _) => _host.ToggleModelBenchmark();
-        _benchmarkRow = AddRow(benchmark, Loc.T("Compare every model"),
-            Loc.T("Record once, then time the same audio in ChatGPT, Gemini and Claude."), _benchmarkButton, 210);
 
         AddSection(home, Loc.T("Dictation"));
         var dictation = AddCard(home);
@@ -311,12 +385,30 @@ internal sealed class AppWindow : Form {
         _translateSelectionKey.MultiKey = true;
         _translateSelectionLanguage = MakeLanguageCombo(code => _host.SetTranslateSelectionLanguage(code));
         AddRow(translateCard, Loc.T("Translate selection to"), null, _translateSelectionLanguage, 220, heightDip: 0);
+        _chatGptTranslateToggle = AddToggle(translateCard, Loc.T("Translate with ChatGPT"),
+            Loc.T("Uses chatgpt.com with your login. Off: OpenAI (with a key) or Google Translate."),
+            toggle => _host.SetTranslateWithChatGpt(toggle.Checked));
+        _translateWindowButton = MakeButton(Loc.T("Open window"), HudButton.Kind.Ghost);
+        _translateWindowButton.Click += (_, _) => _host.ToggleTranslateWindow();
+        AddRow(translateCard, Loc.T("ChatGPT translation window"), Loc.T("Sign in, or see the translation conversation."), _translateWindowButton, 200);
         _openAiButton = MakeButton(Loc.T("Add key…"), HudButton.Kind.Ghost);
         _openAiButton.Click += (_, _) => _host.EditOpenAiKey();
         _openAiRow = AddRow(translateCard, Loc.T("OpenAI API key"), null, _openAiButton, 200);
 
         // ── Shortcuts ─────────────────────────────────────────
         var shortcuts = AddPage(GlyphKeyboard, Loc.T("Shortcuts"), Loc.T("Keys that switch models and open windows."));
+        AddSection(shortcuts, Loc.T("One key for everything"));
+        var paletteCard = AddCard(shortcuts);
+        _paletteKey = AddHotkey(paletteCard, Loc.T("Action palette"), AppShortcut.ActionPalette);
+        _paletteKey.MultiKey = true;
+        var paletteHelp = new HudSettingRow {
+            Title = Loc.T("Every action from one key"),
+            Description = Loc.T("Dictate, Ask, Translate, your commands, History, switch model… pick with 1–9 or type."),
+        };
+        AddRowControl(paletteCard, paletteHelp, 62);
+        _voicePrefixToggle = AddToggle(paletteCard, Loc.T("Spoken shortcuts"),
+            Loc.T("Start with \"ask …\" / \"اسأل …\" or \"translate …\" / \"ترجم …\" to route a dictation."),
+            toggle => _host.SetVoicePrefixes(toggle.Checked));
         AddSection(shortcuts, Loc.T("Switch model"));
         var switchCard = AddCard(shortcuts);
         _chatgptKey = AddHotkey(switchCard, Loc.T("Switch to ChatGPT"), AppShortcut.ChatGpt);
@@ -325,6 +417,24 @@ internal sealed class AppWindow : Form {
         AddSection(shortcuts, Loc.T("Other shortcuts"));
         var otherKeys = AddCard(shortcuts);
         _windowKey = AddHotkey(otherKeys, Loc.T("Open model window"), AppShortcut.ModelWindow);
+        AddSection(shortcuts, Loc.T("All shortcuts"));
+        var allCard = AddCard(shortcuts);
+        _allShortcuts = new HudCommandList { BackColor = HudTheme.Surface, MaxRows = 40, EmptyText = "No shortcuts set." };
+        allCard.Controls.Add(_allShortcuts);
+
+        // ── History ───────────────────────────────────────────
+        var historyPage = AddPage(GlyphHistory, Loc.T("History"), Loc.T("Everything EchoType pasted — find it, copy it or paste it again."));
+        var historyCard = AddCard(historyPage);
+        var openHistory = MakeButton(Loc.T("Open history"), HudButton.Kind.Primary);
+        openHistory.Click += (_, _) => _host.OpenHistory();
+        AddRow(historyCard, Loc.T("History"), Loc.T("Search, copy, paste again or fix a misheard word."), openHistory, 200);
+        _pasteLastKey = AddHotkey(historyCard, Loc.T("Paste last result shortcut"), AppShortcut.PasteLast);
+        _pasteLastKey.MultiKey = true;
+        _historyToggle = AddToggle(historyCard, Loc.T("Keep history"),
+            Loc.T("Stored only on this PC (%APPDATA%\\EchoType\\history.json)."),
+            toggle => _host.SetHistoryEnabled(toggle.Checked));
+        _historyLimit = MakeNumber(10, 5000, 10, value => _host.SetHistoryLimit(value));
+        AddRow(historyCard, Loc.T("Entries to keep"), Loc.T("The oldest are removed first."), _historyLimit, 120, heightDip: 0);
 
         // ── Commands ──────────────────────────────────────────
         var commands = AddPage(GlyphCommand, Loc.T("Commands"), Loc.T("Custom commands, workspace modes and word replacements."));
@@ -388,9 +498,118 @@ internal sealed class AppWindow : Form {
         var openLog = MakeButton(Loc.T("Open log"), HudButton.Kind.Ghost);
         openLog.Click += (_, _) => _host.OpenLog();
         AddRow(about, Loc.T("Diagnostics log"), Loc.T("Open the log when something goes wrong."), openLog, 160);
+        var setup = MakeButton(Loc.T("Run setup"), HudButton.Kind.Ghost);
+        setup.Click += (_, _) => _host.ShowSetupWizard();
+        AddRow(about, Loc.T("Setup"), Loc.T("Microphone, sign-in, recording mode and a test dictation."), setup, 160);
         var quit = MakeButton(Loc.T("Quit"), HudButton.Kind.Danger);
         quit.Click += (_, _) => _host.Quit();
         AddRow(about, Loc.T("Quit EchoType"), Loc.T("Stops dictation and removes the tray icon."), quit, 160);
+
+        AddSection(settings, Loc.T("Updates & reliability"));
+        var updates = AddCard(settings);
+        _updateButton = MakeButton(Loc.T("Check now"), HudButton.Kind.Ghost);
+        _updateButton.Click += (_, _) => {
+            if (_host.UpdateAvailable) {
+                _host.InstallUpdate();
+            } else {
+                _host.CheckForUpdates();
+            }
+        };
+        _updateRow = AddRow(updates, Loc.T("EchoType updates"), "", _updateButton, 200);
+        var skip = MakeButton(Loc.T("Skip this version"), HudButton.Kind.Ghost);
+        skip.Click += (_, _) => _host.SkipUpdate();
+        _skipUpdateRow = AddRow(updates, Loc.T("Not now"), Loc.T("No reminder until a newer version comes out."), skip, 200);
+        _updatesToggle = AddToggle(updates, Loc.T("Check for updates automatically"), Loc.T("Once a day, from GitHub Releases."),
+            toggle => _host.SetCheckForUpdates(toggle.Checked));
+        _remoteSelectorsToggle = AddToggle(updates, Loc.T("Download page fixes"),
+            Loc.T("When ChatGPT, Gemini or Claude change their page, a fix reaches you without a new version."),
+            toggle => _host.SetRemoteSelectors(toggle.Checked));
+        _failoverToggle = AddToggle(updates, Loc.T("Switch models when one stops working"),
+            Loc.T("Signed out or page changed? EchoType moves to another signed-in model."),
+            toggle => _host.SetAutoFailover(toggle.Checked));
+
+        AddSection(settings, Loc.T("Backup"));
+        var backup = AddCard(settings);
+        var export = MakeButton(Loc.T("Export…"), HudButton.Kind.Ghost);
+        export.Click += (_, _) => _host.ExportSettings();
+        AddRow(backup, Loc.T("Export settings"), Loc.T("Commands, word fixes, shortcuts and options in one file (no API key)."), export, 160);
+        var import = MakeButton(Loc.T("Import…"), HudButton.Kind.Ghost);
+        import.Click += (_, _) => _host.ImportSettings();
+        AddRow(backup, Loc.T("Import settings"), Loc.T("Merge a file exported on another PC or shared by a friend."), import, 160);
+
+        // ── Advanced ──────────────────────────────────────────
+        var advanced = AddPage(GlyphAdvanced, Loc.T("Advanced"), Loc.T("Options that used to live only in config.json."));
+        var advancedCard = AddCard(advanced);
+        _pillMs = MakeNumber(0, 600_000, 100, value => _host.SetProgressPillHideMs(value));
+        AddRow(advancedCard, Loc.T("Progress pill time (ms)"),
+            Loc.T("How long the Translate selection pill stays up. 0 keeps it until the work ends."), _pillMs, 120, heightDip: 0);
+        _openAiModel = new TextBox {
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = HudTheme.Surface,
+            ForeColor = HudTheme.Ink,
+            Font = HudTheme.BodyText,
+            PlaceholderText = "gpt-4o-mini",
+        };
+        _openAiModel.Leave += (_, _) => _host.SetOpenAiTranslationModel(_openAiModel.Text);
+        _openAiModel.KeyDown += (_, e) => {
+            if (e.KeyCode == Keys.Enter) {
+                _host.SetOpenAiTranslationModel(_openAiModel.Text);
+                e.SuppressKeyPress = true;
+            }
+        };
+        AddRow(advancedCard, Loc.T("OpenAI translation model"), Loc.T("Used only with an OpenAI API key."), _openAiModel, 200, heightDip: 0);
+        var sounds = MakeButton(Loc.T("Open folder"), HudButton.Kind.Ghost);
+        sounds.Click += (_, _) => _host.OpenSoundsFolder();
+        AddRow(advancedCard, Loc.T("Custom sounds"), Loc.T("Put start.wav and done.wav here, then restart EchoType."), sounds, 160);
+        var config = MakeButton(Loc.T("Open folder"), HudButton.Kind.Ghost);
+        config.Click += (_, _) => _host.OpenConfigFolder();
+        AddRow(advancedCard, Loc.T("Configuration folder"), Loc.T("config.json, selectors.json and history.json."), config, 160);
+
+        // Search box in the header: finds any setting by its words and jumps to it.
+        _search = new TextBox {
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = HudTheme.Surface,
+            ForeColor = HudTheme.Ink,
+            Font = HudTheme.BodyText,
+            PlaceholderText = Loc.T("Search settings…"),
+            RightToLeft = Loc.Rtl ? RightToLeft.Yes : RightToLeft.No,
+        };
+        _search.TextChanged += (_, _) => UpdateSearch();
+        _search.KeyDown += OnSearchKeyDown;
+        _search.Leave += (_, _) => BeginInvoke(() => {
+            if (_searchResults is { Focused: false } results) {
+                results.Visible = false;
+            }
+        });
+        _header.Controls.Add(_search);
+        _header.Resize += (_, _) => PlaceSearch();
+        _searchResults = new ListBox {
+            Visible = false,
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = HudTheme.Surface,
+            ForeColor = HudTheme.Ink,
+            Font = HudTheme.BodyText,
+            IntegralHeight = false,
+            RightToLeft = Loc.Rtl ? RightToLeft.Yes : RightToLeft.No,
+        };
+        _searchResults.MouseClick += (_, e) => {
+            int i = _searchResults.IndexFromPoint(e.Location);
+            if (i >= 0) {
+                JumpTo(i);
+            }
+        };
+        _searchResults.KeyDown += (_, e) => {
+            if (e.KeyCode == Keys.Enter) {
+                JumpTo(_searchResults.SelectedIndex);
+                e.Handled = true;
+            } else if (e.KeyCode == Keys.Escape) {
+                _searchResults.Visible = false;
+                _search.Select();
+                e.Handled = true;
+            }
+        };
+        _searchResults.Leave += (_, _) => _searchResults.Visible = false;
+        Controls.Add(_searchResults);
 
         // Dock order: the sidebar takes the full height, the header tops the rest.
         Controls.Add(_scrollHost);
@@ -401,6 +620,13 @@ internal sealed class AppWindow : Form {
         _tick.Tick += (_, _) => OnTick();
         _intro = new System.Windows.Forms.Timer { Interval = 16 };
         _intro.Tick += (_, _) => StepIntro();
+        // Model pages sign in, load and break on their own; refresh the Health card while it shows.
+        _healthTick = new System.Windows.Forms.Timer { Interval = 2000 };
+        _healthTick.Tick += (_, _) => {
+            if (Visible && _page == 0) {
+                SyncHealth();
+            }
+        };
 
         host.UiChanged += OnHostChanged;
         Load += (_, _) => {
@@ -411,6 +637,8 @@ internal sealed class AppWindow : Form {
             Opacity = 0;
             _intro.Start();
             _tick.Start();
+            _healthTick.Start();
+            PlaceSearch();
         };
         Resize += (_, _) => {
             Relayout();
@@ -454,6 +682,10 @@ internal sealed class AppWindow : Form {
         if (e.KeyCode == Keys.Escape && _capturing != null) {
             StopCapture();
             e.Handled = true;
+        } else if (e.Control && e.KeyCode == Keys.F && _capturing == null) {
+            _search.Select();
+            _search.SelectAll();
+            e.Handled = true;
         } else if (e.Control && e.KeyCode == Keys.Tab && _capturing == null) {
             // Ctrl+Tab / Ctrl+Shift+Tab step through the pages.
             ShowPage((_page + (e.Shift ? _pages.Count - 1 : 1)) % _pages.Count);
@@ -470,6 +702,7 @@ internal sealed class AppWindow : Form {
             _host.Hotkey.ChordReleased -= OnChordReleased;
             _tick.Dispose();
             _intro.Dispose();
+            _healthTick.Dispose();
         }
         base.Dispose(disposing);
     }
@@ -505,11 +738,6 @@ internal sealed class AppWindow : Form {
         try {
             var s = _host.Settings;
             _modelSeg.SetSilent(ProviderIndex(s.TranscriptionProvider));
-            _benchmarkButton.Text = Loc.T(_host.BenchmarkRecording ? "Finish recording"
-                : _host.BenchmarkRunning ? "Testing…" : "Start speed test");
-            _benchmarkButton.Enabled = !_host.BenchmarkRunning || _host.BenchmarkRecording;
-            _benchmarkRow.Description = _host.BenchmarkStatus;
-            _benchmarkRow.Invalidate();
             _cleanToggle.SetSilent(s.AutoClean);
             _cleanSeg.SetSilent(ProviderIndex(s.CleanProvider));
             _cleanWindowButton.Text = Loc.F(_host.CleanWindowVisible ? "Close {0} window" : "Open {0} window", _host.CleanModelName);
@@ -525,6 +753,31 @@ internal sealed class AppWindow : Form {
             _clipboardToggle.SetSilent(s.KeepTranscriptOnClipboard);
             _startupToggle.SetSilent(s.StartWithWindows);
             _askPopupToggle.SetSilent(s.ShowAskReplyWindow);
+            _historyToggle.SetSilent(s.HistoryEnabled);
+            SetNumberSilent(_historyLimit, s.HistoryLimit);
+            _voicePrefixToggle.SetSilent(s.VoicePrefixes);
+            _chatGptTranslateToggle.SetSilent(s.TranslateWithChatGpt);
+            _translateWindowButton.Text = Loc.T(_host.TranslateWindowVisible ? "Close window" : "Open window");
+            _updatesToggle.SetSilent(s.CheckForUpdates);
+            _remoteSelectorsToggle.SetSilent(s.RemoteSelectors);
+            _failoverToggle.SetSilent(s.AutoFailover);
+            _updateRow.Description = _host.UpdateStatus;
+            _updateRow.Invalidate();
+            _updateButton.Text = _host.UpdateAvailable ? Loc.T("Install update") : Loc.T("Check now");
+            _updateButton.Enabled = !_host.UpdateBusy;
+            SetCollapsed(_skipUpdateRow, !_host.UpdateAvailable, relayout: false);
+            SetNumberSilent(_pillMs, s.ProgressPillHideMs);
+            if (!_openAiModel.Focused) {
+                _openAiModel.Text = s.OpenAiTranslationModel;
+            }
+            if (_capturing != _pasteLastKey) {
+                _pasteLastKey.Value = HotkeyNames.For(s.PasteLastChord);
+            }
+            if (_capturing != _paletteKey) {
+                _paletteKey.Value = HotkeyNames.For(s.ActionPaletteChord);
+            }
+            _allShortcuts.Reload(ShortcutOverview(s));
+            SyncHealth(relayout: false);
             _languageSeg.SetSilent(Loc.Arabic ? 1 : 0);
             if (_capturing != _dictationKey) {
                 _dictationKey.Value = HotkeyNames.For(s.DictationChord);
@@ -557,7 +810,7 @@ internal sealed class AppWindow : Form {
             _chatgptWindowKey.Value = HotkeyLabel(s.OpenChatGptWindowVk);
             _geminiWindowKey.Value = HotkeyLabel(s.OpenGeminiWindowVk);
             _claudeWindowKey.Value = HotkeyLabel(s.OpenClaudeWindowVk);
-            foreach (var row in new[] { _dictationKey, _secondDictationKey, _askModelKey, _translateKey, _translateSelectionKey, _addWordKey, _chatgptKey, _geminiKey, _claudeKey, _enterKey, _cleanKey, _windowKey, _chatgptWindowKey, _geminiWindowKey, _claudeWindowKey }) {
+            foreach (var row in new[] { _dictationKey, _secondDictationKey, _askModelKey, _translateKey, _translateSelectionKey, _addWordKey, _pasteLastKey, _paletteKey, _chatgptKey, _geminiKey, _claudeKey, _enterKey, _cleanKey, _windowKey, _chatgptWindowKey, _geminiWindowKey, _claudeWindowKey }) {
                 row.Invalidate();
             }
             _loginButton.Text = !_host.Online ? Loc.T("Retry connection")
@@ -682,7 +935,7 @@ internal sealed class AppWindow : Form {
         var page = _pages[_page];
         int w = _header.Width;
         int left = HudTheme.Dip(this, PagePadDip + 4);
-        int right = Math.Max(left + 40, w - left);
+        int right = Math.Max(left + 40, w - left - SearchWidth() - HudTheme.Dip(this, 16));
         const TextFormatFlags flags = TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
         TextRenderer.DrawText(e.Graphics, page.Title, HudTheme.Hero,
             Loc.Mirror(new Rectangle(left, HudTheme.Dip(this, 28), right - left, HudTheme.Dip(this, 38)), w),
@@ -868,15 +1121,20 @@ internal sealed class AppWindow : Form {
         int inner = Math.Max(40, card.Width - padX * 2);
         int y = padY;
         foreach (Control child in card.Controls) {
+            bool show = !_collapsed.Contains(child);
+            child.Visible = show;
+            if (!show) {
+                continue;
+            }
             int h = _rowHeights.TryGetValue(child, out int dip) ? HudTheme.Dip(this, dip) : child.Height;
-            if (child == _commands) {
+            if (child is HudCommandList) {
                 // Breathing room above and below the list.
                 h += HudTheme.Dip(this, 12);
             }
             child.SetBounds(padX, y, inner, h);
             y += h + gap;
         }
-        card.Height = y - gap + padY;
+        card.Height = Math.Max(padY * 2, y - gap + padY);
     }
 
     // ── Building blocks ───────────────────────────────────────
@@ -899,11 +1157,18 @@ internal sealed class AppWindow : Form {
         page.Blocks.Add(label);
     }
 
-    private static HudCard AddCard(Page page) {
+    private HudCard AddCard(Page page) {
         var card = new HudCard();
         page.Body.Controls.Add(card);
         page.Blocks.Add(card);
+        _cardPage[card] = _pages.IndexOf(page);
         return card;
+    }
+
+    private void IndexRow(HudCard card, Control row, string title, string? description) {
+        if (_cardPage.TryGetValue(card, out int page) && !string.IsNullOrWhiteSpace(title)) {
+            _searchIndex.Add(new SearchEntry(title, description, page, row));
+        }
     }
 
     private void AddRowControl(HudCard card, Control control, int heightDip) {
@@ -919,6 +1184,7 @@ internal sealed class AppWindow : Form {
         }
         row.SetTrailing(trailing, widthDip, heightDip);
         AddRowControl(card, row, description == null ? 56 : 62);
+        IndexRow(card, row, title, description);
         return row;
     }
 
@@ -936,6 +1202,7 @@ internal sealed class AppWindow : Form {
             }
         };
         AddRowControl(card, row, 62);
+        IndexRow(card, row, title, Loc.T("Shortcut"));
         return row;
     }
 
@@ -947,6 +1214,7 @@ internal sealed class AppWindow : Form {
             }
         };
         AddRowControl(card, row, description == null ? 52 : 62);
+        IndexRow(card, row, text, description);
         return row;
     }
 
@@ -998,7 +1266,8 @@ internal sealed class AppWindow : Form {
         row.Tag = shortcut;
         _host.Hotkey.ResetCapture();
         if (shortcut is AppShortcut.Translate or AppShortcut.TranslateSelection or AppShortcut.Dictation
-            or AppShortcut.SecondDictation or AppShortcut.AddWordReplacement) {
+            or AppShortcut.SecondDictation or AppShortcut.AddWordReplacement
+            or AppShortcut.PasteLast or AppShortcut.ActionPalette) {
             // Dictation and the Translate shortcuts take one to three keys (e.g. Ctrl+Space);
             // they are saved once every key of the combination has been released.
             _host.Hotkey.CaptureMaxKeys = HotkeyChord.MaxKeys;
@@ -1036,6 +1305,12 @@ internal sealed class AppWindow : Form {
         _secondDictationKey.CapturePreview = null;
         _secondDictationKey.Value = HotkeyNames.For(_host.Settings.SecondDictationChord);
         _secondDictationKey.Invalidate();
+        _pasteLastKey.CapturePreview = null;
+        _pasteLastKey.Value = HotkeyNames.For(_host.Settings.PasteLastChord);
+        _pasteLastKey.Invalidate();
+        _paletteKey.CapturePreview = null;
+        _paletteKey.Value = HotkeyNames.For(_host.Settings.ActionPaletteChord);
+        _paletteKey.Invalidate();
     }
 
     private void OnChordCaptured(HotkeyChord chord) {
@@ -1062,6 +1337,10 @@ internal sealed class AppWindow : Form {
             _host.TrySetTranslateSelectionChord(chord);
         } else if (shortcut == AppShortcut.AddWordReplacement) {
             _host.TrySetAddWordReplacementChord(chord);
+        } else if (shortcut == AppShortcut.PasteLast) {
+            _host.TrySetPasteLastChord(chord);
+        } else if (shortcut == AppShortcut.ActionPalette) {
+            _host.TrySetActionPaletteChord(chord);
         } else {
             _host.TrySetTranslateChord(chord);
         }
@@ -1132,6 +1411,196 @@ internal sealed class AppWindow : Form {
 
     private sealed record LanguageItem(string Code, string Name) {
         public override string ToString() => Name;
+    }
+
+    // ── Health ────────────────────────────────────────────
+
+    private void SyncHealth(bool relayout = true) {
+        IReadOnlyList<HealthItem> items;
+        try {
+            items = _host.Health;
+        } catch (Exception ex) {
+            Log.Write("health: refresh failed: " + ex.Message);
+            return;
+        }
+        bool changed = false;
+        foreach (var (id, row) in _healthRows) {
+            var item = items.FirstOrDefault(h => h.Id == id);
+            changed |= SetCollapsed(row, item == null, relayout: false);
+            if (item == null) {
+                continue;
+            }
+            row.Title = item.Title;
+            row.Description = item.Status;
+            row.DescriptionColor = item.Level switch {
+                HealthLevel.Ok => HudTheme.Positive,
+                HealthLevel.Error => HudTheme.Negative,
+                HealthLevel.Warning => HudTheme.Caution,
+                _ => null,
+            };
+            var button = _healthButtons[id];
+            button.Visible = item.FixLabel != null;
+            if (item.FixLabel != null) {
+                button.Text = item.FixLabel;
+            }
+            row.Invalidate();
+        }
+        if (changed && relayout) {
+            Relayout();
+        }
+    }
+
+    /// <summary>Hides or shows a row inside its card; true when that changed.</summary>
+    private bool SetCollapsed(Control row, bool collapsed, bool relayout = true) {
+        bool changed = collapsed ? _collapsed.Add(row) : _collapsed.Remove(row);
+        if (changed && relayout && !_layingOut) {
+            Relayout();
+        }
+        return changed;
+    }
+
+    /// <summary>Every shortcut that is set, for the overview on the Shortcuts page.</summary>
+    private static List<(string Name, string Shortcut)> ShortcutOverview(Settings s) {
+        var list = new List<(string, string)>();
+        void Chord(string name, HotkeyChord chord) {
+            if (!chord.IsEmpty) list.Add((Loc.T(name), HotkeyNames.For(chord)));
+        }
+        void Key(string name, int vk) {
+            if (vk > 0) list.Add((Loc.T(name), HotkeyNames.For(vk)));
+        }
+        Chord("Dictation", s.DictationChord);
+        Chord("Second dictation key", s.SecondDictationChord);
+        Chord("Action palette", s.ActionPaletteChord);
+        Key("Ask model", s.AskModelVk);
+        Chord("Translate speech", s.TranslateChord);
+        Chord("Translate selection", s.TranslateSelectionChord);
+        Chord("Add word replacement", s.AddWordReplacementChord);
+        Chord("Paste last result", s.PasteLastChord);
+        Key("Auto Enter on/off", s.PressEnterToggleVk);
+        Key("Auto Clean on/off", s.AutoCleanToggleVk);
+        Key("Switch to ChatGPT", s.ChatGptSwitchVk);
+        Key("Switch to Gemini", s.GeminiSwitchVk);
+        Key("Switch to Claude", s.ClaudeSwitchVk);
+        Key("Open model window", s.OpenModelWindowVk);
+        Key("ChatGPT window", s.OpenChatGptWindowVk);
+        Key("Gemini window", s.OpenGeminiWindowVk);
+        Key("Claude window", s.OpenClaudeWindowVk);
+        foreach (var cmd in s.ActiveCommands) {
+            if (!cmd.Chord.IsEmpty) list.Add((cmd.DisplayName, HotkeyNames.For(cmd.Chord)));
+        }
+        return list;
+    }
+
+    // ── Search ────────────────────────────────────────────
+
+    private int SearchWidth() => HudTheme.Dip(this, 240);
+
+    private void PlaceSearch() {
+        if (_search == null) {
+            return;
+        }
+        int w = SearchWidth();
+        int pad = HudTheme.Dip(this, PagePadDip);
+        var r = new Rectangle(_header.Width - pad - w, HudTheme.Dip(this, 32), w, _search.Height);
+        _search.Bounds = Loc.Mirror(r, _header.Width);
+    }
+
+    private void UpdateSearch() {
+        string q = _search.Text.Trim();
+        if (q.Length == 0) {
+            _searchResults.Visible = false;
+            return;
+        }
+        var words = q.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        _searchShown = _searchIndex
+            .Where(e => words.All(w => (e.Title + " " + e.Description + " " + _pages[e.Page].Title)
+                .Contains(w, StringComparison.CurrentCultureIgnoreCase)))
+            .GroupBy(e => e.Row).Select(g => g.First())
+            .Take(12)
+            .ToList();
+        _searchResults.BeginUpdate();
+        _searchResults.Items.Clear();
+        foreach (var e in _searchShown) {
+            _searchResults.Items.Add(e.Title + "   ·   " + _pages[e.Page].Title);
+        }
+        if (_searchShown.Count == 0) {
+            _searchResults.Items.Add(Loc.T("No matching settings"));
+        }
+        _searchResults.EndUpdate();
+        int itemH = _searchResults.ItemHeight;
+        int w = HudTheme.Dip(this, 360);
+        var origin = PointToClient(_header.PointToScreen(_search.Location));
+        int x = Loc.Rtl ? origin.X : origin.X + _search.Width - w;
+        _searchResults.Bounds = new Rectangle(Math.Max(0, x), origin.Y + _search.Height + 2, w,
+            Math.Min(12, Math.Max(1, _searchResults.Items.Count)) * itemH + 4);
+        _searchResults.Visible = true;
+        _searchResults.BringToFront();
+        if (_searchShown.Count > 0) {
+            _searchResults.SelectedIndex = 0;
+        }
+    }
+
+    private void OnSearchKeyDown(object? sender, KeyEventArgs e) {
+        if (!_searchResults.Visible) {
+            return;
+        }
+        if (e.KeyCode == Keys.Down && _searchShown.Count > 0) {
+            _searchResults.SelectedIndex = Math.Min(_searchShown.Count - 1, _searchResults.SelectedIndex + 1);
+            e.Handled = true;
+        } else if (e.KeyCode == Keys.Up && _searchShown.Count > 0) {
+            _searchResults.SelectedIndex = Math.Max(0, _searchResults.SelectedIndex - 1);
+            e.Handled = true;
+        } else if (e.KeyCode == Keys.Enter) {
+            JumpTo(Math.Max(0, _searchResults.SelectedIndex));
+            e.Handled = e.SuppressKeyPress = true;
+        } else if (e.KeyCode == Keys.Escape) {
+            _search.Text = "";
+            _searchResults.Visible = false;
+            e.Handled = e.SuppressKeyPress = true;
+        }
+    }
+
+    /// <summary>Opens the page of search result <paramref name="index"/> and scrolls its row into view.</summary>
+    private void JumpTo(int index) {
+        if (index < 0 || index >= _searchShown.Count) {
+            return;
+        }
+        var entry = _searchShown[index];
+        _searchResults.Visible = false;
+        ShowPage(entry.Page);
+        _scrollHost.ScrollControlIntoView(entry.Row);
+        if (entry.Row is HudSettingRow row && row.Controls.Count > 0 && row.Controls[0].CanFocus) {
+            row.Controls[0].Focus();
+        } else if (entry.Row.CanFocus) {
+            entry.Row.Focus();
+        }
+    }
+
+    // ── Number inputs ─────────────────────────────────────
+
+    private NumericUpDown MakeNumber(int min, int max, int step, Action<int> changed) {
+        var box = new NumericUpDown {
+            Minimum = min,
+            Maximum = max,
+            Increment = step,
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = HudTheme.Surface,
+            ForeColor = HudTheme.Ink,
+            Font = HudTheme.BodyText,
+            TextAlign = HorizontalAlignment.Right,
+        };
+        box.ValueChanged += (_, _) => {
+            if (!_syncing) {
+                changed((int)box.Value);
+            }
+        };
+        return box;
+    }
+
+    private static void SetNumberSilent(NumericUpDown box, int value) {
+        if (!box.Focused) {
+            box.Value = Math.Clamp(value, (int)box.Minimum, (int)box.Maximum);
+        }
     }
 
     private static string HotkeyLabel(int vk) => vk <= 0 ? Loc.T("(none)") : HotkeyNames.For(vk);

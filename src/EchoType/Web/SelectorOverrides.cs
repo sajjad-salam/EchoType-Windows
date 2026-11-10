@@ -65,16 +65,29 @@ internal static class SelectorOverrides {
     /// applied. A missing or broken file logs and falls back to the built-ins.
     /// </summary>
     public static SelectorSet Apply(string siteId, SelectorSet builtIn) {
-        if (!File.Exists(FilePath)) {
+        // Community fixes first, your own file on top: yours are tried before them, built-ins last.
+        SelectorSet set = ApplyFile(RemoteFilePath, siteId, builtIn);
+        return ApplyFile(FilePath, siteId, set);
+    }
+
+    /// <summary>
+    /// Selector fixes downloaded from the EchoType repository (see <see cref="RemoteSelectors"/>).
+    /// Same format as <see cref="FilePath"/>; the user's own file takes precedence.
+    /// </summary>
+    public static string RemoteFilePath { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "EchoType", "selectors.remote.json");
+
+    private static SelectorSet ApplyFile(string filePath, string siteId, SelectorSet builtIn) {
+        if (!File.Exists(filePath)) {
             return builtIn;
         }
         try {
-            using var doc = JsonDocument.Parse(File.ReadAllText(FilePath), new JsonDocumentOptions {
+            using var doc = JsonDocument.Parse(File.ReadAllText(filePath), new JsonDocumentOptions {
                 CommentHandling = JsonCommentHandling.Skip,
                 AllowTrailingCommas = true,
             });
             if (doc.RootElement.ValueKind != JsonValueKind.Object) {
-                Log.Write("selectors: " + FilePath + " must be a JSON object — ignored");
+                Log.Write("selectors: " + filePath + " must be a JSON object — ignored");
                 return builtIn;
             }
             JsonElement site = default;
@@ -90,12 +103,12 @@ internal static class SelectorOverrides {
                 return builtIn;
             }
             if (site.ValueKind != JsonValueKind.Object) {
-                Log.Write($"selectors: \"{siteId}\" in selectors.json must be an object — ignored");
+                Log.Write($"selectors: \"{siteId}\" in " + Path.GetFileName(filePath) + " must be an object — ignored");
                 return builtIn;
             }
             return ApplySite(siteId, site, builtIn);
         } catch (Exception ex) {
-            Log.Write("selectors: couldn't read " + FilePath + " (" + ex.Message + ") — using built-in selectors");
+            Log.Write("selectors: couldn't read " + filePath + " (" + ex.Message + ") — using built-in selectors");
             return builtIn;
         }
     }

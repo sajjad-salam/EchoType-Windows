@@ -249,6 +249,14 @@ internal sealed class ChatGPTWebController : IDisposable {
     public string? MissingUiPart { get; private set; }
 
     public event Action<bool>? LoginStateChanged;
+
+    /// <summary>Last sign-in state the page reported; null until it has loaded once.</summary>
+    public bool? LoggedIn { get; private set; }
+
+    private void RaiseLoginState(bool loggedIn) {
+        LoggedIn = loggedIn;
+        LoginStateChanged?.Invoke(loggedIn);
+    }
     public event Action<bool>? ReachabilityChanged;
     public event Action<bool>? InteractiveChanged;
     public event Action<string?>? MissingUiPartChanged;
@@ -346,13 +354,13 @@ internal sealed class ChatGPTWebController : IDisposable {
             }
             if (st.IsChatReady) {
                 SetInteractive(true);
-                LoginStateChanged?.Invoke(true);
+                RaiseLoginState(true);
                 EnsureStandbyLoaded();
                 return ReadyOutcome.Ready;
             }
             if (st.LoginMarker && !st.ComposerPresent) {
                 SetInteractive(false);
-                LoginStateChanged?.Invoke(false);
+                RaiseLoginState(false);
                 return ReadyOutcome.LoggedOut;
             }
             _loading = true;
@@ -478,7 +486,7 @@ internal sealed class ChatGPTWebController : IDisposable {
                         : "webview: ready, logged in (composer up)");
                     _loading = false;
                     SetInteractive(true);
-                    LoginStateChanged?.Invoke(true);
+                    RaiseLoginState(true);
                     if (_loginVisible) {
                         HideLoginWindow(); // logged in while the login window was up
                     }
@@ -497,7 +505,7 @@ internal sealed class ChatGPTWebController : IDisposable {
                         Log.Write("webview: ready but logged OUT");
                         _loading = false;
                         SetInteractive(false);
-                        LoginStateChanged?.Invoke(false);
+                        RaiseLoginState(false);
                         return ReadyOutcome.LoggedOut;
                     }
                 } else {
@@ -508,7 +516,7 @@ internal sealed class ChatGPTWebController : IDisposable {
                         Log.Write("webview: load timeout (signed in, page still settling)");
                         _loading = false;
                         SetInteractive(true);
-                        LoginStateChanged?.Invoke(true);
+                        RaiseLoginState(true);
                         _ = CheckUiHealthAsync();
                         return ReadyOutcome.Ready;
                     }
@@ -523,7 +531,7 @@ internal sealed class ChatGPTWebController : IDisposable {
                     Log.Write("webview: ready but logged OUT");
                     _loading = false;
                     SetInteractive(false);
-                    LoginStateChanged?.Invoke(false);
+                    RaiseLoginState(false);
                     return ReadyOutcome.LoggedOut;
                 }
             } catch (DriverException ex) {
@@ -1253,7 +1261,7 @@ internal sealed class ChatGPTWebController : IDisposable {
                 + ", canDictate=" + st.CanDictate);
             if (st.IsChatReady) {
                 SetInteractive(true);
-                LoginStateChanged?.Invoke(true);
+                RaiseLoginState(true);
                 if (_loginVisible) {
                     HideLoginWindow();
                 }

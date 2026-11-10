@@ -27,6 +27,9 @@ internal static class DialogTheme {
         };
     }
 
+    /// <summary>Styles controls added after <see cref="Apply"/> (e.g. a wizard's next step).</summary>
+    public static void Restyle(Form form) => StyleChildren(form, form);
+
     public static void Primary(Button button) {
         button.FlatStyle = FlatStyle.Flat;
         button.BackColor = HudTheme.Ink;

@@ -769,6 +769,13 @@ internal sealed class HudCommandList : Control {
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public IReadOnlyList<(string Name, string Shortcut)> Items { get; set; } = [];
 
+    /// <summary>Rows shown before the last one becomes "+N more".</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public int MaxRows { get; set; } = 6;
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string EmptyText { get; set; } = "No custom commands yet.";
+
     public HudCommandList() {
         SetStyle(ControlStyles.AllPaintingInWmPaint
             | ControlStyles.OptimizedDoubleBuffer
@@ -780,7 +787,7 @@ internal sealed class HudCommandList : Control {
     public void Reload(IReadOnlyList<(string Name, string Shortcut)> items) {
         Items = items;
         int row = HudTheme.Dip(this, 28);
-        Height = items.Count == 0 ? HudTheme.Dip(this, 28) : Math.Min(items.Count, 6) * row + HudTheme.Dip(this, 4);
+        Height = items.Count == 0 ? HudTheme.Dip(this, 28) : Math.Min(items.Count, MaxRows) * row + HudTheme.Dip(this, 4);
         Invalidate();
     }
 
@@ -788,16 +795,16 @@ internal sealed class HudCommandList : Control {
         HudTheme.Prepare(e.Graphics);
         e.Graphics.Clear(HudTheme.Surface);
         if (Items.Count == 0) {
-            TextRenderer.DrawText(e.Graphics, Loc.T("No custom commands yet."), HudTheme.Small, ClientRectangle,
+            TextRenderer.DrawText(e.Graphics, Loc.T(EmptyText), HudTheme.Small, ClientRectangle,
                 HudTheme.InkMuted, Loc.Flags(TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding));
             return;
         }
         int row = HudTheme.Dip(this, 28);
-        int shown = Math.Min(Items.Count, 6);
+        int shown = Math.Min(Items.Count, MaxRows);
         for (int i = 0; i < shown; i++) {
             var (name, shortcut) = Items[i];
-            if (i == 5 && Items.Count > 6) {
-                name = Loc.F("+{0} more", Items.Count - 5);
+            if (i == MaxRows - 1 && Items.Count > MaxRows) {
+                name = Loc.F("+{0} more", Items.Count - MaxRows + 1);
                 shortcut = "";
             }
             var y = i * row;
@@ -826,6 +833,10 @@ internal sealed class HudSettingRow : Control {
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public string? Description { get; set; }
+
+    /// <summary>Colour of <see cref="Description"/> (e.g. red for a failed health check); null = muted.</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Color? DescriptionColor { get; set; }
 
     public HudSettingRow() {
         SetStyle(ControlStyles.AllPaintingInWmPaint
@@ -866,7 +877,7 @@ internal sealed class HudSettingRow : Control {
         int w = TrailingWidth();
         int gap = w > 0 ? HudTheme.Dip(this, 16) : 0;
         var label = Loc.Mirror(new Rectangle(0, 0, Math.Max(0, Width - w - gap), Height), Width);
-        HudTheme.DrawRowText(e.Graphics, label, Title, Description);
+        HudTheme.DrawRowText(e.Graphics, label, Title, Description, DescriptionColor);
     }
 }
 

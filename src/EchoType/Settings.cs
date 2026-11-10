@@ -187,6 +187,74 @@ internal sealed class Settings {
         AddWordReplacementVks = chord.ToIntArray().ToList();
     }
 
+    /// <summary>
+    /// One to three keys that paste the newest History entry again into the focused field.
+    /// Empty (default) = off.
+    /// </summary>
+    [JsonPropertyName("pasteLastVks")]
+    public List<int> PasteLastVks { get; set; } = [];
+
+    [JsonIgnore]
+    public HotkeyChord PasteLastChord => HotkeyChord.FromVks(PasteLastVks);
+
+    public void SetPasteLastChord(HotkeyChord chord) => PasteLastVks = chord.ToIntArray().ToList();
+
+    /// <summary>
+    /// One to three keys that open the action palette (dictate, ask, translate, commands,
+    /// switch model…) next to the cursor. Empty (default) = off.
+    /// </summary>
+    [JsonPropertyName("actionPaletteVks")]
+    public List<int> ActionPaletteVks { get; set; } = [];
+
+    [JsonIgnore]
+    public HotkeyChord ActionPaletteChord => HotkeyChord.FromVks(ActionPaletteVks);
+
+    public void SetActionPaletteChord(HotkeyChord chord) => ActionPaletteVks = chord.ToIntArray().ToList();
+
+    /// <summary>Keep finished transcripts and replies in %APPDATA%\EchoType\history.json.</summary>
+    [JsonPropertyName("historyEnabled")]
+    public bool HistoryEnabled { get; set; } = true;
+
+    /// <summary>How many History entries are kept (oldest are dropped first).</summary>
+    [JsonPropertyName("historyLimit")]
+    public int HistoryLimit { get; set; } = 200;
+
+    /// <summary>
+    /// Plain dictation that starts with "ask …" / "اسأل …" goes to the Ask model, and
+    /// "translate …" / "ترجم …" to Translate, without their own shortcuts. Off by default.
+    /// </summary>
+    [JsonPropertyName("voicePrefixes")]
+    public bool VoicePrefixes { get; set; }
+
+    /// <summary>
+    /// When the transcription model's page is signed out or its UI changed, switch to
+    /// another signed-in, ready model instead of failing every recording.
+    /// </summary>
+    [JsonPropertyName("autoFailover")]
+    public bool AutoFailover { get; set; } = true;
+
+    /// <summary>Check GitHub Releases for a newer EchoType once a day.</summary>
+    [JsonPropertyName("checkForUpdates")]
+    public bool CheckForUpdates { get; set; } = true;
+
+    /// <summary>A release the user chose to skip; no reminder until a newer one appears.</summary>
+    [JsonPropertyName("skippedUpdateVersion")]
+    public string SkippedUpdateVersion { get; set; } = "";
+
+    /// <summary>
+    /// Download the community selector fixes (selectors/selectors.json in the repo) so a chat
+    /// site's UI change can be fixed for everyone without a new build. Local selectors.json wins.
+    /// </summary>
+    [JsonPropertyName("remoteSelectors")]
+    public bool RemoteSelectors { get; set; } = true;
+
+    /// <summary>
+    /// Null in configs written before the setup wizard existed: those users are treated as
+    /// already set up. A brand-new config starts false, so the wizard opens on first launch.
+    /// </summary>
+    [JsonPropertyName("setupCompleted")]
+    public bool? SetupCompleted { get; set; }
+
     /// <summary>Google Translate target language code for <see cref="TranslateVk"/> (e.g. "en", "ar").</summary>
     [JsonPropertyName("translateTargetLanguage")]
     public string TranslateTargetLanguage { get; set; } = "en";
@@ -403,10 +471,10 @@ internal sealed class Settings {
         }
     }
 
-    private static string Dir { get; } = Path.Combine(
+    public static string Dir { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "EchoType");
 
-    private static string FilePath { get; } = System.IO.Path.Combine(Dir, "config.json");
+    public static string FilePath { get; } = System.IO.Path.Combine(Dir, "config.json");
 
     private static readonly JsonSerializerOptions JsonOptions = new() {
         WriteIndented = true,
@@ -417,6 +485,7 @@ internal sealed class Settings {
             if (!File.Exists(FilePath)) {
                 var defaults = new Settings();
                 defaults.TranslateSelectionTargetLanguage = defaults.TranslateTargetLanguage;
+                defaults.SetupCompleted = false;
                 defaults.Save();
                 return defaults;
             }
@@ -428,6 +497,11 @@ internal sealed class Settings {
             loaded.TranslateVks ??= [];
             loaded.TranslateSelectionVks ??= [];
             loaded.AddWordReplacementVks ??= [];
+            loaded.PasteLastVks ??= [];
+            loaded.ActionPaletteVks ??= [];
+            loaded.SkippedUpdateVersion ??= "";
+            loaded.HistoryLimit = Math.Clamp(loaded.HistoryLimit, 10, 5000);
+            loaded.SetupCompleted ??= true; // existing install from before the wizard
             loaded.OpenAiApiKey ??= "";
             loaded.ProgressPillHideMs = Math.Clamp(loaded.ProgressPillHideMs, 0, 600_000);
             loaded.OpenAiTranslationModel ??= "";
@@ -495,6 +569,29 @@ internal sealed class Settings {
         }
         GeminiCustomCommands.Clear();
         return true;
+    }
+
+    /// <summary>This configuration as JSON for sharing: the OpenAI API key is left out.</summary>
+    public string ToShareableJson() {
+        string key = OpenAiApiKey;
+        try {
+            OpenAiApiKey = "";
+            return JsonSerializer.Serialize(this, JsonOptions);
+        } finally {
+            OpenAiApiKey = key;
+        }
+    }
+
+    /// <summary>Parses an exported configuration; null when the text isn't one.</summary>
+    public static Settings? FromJson(string json) {
+        try {
+            return JsonSerializer.Deserialize<Settings>(json, new JsonSerializerOptions {
+                ReadCommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+            });
+        } catch (JsonException) {
+            return null;
+        }
     }
 
     public void Save() {

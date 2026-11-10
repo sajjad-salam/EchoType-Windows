@@ -110,7 +110,9 @@ internal sealed partial class AskReplyForm : Form {
         BackColor = HudTheme.Surface;
         ForeColor = HudTheme.Ink;
         Font = HudTheme.BodyText;
-        Padding = new Padding(1);
+        // A few pixels of frame around the content take the resize hit-tests (see WndProc).
+        Padding = new Padding(ResizeBorder);
+        MinimumSize = new Size(MinWidthDip, MinHeightDip);
 
         _bodyFont = HudTheme.ContentFont(11f, _text);
         var screen = Screen.FromPoint(Cursor.Position).WorkingArea;
@@ -133,6 +135,8 @@ internal sealed partial class AskReplyForm : Form {
             }
         };
         _caption.MouseUp += (_, _) => _dragging = false;
+        // Double-click the title bar: grow to a large reading size, or back.
+        _caption.DoubleClick += (_, _) => ToggleExpanded();
         _close = new HudCaptionButton { Icon = HudCaptionButton.Glyph.Close, Size = new Size(36, 28) };
         _close.Click += (_, _) => Close();
         _caption.Controls.Add(_close);
@@ -144,10 +148,11 @@ internal sealed partial class AskReplyForm : Form {
             WrapContents = false,
             AutoScroll = true,
             BackColor = HudTheme.Surface,
-            Padding = new Padding(20, 4, 20, 16),
+            Padding = new Padding(20 - ResizeBorder, 4, 20 - ResizeBorder, 16),
         };
+        _flow = content_;
 
-        int inner = width - 40 - 2;
+        int inner = width - 40;
         bool questionRtl = ArabicFont.StartsRightToLeft(content.Question);
         _question = new Label {
             AutoSize = false,
@@ -301,7 +306,142 @@ internal sealed partial class AskReplyForm : Form {
         }
         _buttons.PerformLayout();
         contentHeight += Math.Max(0, _buttons.PreferredSize.Height - _buttons.Height);
-        Height = Math.Min(screen.Height - 40, _caption.Height + contentHeight + 4);
+        Height = Math.Min(screen.Height - 40, _caption.Height + contentHeight + Padding.Vertical + 2);
+
+        // Corner grip: a visible handle for the resize every edge already supports.
+        _grip = new Panel { Size = new Size(18, 18), BackColor = HudTheme.Surface, Cursor = Loc.Rtl ? Cursors.SizeNESW : Cursors.SizeNWSE };
+        _grip.Paint += OnGripPaint;
+        _grip.MouseDown += (_, e) => {
+            if (e.Button == MouseButtons.Left) {
+                NativeMethods.ReleaseCapture();
+                NativeMethods.SendMessageW(Handle, NativeMethods.WM_NCLBUTTONDOWN,
+                    (IntPtr)(Loc.Rtl ? NativeMethods.HTBOTTOMLEFT : NativeMethods.HTBOTTOMRIGHT), IntPtr.Zero);
+            }
+        };
+        Controls.Add(_grip);
+        _grip.BringToFront();
+
+        // The size the user last dragged this kind of popup to wins over the content size.
+        if (RememberedSizes.TryGetValue(SizeKey, out Size remembered)) {
+            Size = new Size(Math.Min(remembered.Width, screen.Width - 20), Math.Min(remembered.Height, screen.Height - 20));
+        }
+        _ready = true;
+        Resize += (_, _) => Reflow();
+        ResizeEnd += (_, _) => RememberedSizes[SizeKey] = Size;
+        Reflow();
+    }
+
+    private const int ResizeBorder = 6;
+    private const int MinWidthDip = 360;
+    private const int MinHeightDip = 220;
+
+    /// <summary>Last user-chosen size per popup kind (Ask vs translation), kept while EchoType runs.</summary>
+    private static readonly Dictionary<string, Size> RememberedSizes = [];
+
+    private readonly FlowLayoutPanel _flow;
+    private readonly Panel _grip;
+    private bool _ready;
+    private Rectangle? _restoreBounds;
+
+    private string SizeKey => _content.Title != null ? "translate" : "ask";
+
+    /// <summary>Edges and corners resize the borderless popup, like a normal window frame.</summary>
+    protected override void WndProc(ref Message m) {
+        base.WndProc(ref m);
+        if (m.Msg != NativeMethods.WM_NCHITTEST || m.Result != (IntPtr)NativeMethods.HTCLIENT) {
+            return;
+        }
+        long lp = m.LParam.ToInt64();
+        var pt = PointToClient(new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF)));
+        int edge = ResizeBorder + 2;
+        bool left = pt.X < edge, right = pt.X >= ClientSize.Width - edge;
+        bool top = pt.Y < edge, bottom = pt.Y >= ClientSize.Height - edge;
+        int hit = top && left ? NativeMethods.HTTOPLEFT
+            : top && right ? NativeMethods.HTTOPRIGHT
+            : bottom && left ? NativeMethods.HTBOTTOMLEFT
+            : bottom && right ? NativeMethods.HTBOTTOMRIGHT
+            : left ? NativeMethods.HTLEFT
+            : right ? NativeMethods.HTRIGHT
+            : top ? NativeMethods.HTTOP
+            : bottom ? NativeMethods.HTBOTTOM
+            : NativeMethods.HTCLIENT;
+        m.Result = (IntPtr)hit;
+    }
+
+    /// <summary>
+    /// Fits every block to the current width; the reply text (or, without text, the image)
+    /// takes whatever height is left, so a bigger window shows more of the reply.
+    /// </summary>
+    private void Reflow() {
+        if (!_ready || IsDisposed) {
+            return;
+        }
+        _flow.SuspendLayout();
+        try {
+            int inner = Math.Max(120, _flow.ClientSize.Width - _flow.Padding.Horizontal);
+            _question.Width = inner;
+            _question.Height = Math.Min(44, TextRenderer.MeasureText(_question.Text, _question.Font,
+                new Size(inner, 200), TextFormatFlags.WordBreak).Height + 4);
+            if (_videoNote != null) {
+                _videoNote.Width = inner;
+                _videoNote.Height = TextRenderer.MeasureText(_videoNote.Text, _videoNote.Font,
+                    new Size(inner, 200), TextFormatFlags.WordBreak).Height + 4;
+            }
+            _status.Width = inner;
+            _buttons.MaximumSize = new Size(inner, 0);
+            _buttons.Width = inner;
+            _buttons.PerformLayout();
+            if (_body != null) {
+                _body.Width = inner;
+            }
+            if (_picture != null && _content.Image != null) {
+                _picture.Width = inner;
+                float scale = Math.Min(1f, Math.Min(inner / (float)_content.Image.Width, 340f / _content.Image.Height));
+                _picture.Height = Math.Max(80, (int)(_content.Image.Height * scale));
+            }
+            Control? filler = _body ?? (Control?)_picture;
+            if (filler != null) {
+                int used = _flow.Padding.Vertical;
+                foreach (Control c in _flow.Controls) {
+                    if (c != filler) {
+                        used += (c == _buttons ? _buttons.PreferredSize.Height : c.Height) + c.Margin.Vertical;
+                    }
+                }
+                filler.Height = Math.Max(60, _flow.ClientSize.Height - used - filler.Margin.Vertical - 2);
+            }
+        } finally {
+            _flow.ResumeLayout(true);
+        }
+        _grip.Location = Loc.Rtl
+            ? new Point(Padding.Left, ClientSize.Height - _grip.Height - Padding.Bottom)
+            : new Point(ClientSize.Width - _grip.Width - Padding.Right, ClientSize.Height - _grip.Height - Padding.Bottom);
+        Invalidate();
+    }
+
+    private void ToggleExpanded() {
+        if (_restoreBounds is Rectangle restore) {
+            _restoreBounds = null;
+            Bounds = restore;
+            return;
+        }
+        _restoreBounds = Bounds;
+        var area = Screen.FromControl(this).WorkingArea;
+        int w = Math.Min(area.Width - 80, Math.Max(Width, area.Width * 3 / 5));
+        int h = area.Height - 80;
+        Bounds = new Rectangle(area.Left + (area.Width - w) / 2, area.Top + 40, w, h);
+    }
+
+    private void OnGripPaint(object? sender, PaintEventArgs e) {
+        HudTheme.Prepare(e.Graphics);
+        using var brush = new SolidBrush(HudTheme.InkMuted);
+        // Three diagonal rows of dots pointing into the corner.
+        for (int row = 0; row < 3; row++) {
+            for (int i = 0; i <= row; i++) {
+                int x = 14 - (row - i) * 4, y = 14 - i * 4;
+                if (Loc.Rtl) x = _grip.Width - x - 2;
+                e.Graphics.FillEllipse(brush, x - 1, y - 1, 2.6f, 2.6f);
+            }
+        }
     }
 
     protected override bool ShowWithoutActivation => true;

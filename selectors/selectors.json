@@ -1,0 +1,6 @@
+{
+  // Community selector fixes, downloaded by every EchoType (Settings → Updates →
+  // "Download selector fixes"). Same format as %APPDATA%\EchoType\selectors.json:
+  // one object per site ("chatgpt", "gemini", "claude"); lists go ahead of the
+  // built-in selectors. Keep this file valid JSON (comments are allowed).
+}

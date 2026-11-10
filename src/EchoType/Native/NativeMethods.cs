@@ -373,6 +373,11 @@ internal static partial class NativeMethods {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern IntPtr SendMessageW(IntPtr hWnd, int msg, IntPtr wParam, StringBuilder lParam);
 
+    public const int WM_NCLBUTTONDOWN = 0x00A1;
+
+    [DllImport("user32.dll")]
+    public static extern bool ReleaseCapture();
+
     [DllImport("user32.dll")]
     public static extern uint GetClipboardSequenceNumber();
 

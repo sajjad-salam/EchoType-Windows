@@ -86,6 +86,18 @@ internal static class HotkeyConflicts {
                 ? "That key is already the Add word replacement shortcut."
                 : "That shortcut overlaps the Add word replacement shortcut.";
         }
+        foreach (var (other, name) in new[] {
+                     (settings.PasteLastChord, "Paste last result"),
+                     (settings.ActionPaletteChord, "Action palette"),
+                 }) {
+            bool ignore = (!ignoreChord.IsEmpty && other.Equals(ignoreChord))
+                || (other.Count == 1 && ignoreVks.Contains((int)other.K1));
+            if (!ignore && Conflicts(chord, other)) {
+                return chord.Count == 1 && other.Count == 1
+                    ? $"That key is already the {name} shortcut."
+                    : $"That shortcut overlaps the {name} shortcut.";
+            }
+        }
         if (ConflictsWithReserved(chord, settings.OpenModelWindowVk, ignoreVks)) {
             return chord.Count == 1
                 ? "That key is already the model window shortcut."
