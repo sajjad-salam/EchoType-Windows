@@ -2244,7 +2244,7 @@ internal sealed class DictationDriver {
     }
 
     /// <summary>
-    /// Attaches files (images, or audio for Telegram voice notes) to the composer after the
+    /// Attaches files (images or audio) to the composer after the
     /// text is in: first a paste event carrying the files, which ChatGPT, Gemini and Claude
     /// all accept like a Ctrl+V of an image; if no thumbnail shows up, the page's file input
     /// is filled over CDP. Then waits for the upload so Send is enabled. Returns false when

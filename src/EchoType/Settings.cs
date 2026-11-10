@@ -100,17 +100,6 @@ internal sealed class Settings {
     [JsonPropertyName("progressPillHideMs")]
     public int ProgressPillHideMs { get; set; } = 1200;
 
-    /// <summary>Telegram bot token from @BotFather. Empty = Telegram voice notes off.</summary>
-    [JsonPropertyName("telegramBotToken")]
-    public string TelegramBotToken { get; set; } = "";
-
-    /// <summary>The only chat whose voice notes are transcribed (the reply goes back there).</summary>
-    [JsonPropertyName("telegramChatId")]
-    public string TelegramChatId { get; set; } = "";
-
-    [JsonPropertyName("telegramEnabled")]
-    public bool TelegramEnabled { get; set; } = true;
-
     /// <summary>
     /// When false (default), hold a recording shortcut to talk and release to stop.
     /// When true, press once to start and press the same key again to stop.
@@ -440,8 +429,6 @@ internal sealed class Settings {
             loaded.TranslateSelectionVks ??= [];
             loaded.AddWordReplacementVks ??= [];
             loaded.OpenAiApiKey ??= "";
-            loaded.TelegramBotToken ??= "";
-            loaded.TelegramChatId ??= "";
             loaded.ProgressPillHideMs = Math.Clamp(loaded.ProgressPillHideMs, 0, 600_000);
             loaded.OpenAiTranslationModel ??= "";
             loaded.WordReplacements ??= [];

@@ -3,7 +3,6 @@ using System.Diagnostics;
 using EchoType.Hotkey;
 using EchoType.Input;
 using EchoType.Native;
-using EchoType.Telegram;
 using EchoType.Translation;
 using EchoType.Ui;
 using EchoType.Web;
@@ -91,8 +90,6 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     private int _cleanWarmupEpoch;
     private bool _cleanPromptUiOpen;
     private bool _openAiKeyUiOpen;
-    private bool _telegramUiOpen;
-    private TelegramVoiceRelay? _telegram;
     private bool _wordReplacementsUiOpen;
     private bool _textShortcutsUiOpen;
     private bool _workspaceModesUiOpen;
@@ -374,7 +371,6 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         _textExpander.Start(_settings.TextShortcuts, _settings.TextShortcutsEnabled);
         StatusOverlay.CancelClicked += OnHudCancelClicked;
         StatusOverlay.ParkAfterMs = _settings.ProgressPillHideMs;
-        _telegram = TelegramVoiceRelay.Start(_settings, _marshal);
 
         Log.Write($"launch: EchoType for Windows started (model={_web.Site.Id}, hotkey={HotkeyNames.For(_settings.DictationChord)}, askModelVk=0x{_settings.AskModelVk:X2}, askModel={_settings.AskProviderName}, translate={HotkeyNames.For(_settings.TranslateChord)}, translateSelection={HotkeyNames.For(_settings.TranslateSelectionChord)}, translateTo={_settings.TranslateTargetLanguage}, translateSelectionTo={_settings.TranslateSelectionTargetLanguage}, openModelWindowVk=0x{_settings.OpenModelWindowVk:X2}, commands={_settings.ActiveCommands.Count}, toggleRecording={_settings.ToggleRecording}, pressEnterAfterPaste={_settings.PressEnterAfterPaste}, pressEnterToggleVk=0x{_settings.PressEnterToggleVk:X2}, chatgptSwitchVk=0x{_settings.ChatGptSwitchVk:X2}, geminiSwitchVk=0x{_settings.GeminiSwitchVk:X2}, muteOtherAppsWhileDictating={_settings.MuteOtherAppsWhileDictating}, longDictation={_settings.LongDictation})");
         StartupRegistration.Apply(_settings.StartWithWindows);
@@ -572,37 +568,6 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
         } finally {
             _openAiKeyUiOpen = false;
-        }
-    }
-
-    private void EditTelegramVoice() {
-        if (_telegramUiOpen) {
-            return;
-        }
-        _telegramUiOpen = true;
-        try {
-            using var form = new TelegramVoiceForm(_settings);
-            IWin32Window? owner = _window is { Visible: true, IsDisposed: false } ? _window : null;
-            if (form.ShowDialog(owner) != DialogResult.OK) {
-                return;
-            }
-            _settings.TelegramEnabled = form.TelegramEnabled;
-            _settings.TelegramBotToken = form.TelegramToken;
-            _settings.TelegramChatId = form.TelegramChatId;
-            _settings.Save();
-            _telegram?.Dispose();
-            _telegram = TelegramVoiceRelay.Start(_settings, _marshal);
-            Log.Write("settings: telegram " + (_telegram != null ? "on" : "off"));
-            ShowBalloon(_telegram != null
-                ? Loc.T("Telegram voice notes are on.")
-                : Loc.T("Telegram voice notes are off."), OverlayKind.Success);
-            NotifyUi();
-        } catch (Exception ex) {
-            Log.Write("telegram ui: " + ex);
-            MessageBox.Show("Could not open the Telegram settings: " + ex.Message, "EchoType",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        } finally {
-            _telegramUiOpen = false;
         }
     }
 
@@ -1513,10 +1478,10 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         }
         if (cleaned == null) {
             Log.Write("auto-clean: no usable reply, pasting raw transcript");
-            if (!await BeforeDeliverAsync(job)) {
+            if (!await BeforeDeliverAsync(job, paste: true)) {
                 return;
             }
-            ShowBalloon(Loc.T("Auto Clean failed — pasted the raw transcript."), OverlayKind.Warning);
+            JobNotice(Loc.T("Auto Clean failed — pasted the raw transcript."), OverlayKind.Warning);
             DeliverPasteNow(job, transcript, "dictation");
             return;
         }
@@ -1788,7 +1753,8 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             ShowBalloon(Loc.T("Translation failed — transcript copied to clipboard."), OverlayKind.Error);
             return;
         }
-        if (!await BeforeDeliverAsync(job)) {
+        // A translation pastes as soon as it is ready; an empty one waits to report the error.
+        if (!await BeforeDeliverAsync(job, paste: translated.Length > 0)) {
             return;
         }
         if (translated.Length == 0) {
@@ -1810,7 +1776,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             case Paster.Outcome.CopiedToClipboard:
                 Log.Write("translate: no editable field focused, left translation on clipboard");
                 Sounds.Pasted();
-                ShowBalloon(Loc.T("Copied the translation — press Ctrl+V to paste."), OverlayKind.Success);
+                JobNotice(Loc.T("Copied the translation — press Ctrl+V to paste."), OverlayKind.Success);
                 break;
         }
         CompleteJobPill(job);
@@ -2032,7 +1998,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     }
 
     private async Task DeliverPasteAsync(DictationJob job, string text, string logLabel) {
-        if (await BeforeDeliverAsync(job)) {
+        if (await BeforeDeliverAsync(job, paste: true)) {
             DeliverPasteNow(job, text, logLabel);
         }
     }
@@ -2045,13 +2011,13 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             case Paster.Outcome.Pasted:
                 Sounds.Pasted();
                 if (result.KeptUserFocus) {
-                    ShowBalloon(Loc.T("Pasted into the original field."), OverlayKind.Success);
+                    JobNotice(Loc.T("Pasted into the original field."), OverlayKind.Success);
                 }
                 break;
             case Paster.Outcome.CopiedToClipboard:
                 Log.Write(logLabel + ": no editable field focused, left on clipboard");
                 Sounds.Pasted();
-                ShowBalloon(Loc.T("Copied to clipboard — press Ctrl+V to paste."), OverlayKind.Success);
+                JobNotice(Loc.T("Copied to clipboard — press Ctrl+V to paste."), OverlayKind.Success);
                 break;
         }
         CompleteJobPill(job);
@@ -2064,7 +2030,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     /// If there was nowhere to paste, the reply stays on the clipboard.
     /// </summary>
     private async Task DeliverGeneratedPasteAsync(DictationJob job, string reply, string logLabel, string transcript) {
-        if (!await BeforeDeliverAsync(job)) {
+        if (!await BeforeDeliverAsync(job, paste: true)) {
             return;
         }
         Paster.DeliverResult result = Paster.Deliver(
@@ -2073,12 +2039,12 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             case Paster.Outcome.Pasted:
                 Sounds.Pasted();
                 Paster.CopyLater(transcript);
-                ShowBalloon(Loc.T("Pasted the reply. Transcript copied to clipboard."), OverlayKind.Success);
+                JobNotice(Loc.T("Pasted the reply. Transcript copied to clipboard."), OverlayKind.Success);
                 break;
             case Paster.Outcome.CopiedToClipboard:
                 Log.Write(logLabel + ": no editable field focused, left reply on clipboard");
                 Sounds.Pasted();
-                ShowBalloon(Loc.T("Copied the reply — press Ctrl+V to paste."), OverlayKind.Success);
+                JobNotice(Loc.T("Copied the reply — press Ctrl+V to paste."), OverlayKind.Success);
                 break;
         }
         CompleteJobPill(job);
@@ -2111,20 +2077,20 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         }
 
         using (image) {
-            if (!await BeforeDeliverAsync(job)) {
+            if (!await BeforeDeliverAsync(job, paste: true)) {
                 return true; // cancelled: nothing more to deliver
             }
             Paster.DeliverResult result = Paster.DeliverImage(image, PressEnterFor(job), job.PasteTarget);
             switch (result.Outcome) {
                 case Paster.Outcome.Pasted:
                     Sounds.Pasted();
-                    ShowBalloon(Loc.T("Pasted image. Transcript copied to clipboard."), OverlayKind.Success);
+                    JobNotice(Loc.T("Pasted image. Transcript copied to clipboard."), OverlayKind.Success);
                     CompleteJobPill(job);
                     return true;
                 case Paster.Outcome.CopiedToClipboard:
                     Log.Write(logLabel + ": no editable field focused, left image on clipboard");
                     Sounds.Pasted();
-                    ShowBalloon(Loc.T("Copied image. Transcript copied to clipboard."), OverlayKind.Success);
+                    JobNotice(Loc.T("Copied image. Transcript copied to clipboard."), OverlayKind.Success);
                     CompleteJobPill(job);
                     return true;
                 default:
@@ -2405,11 +2371,16 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         return Task.CompletedTask;
     }
 
-    /// <summary>Double-tap: the recording in progress and every background job; nothing is pasted.</summary>
+    /// <summary>
+    /// Double-tap: while a new recording is being made only that recording is cancelled, so
+    /// earlier recordings still being processed (dictation, Auto Clean, translation, commands)
+    /// finish and paste. With nothing recording it cancels every background job.
+    /// </summary>
     private void CancelEverything(string reason) {
         _pendingChord = default;
         if (RecorderCapturing) {
             _ = CancelAndResetAsync(reason);
+            return;
         }
         CancelAllJobs(reason);
     }
@@ -2696,7 +2667,12 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     /// would land in the middle of it) and no command picker is open. False when the job
     /// was cancelled meanwhile.
     /// </summary>
-    private async Task<bool> BeforeDeliverAsync(DictationJob job) {
+    /// <param name="paste">
+    /// True for a paste of the job's result. With toggle recording it does not wait for a newer
+    /// recording to end: the result pastes as soon as it is ready, whatever the job is
+    /// (dictation, Auto Clean, translation, a command). Error notices and popups still wait.
+    /// </param>
+    private async Task<bool> BeforeDeliverAsync(DictationJob job, bool paste = false) {
         if (!job.PreviousDelivery.IsCompleted) {
             Log.Write(job.Kind + " #" + job.Id + ": waiting for the earlier recording to paste first");
             try {
@@ -2707,13 +2683,26 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
                 return false;
             }
         }
+        // In hold mode the recording keys are physically down, and the paste would release
+        // them; only toggle recording pastes in the middle of the next recording.
+        bool pasteDuringRecording = paste && _settings.ToggleRecording;
         bool logged = false;
-        while (!job.Cancelled && (RecorderCapturing || _actionPicker != null)) {
+        while (!job.Cancelled && ((RecorderCapturing && !pasteDuringRecording) || _actionPicker != null)) {
             if (!logged) {
                 Log.Write(job.Kind + " #" + job.Id + ": ready, waiting for the current recording to end");
                 logged = true;
             }
             await Task.Delay(100);
+        }
+        if (pasteDuringRecording && RecorderCapturing && !job.Cancelled) {
+            // The new recording copies the selection at key-down: let that finish so the
+            // clipboard isn't used by both at once.
+            try {
+                await _selectionTask.WaitAsync(TimeSpan.FromSeconds(3), job.Cancel.Token);
+            } catch (OperationCanceledException) when (job.Cancelled) {
+                return false;
+            } catch { /* timeout or failed capture: paste anyway */ }
+            Log.Write(job.Kind + " #" + job.Id + ": ready, pasting while the next recording continues");
         }
         // Keys the user is still holding (Ctrl of Ctrl+Space, the Windows key…) are
         // neutralized in Paster right before the synthesized Ctrl+V / Enter, so no
@@ -4072,7 +4061,6 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     void IAppWindowHost.ToggleAskWindow() => ToggleAskWindow();
     void IAppWindowHost.EditOpenAiKey() => EditOpenAiKey();
 
-    void IAppWindowHost.EditTelegramVoice() => EditTelegramVoice();
     void IAppWindowHost.EditWordReplacements() => EditWordReplacements();
     void IAppWindowHost.EditTextShortcuts() => EditTextShortcuts();
     void IAppWindowHost.SetTextShortcutsEnabled(bool value) => SetTextShortcutsEnabled(value);
@@ -4330,7 +4318,6 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         StatusOverlay.Shutdown();
         _hotkey.Dispose();
         _textExpander.Dispose();
-        _telegram?.Dispose();
         _web.Dispose();
         _cleanWeb?.Dispose();
         _askWeb?.Dispose();
