@@ -114,6 +114,9 @@ internal static partial class Loc {
         [" Transcript copied to clipboard."] = " نُسخ النص المفرَّغ إلى الحافظة.",
         ["{0} ended the audio. Only what you already said will be transcribed."] = "أنهى {0} التسجيل الصوتي. سيُفرَّغ ما قلته حتى الآن فقط.",
         ["Recording stopped"] = "توقف التسجيل",
+        ["{0} returned no text for {1} seconds of the recording. If you were speaking then, say that part again."] =
+            "لم يُرجع {0} أي نص لمدة {1} ثانية من التسجيل. إذا كنت تتكلم خلالها، أعد قول ذلك الجزء.",
+        ["Part of the recording was lost"] = "ضاع جزء من التسجيل",
         ["Wait until dictation finishes before switching recording mode."] = "انتظر حتى ينتهي الإملاء قبل تبديل وضع التسجيل.",
         ["Press a shortcut to start recording, press again to stop."] = "اضغط اختصارًا لبدء التسجيل، واضغطه مرة أخرى للإيقاف.",
         ["Hold a shortcut to record, release to stop."] = "اضغط مطولًا على اختصار للتسجيل، وأفلته للإيقاف.",

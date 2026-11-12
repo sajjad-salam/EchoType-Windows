@@ -3037,8 +3037,14 @@ internal sealed class DictationDriver {
     /// Polls until the transcript settles. No fixed cap (dictations run 30+ min);
     /// the deadline is an inactivity window that extends while the page shows progress.
     /// </summary>
-    public async Task<string> AwaitTranscriptAsync(TimeSpan recordingDuration) {
+    /// <param name="emptyGiveUp">
+    /// When set, returns "" once the page has stopped dictating and the composer has stayed
+    /// empty this long. Long dictation uses it when it must restart on this same page: every
+    /// second spent waiting for a piece the site dropped is a second of speech not recorded.
+    /// </param>
+    public async Task<string> AwaitTranscriptAsync(TimeSpan recordingDuration, TimeSpan? emptyGiveUp = null) {
         int epoch = _waitEpoch;
+        DateTime emptySince = default;
         TimeSpan inactivityWindow = TimeSpan.FromSeconds(Math.Max(60, recordingDuration.TotalSeconds * 0.5));
         DateTime deadline = DateTime.UtcNow + inactivityWindow;
         string lastText = "";
@@ -3101,6 +3107,9 @@ internal sealed class DictationDriver {
             if (text.Length == 0 && axHold.Length > 0) {
                 text = axHold;
             }
+            if (text.Length > 0 || st.Dictating || !st.ComposerPresent) {
+                emptySince = default;
+            }
             if (st.Dictating || !st.ComposerPresent) {
                 deadline = DateTime.UtcNow + inactivityWindow;
                 emptyGrace = 0;
@@ -3131,8 +3140,20 @@ internal sealed class DictationDriver {
                 if (generating) {
                     deadline = DateTime.UtcNow + inactivityWindow;
                     emptyGrace = 0;
+                    emptySince = default;
                     Log.Write("driver: composer empty but model is generating — waiting for user bubble");
                 } else {
+                    if (emptySince == default) {
+                        emptySince = DateTime.UtcNow;
+                    } else if (emptyGiveUp is { } giveUp && DateTime.UtcNow - emptySince >= giveUp) {
+                        string lateAx = await TryFreshAccessibilityTranscriptAsync();
+                        if (lateAx.Length > 0) {
+                            Log.Write("driver: transcript via accessibility tree before giving up (" + lateAx.Length + " chars)");
+                            return lateAx;
+                        }
+                        Log.Write($"driver: composer still empty {giveUp.TotalSeconds:0}s after the page stopped, giving up on this piece");
+                        return "";
+                    }
                     emptyGrace++;
                     if (emptyGrace >= emptyLimit) {
                         string lateAx = await TryFreshAccessibilityTranscriptAsync();

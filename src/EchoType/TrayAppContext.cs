@@ -145,8 +145,13 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     private CancellationTokenSource? _listenWatchCts;
     private CancellationTokenSource? _micLevelCts;
     private int _listenFinishGate;
-    /// <summary>Long dictation: transcripts of the pieces the site already cut off this session.</summary>
-    private readonly List<string> _longPieces = [];
+    /// <summary>
+    /// Long dictation: transcripts of the pieces the site already cut off this session, in order.
+    /// A piece collected on a detached page (<see cref="CollectDetachedPieceAsync"/>) finishes later.
+    /// </summary>
+    private readonly List<Task<string>> _longPieces = [];
+    /// <summary>Long dictation: pieces still being transcribed on a detached page, cancelled with the recording.</summary>
+    private readonly List<DetachedPiece> _detachedPieces = [];
     /// <summary>Long dictation: set while a cut-off piece is collected and the page's dictation restarted.</summary>
     private bool _longContinuing;
     private int _longEmptyPieces; // consecutive; 3 stops restarting
@@ -1269,6 +1274,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             HeldSeconds = HeldSeconds(),
             PieceSeconds = PieceSeconds(),
             LongPieces = _longPieces.ToArray(),
+            DetachedPieces = _detachedPieces.ToArray(),
             MicOpen = micOpen,
             PreviousDelivery = _deliveryTail,
         };
@@ -1333,7 +1339,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
                     return;
                 }
                 job.LeaseClean = false;
-                string earlier = JoinPieces(job.LongPieces, "");
+                string earlier = JoinPieces(await Task.WhenAll(job.LongPieces), "");
                 // mac collectTranscript failure parity: cancel + clear, then report.
                 try { await driver.CancelDictationAsync(); } catch { /* best effort */ }
                 try { await driver.ClearComposerAsync(); } catch { /* best effort */ }
@@ -1344,8 +1350,12 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             }
         }
         if (job.LongPieces.Length > 0) {
-            Log.Write($"dictation: long dictation joined {job.LongPieces.Length + (transcript.Trim().Length > 0 ? 1 : 0)} pieces");
-            transcript = JoinPieces(job.LongPieces, transcript);
+            // Pieces collected on a detached page may still be arriving.
+            string[] pieces = await Task.WhenAll(job.LongPieces);
+            job.Cancel.Token.ThrowIfCancellationRequested();
+            int joined = pieces.Count(p => p.Length > 0) + (transcript.Trim().Length > 0 ? 1 : 0);
+            Log.Write($"dictation: long dictation joined {joined} of {pieces.Length + 1} pieces");
+            transcript = JoinPieces(pieces, transcript);
         }
 
         try {
@@ -2406,6 +2416,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         try {
             _web.Driver?.InvalidateWaits();
         } catch { /* best effort */ }
+        CancelDetachedPieces(_detachedPieces);
         _engagementFailures = 0;
         // Cancel leaves ChatGPT/Gemini's mic UI wedged often enough that the next
         // recording does not start until a later self-heal reload. Reload now so
@@ -2447,6 +2458,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         if (ReferenceEquals(_pickerJob, job)) {
             DismissActionPicker();
         }
+        CancelDetachedPieces(job.DetachedPieces);
         try {
             job.Lease?.Driver.InvalidateWaits();
             job.Waiting?.Driver?.InvalidateWaits();
@@ -2597,7 +2609,9 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         _pasteTarget = null;
         _profile = null;
         _selectionTask = Task.FromResult<string?>(null);
+        // A finished recording's job already holds its pieces; a cancel has cancelled them.
         _longPieces.Clear();
+        _detachedPieces.Clear();
         _longContinuing = false;
         _longEmptyPieces = 0;
         _pieceStartedAt = default;
@@ -2629,7 +2643,9 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         public required Task<string?> SelectionTask { get; init; }
         public required double HeldSeconds { get; init; }
         public required double PieceSeconds { get; init; }
-        public required string[] LongPieces { get; init; }
+        public required Task<string>[] LongPieces { get; init; }
+        /// <summary>Long dictation pieces still transcribing on their own page; cancelled with the job.</summary>
+        public required DetachedPiece[] DetachedPieces { get; init; }
         /// <summary>False when Long dictation already collected the last piece and the page isn't recording.</summary>
         public required bool MicOpen { get; init; }
         /// <summary>The deliveries of earlier jobs: this one pastes after them.</summary>
@@ -2937,59 +2953,83 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     }
 
     /// <summary>
-    /// Long dictation: the site ended the recording while you're still talking. Keep the piece
-    /// it captured, restart the page's dictation, and let <see cref="FinishListeningAsync"/>
-    /// join every piece. A release (or toggle stop) meanwhile finishes with what was collected.
+    /// How long Long dictation waits for a cut-off piece when it has to restart on that same page
+    /// (no standby page ready). A piece the site really transcribed shows up within a second or
+    /// two; when the site drops the audio nothing ever comes, and waiting longer only loses more
+    /// of what you are still saying.
+    /// </summary>
+    private static readonly TimeSpan InPlacePieceEmptyGiveUp = TimeSpan.FromSeconds(8);
+
+    /// <summary>A Long dictation piece still being transcribed on its own (detached) page.</summary>
+    private sealed class DetachedPiece(DictationDriver driver) {
+        public DictationDriver Driver { get; } = driver;
+        public bool Cancelled { get; set; }
+    }
+
+    /// <summary>
+    /// Long dictation: the site ended the recording while you're still talking. Recording carries
+    /// on at once on the standby page while the cut-off piece is transcribed on its own page, and
+    /// <see cref="FinishListeningAsync"/> joins every piece. With no standby page ready the piece is
+    /// collected here first, then the same page restarts. A release (or toggle stop) meanwhile
+    /// finishes with what was collected.
     /// </summary>
     private async Task ContinueLongDictationAsync(int session, string reason) {
-        var driver = _web.Driver;
+        var web = _web;
+        var driver = web.Driver;
         if (driver == null) {
             return;
         }
-        Log.Write($"dictation: recording cut off ({reason}) — long dictation keeps piece {_longPieces.Count + 1} ({PieceSeconds():F1}s)");
+        int number = _longPieces.Count + 1;
+        double pieceSeconds = PieceSeconds();
+        Log.Write($"dictation: recording cut off ({reason}) — long dictation keeps piece {number} ({pieceSeconds:F1}s)");
         _longContinuing = true;
         StopListenWatch();
 
-        string piece;
         try {
             await driver.SettleCutoffAsync();
-            if (!IsLive(session)) {
-                return;
-            }
-            piece = (await driver.AwaitTranscriptAsync(TimeSpan.FromSeconds(PieceSeconds()))).Trim();
-            if (!IsLive(session)) {
-                return;
-            }
-            await driver.ClearComposerAsync();
         } catch (DriverException ex) {
-            if (!IsLive(session)) {
-                return;
+            if (IsLive(session)) {
+                await FailLongPieceAsync(session, driver, ex);
             }
-            _longContinuing = false;
-            try { await driver.ClearComposerAsync(); } catch { /* best effort */ }
-            if (!IsLive(session)) {
-                return;
-            }
-            if (_longPieces.Count == 0) {
-                HandleFailure(ex);
-                return;
-            }
-            Log.Write("dictation: long dictation piece failed (" + ex.Message + "), delivering earlier pieces");
-            await FinishLongDictationEarlyAsync(session);
             return;
         }
         if (!IsLive(session)) {
             return;
         }
 
-        if (piece.Length > 0) {
-            _longPieces.Add(piece);
-            _longEmptyPieces = 0;
-            StatusOverlay.SetLiveTranscript(JoinLongPieces(""));
+        // Waiting on this page for the piece leaves the mic closed the whole time, and a piece
+        // the site dropped never arrives: everything said during that wait was lost too. Hand
+        // the page to a background wait and keep recording on the standby page instead.
+        PageLease? lease = _hotkeyHeld ? web.DetachActivePage() : null;
+        if (lease != null) {
+            var pending = new DetachedPiece(lease.Driver);
+            _detachedPieces.Add(pending);
+            _longPieces.Add(CollectDetachedPieceAsync(web, lease, pending, session, number, pieceSeconds));
         } else {
-            _longEmptyPieces++;
+            string piece;
+            try {
+                piece = (await driver.AwaitTranscriptAsync(
+                    TimeSpan.FromSeconds(pieceSeconds),
+                    _hotkeyHeld ? InPlacePieceEmptyGiveUp : null)).Trim();
+                if (!IsLive(session)) {
+                    return;
+                }
+                await driver.ClearComposerAsync();
+            } catch (DriverException ex) {
+                if (IsLive(session)) {
+                    await FailLongPieceAsync(session, driver, ex);
+                }
+                return;
+            }
+            if (!IsLive(session)) {
+                return;
+            }
+            _longPieces.Add(Task.FromResult(piece));
+            RecordLongPiece(session, number, piece, pieceSeconds);
+            if (piece.Length > 0) {
+                StatusOverlay.SetLiveTranscript(JoinLongPieces(""));
+            }
         }
-        Log.Write($"dictation: long dictation piece {(piece.Length > 0 ? _longPieces.Count : 0)} = {piece.Length} chars");
 
         if (!_hotkeyHeld) {
             _longContinuing = false;
@@ -3004,14 +3044,19 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             return;
         }
 
+        // After a detach this is the standby page; otherwise the same page again.
+        var next = _web.Driver;
         try {
-            await driver.StartDictationAsync();
+            if (next == null) {
+                throw new DriverException(DriverFailure.NotReady, "no driver");
+            }
+            await next.StartDictationAsync();
         } catch (DriverException ex) {
             if (!IsLive(session)) {
                 return;
             }
             _longContinuing = false;
-            if (_longPieces.Count == 0) {
+            if (NoLongPieceCollected()) {
                 HandleFailure(ex);
                 return;
             }
@@ -3030,14 +3075,101 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
             // Released while the page restarted: that new piece is a fraction of a second, and
             // waiting it out would hold the paste for ~30 s. Drop it and paste the rest.
             Log.Write("dictation: released while long dictation restarted — dropping the new piece");
-            try { await driver.CancelDictationAsync(); } catch { /* best effort */ }
-            try { await driver.ClearComposerAsync(); } catch { /* best effort */ }
+            try { await next.CancelDictationAsync(); } catch { /* best effort */ }
+            try { await next.ClearComposerAsync(); } catch { /* best effort */ }
             await FinishListeningAsync(session, micOpen: false);
             return;
         }
-        Log.Write("dictation: long dictation restarted");
+        Log.Write("dictation: long dictation restarted" + (lease != null ? " on the standby page" : ""));
         Sounds.Start();
         StartListenWatch(session);
+    }
+
+    /// <summary>
+    /// Waits for a cut-off piece on its detached page with the normal transcript patience (the
+    /// recording already carries on elsewhere), then gives the page back. Never throws: a
+    /// failed or cancelled piece is "".
+    /// </summary>
+    private async Task<string> CollectDetachedPieceAsync(
+        ChatGPTWebController web, PageLease lease, DetachedPiece pending, int session, int number, double seconds) {
+        string piece = "";
+        bool clean = true;
+        try {
+            piece = (await lease.Driver.AwaitTranscriptAsync(TimeSpan.FromSeconds(seconds))).Trim();
+            if (!pending.Cancelled) {
+                await lease.Driver.ClearComposerAsync();
+            }
+        } catch (Exception ex) {
+            clean = false;
+            piece = "";
+            if (!pending.Cancelled) {
+                Log.Write($"dictation: long dictation piece {number} failed ({ex.Message})");
+            }
+            try { await lease.Driver.CancelDictationAsync(); } catch { /* best effort */ }
+            try { await lease.Driver.ClearComposerAsync(); } catch { /* best effort */ }
+        } finally {
+            _detachedPieces.Remove(pending);
+            try {
+                web.ReturnPage(lease, clean: clean && !pending.Cancelled);
+            } catch (Exception ex) {
+                Log.Write("dictation: returning the long dictation page failed: " + ex.Message);
+            }
+        }
+        if (pending.Cancelled) {
+            return "";
+        }
+        RecordLongPiece(session, number, piece, seconds);
+        return piece;
+    }
+
+    /// <summary>Logs a collected piece, and warns when the site returned nothing for it.</summary>
+    private void RecordLongPiece(int session, int number, string piece, double seconds) {
+        if (piece.Length > 0) {
+            Log.Write($"dictation: long dictation piece {number} = {piece.Length} chars");
+            if (IsLive(session)) {
+                _longEmptyPieces = 0;
+            }
+            return;
+        }
+        Log.Write($"dictation: long dictation piece {number} came back empty — {_web.Site.DisplayName} returned no text for {seconds:F1}s of audio");
+        if (IsLive(session)) {
+            _longEmptyPieces++;
+        }
+        if (seconds < 2) {
+            return; // the page stopped straight away; there was nothing to lose
+        }
+        Sounds.Error();
+        ShowBalloon(
+            Loc.F("{0} returned no text for {1} seconds of the recording. If you were speaking then, say that part again.",
+                _web.Site.DisplayName, (int)Math.Round(seconds)),
+            OverlayKind.Warning,
+            Loc.T("Part of the recording was lost"));
+    }
+
+    /// <summary>A cut-off piece couldn't be collected: deliver the earlier pieces, or report it if there are none.</summary>
+    private async Task FailLongPieceAsync(int session, DictationDriver driver, DriverException ex) {
+        _longContinuing = false;
+        try { await driver.ClearComposerAsync(); } catch { /* best effort */ }
+        if (!IsLive(session)) {
+            return;
+        }
+        if (NoLongPieceCollected()) {
+            HandleFailure(ex);
+            return;
+        }
+        Log.Write("dictation: long dictation piece failed (" + ex.Message + "), delivering earlier pieces");
+        await FinishLongDictationEarlyAsync(session);
+    }
+
+    /// <summary>True when no earlier piece has (or may still bring) any text.</summary>
+    private bool NoLongPieceCollected() =>
+        _longPieces.All(t => t.IsCompletedSuccessfully && t.Result.Length == 0);
+
+    private static void CancelDetachedPieces(IEnumerable<DetachedPiece> pieces) {
+        foreach (var piece in pieces) {
+            piece.Cancelled = true;
+            try { piece.Driver.InvalidateWaits(); } catch { /* best effort */ }
+        }
     }
 
     /// <summary>Long dictation couldn't go on while the key is still held: say so and paste what was collected.</summary>
@@ -3053,7 +3185,9 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     }
 
     /// <summary>The pieces Long dictation already collected, followed by <paramref name="current"/>.</summary>
-    private string JoinLongPieces(string current) => JoinPieces(_longPieces, current);
+    /// <remarks>Pieces still transcribing on a detached page are left out until they arrive.</remarks>
+    private string JoinLongPieces(string current) => JoinPieces(
+        _longPieces.Where(t => t.IsCompletedSuccessfully).Select(t => t.Result).ToList(), current);
 
     /// <summary>
     /// Seconds in the current recording piece: the whole take until Long dictation restarts it,
