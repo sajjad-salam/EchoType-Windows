@@ -326,7 +326,7 @@ internal sealed class AppWindow : Form {
 
         AddSection(home, Loc.T("Dictation"));
         var dictation = AddCard(home);
-        _modelSeg = ModelSegmented(provider => _host.SelectModel(provider));
+        _modelSeg = TranscriptionModelSegmented(provider => _host.SelectModel(provider));
         AddRow(dictation, Loc.T("Transcription model"), Loc.T("Turns your speech into text."), _modelSeg, 300);
         _modeSeg = new HudSegmented { Items = [Loc.T("Hold to talk"), Loc.T("Press to start/stop")] };
         _modeSeg.SelectedIndexChanged += (_, _) => {
@@ -737,7 +737,7 @@ internal sealed class AppWindow : Form {
         _syncing = true;
         try {
             var s = _host.Settings;
-            _modelSeg.SetSilent(ProviderIndex(s.TranscriptionProvider));
+            _modelSeg.SetSilent(s.TranscriptionProvider == TranscriptionProvider.Gemini ? 0 : 1);
             _cleanToggle.SetSilent(s.AutoClean);
             _cleanSeg.SetSilent(ProviderIndex(s.CleanProvider));
             _cleanWindowButton.Text = Loc.F(_host.CleanWindowVisible ? "Close {0} window" : "Open {0} window", _host.CleanModelName);
@@ -1227,6 +1227,17 @@ internal sealed class AppWindow : Form {
                     2 => TranscriptionProvider.Claude,
                     _ => TranscriptionProvider.ChatGpt,
                 });
+            }
+        };
+        return seg;
+    }
+
+    /// <summary>Gemini / Claude only — ChatGPT can't transcribe (TranscriptionProviders.CanTranscribe).</summary>
+    private HudSegmented TranscriptionModelSegmented(Action<TranscriptionProvider> select) {
+        var seg = new HudSegmented { Items = ["Gemini", "Claude"] };
+        seg.SelectedIndexChanged += (_, _) => {
+            if (!_syncing) {
+                select(seg.SelectedIndex == 0 ? TranscriptionProvider.Gemini : TranscriptionProvider.Claude);
             }
         };
         return seg;

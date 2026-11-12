@@ -223,7 +223,7 @@ internal sealed partial class TrayAppContext {
         list.Add(new(Loc.T("Open history"), Loc.T("Search, copy or paste earlier results"), null, OpenHistory));
         list.Add(new(Loc.T("Add word replacement"), Loc.T("Fix a word the model keeps getting wrong"),
             Shortcut(_settings.AddWordReplacementChord), () => _ = AddWordReplacementAsync(fromSelection: true)));
-        foreach (var provider in Enum.GetValues<TranscriptionProvider>()) {
+        foreach (var provider in TranscriptionProviders.Transcribing) {
             var p = provider;
             string name = ChatSite.For(p).DisplayName;
             bool current = _settings.TranscriptionProvider == p;
@@ -424,7 +424,7 @@ internal sealed partial class TrayAppContext {
             return null;
         }
         foreach (var (provider, candidate) in _modelWindows.ToList()) {
-            if (candidate.IsInteractive && candidate.IsOnline && candidate.LoggedIn != false && candidate.MissingUiPart == null) {
+            if (provider.CanTranscribe() && candidate.IsInteractive && candidate.IsOnline && candidate.LoggedIn != false && candidate.MissingUiPart == null) {
                 string from = _web.Site.DisplayName;
                 _lastFailover = DateTime.UtcNow;
                 Log.Write("failover: " + from + " " + ex.Kind + ", switching to " + candidate.Site.DisplayName);

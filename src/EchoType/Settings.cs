@@ -320,9 +320,9 @@ internal sealed class Settings {
     [JsonPropertyName("openClaudeWindowVk")]
     public int OpenClaudeWindowVk { get; set; }
 
-    /// <summary>"chatgpt", "gemini" or "claude". Unknown values fall back to ChatGPT.</summary>
+    /// <summary>"gemini" or "claude". ChatGPT and unknown values fall back to Claude.</summary>
     [JsonPropertyName("transcriptionProvider")]
-    public string TranscriptionProviderName { get; set; } = "chatgpt";
+    public string TranscriptionProviderName { get; set; } = "claude";
 
     /// <summary>
     /// When true, plain dictation is sent to the cleaning model (<see cref="CleanProvider"/>)
@@ -421,15 +421,15 @@ internal sealed class Settings {
 
     [JsonIgnore]
     public TranscriptionProvider TranscriptionProvider {
+        // ChatGPT can't transcribe (see TranscriptionProviders.CanTranscribe): old "chatgpt"
+        // settings and unknown values land on Claude.
         get => TranscriptionProviderName.ToLowerInvariant() switch {
             "gemini" => TranscriptionProvider.Gemini,
-            "claude" => TranscriptionProvider.Claude,
-            _ => TranscriptionProvider.ChatGpt,
+            _ => TranscriptionProvider.Claude,
         };
         set => TranscriptionProviderName = value switch {
             TranscriptionProvider.Gemini => "gemini",
-            TranscriptionProvider.Claude => "claude",
-            _ => "chatgpt",
+            _ => "claude",
         };
     }
 
@@ -528,7 +528,7 @@ internal sealed class Settings {
                 loaded.TranslateSelectionTargetLanguage = loaded.TranslateTargetLanguage;
             }
             if (string.IsNullOrWhiteSpace(loaded.TranscriptionProviderName)) {
-                loaded.TranscriptionProviderName = "chatgpt";
+                loaded.TranscriptionProviderName = "claude";
             }
             if (string.IsNullOrWhiteSpace(loaded.CleanProviderName)) {
                 loaded.CleanProviderName = "chatgpt";

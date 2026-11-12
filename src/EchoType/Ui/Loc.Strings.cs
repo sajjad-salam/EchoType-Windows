@@ -121,6 +121,7 @@ internal static partial class Loc {
         ["Press a shortcut to start recording, press again to stop."] = "اضغط اختصارًا لبدء التسجيل، واضغطه مرة أخرى للإيقاف.",
         ["Hold a shortcut to record, release to stop."] = "اضغط مطولًا على اختصار للتسجيل، وأفلته للإيقاف.",
         ["Switched to {0}."] = "تم التبديل إلى {0}.",
+        ["{0} can't be used for transcription. Use Gemini or Claude."] = "لا يمكن استخدام {0} لتفريغ الصوت. استخدم Gemini أو Claude.",
         ["Auto Enter on"] = "Enter التلقائي مفعّل",
         ["Auto Enter off"] = "Enter التلقائي متوقف",
         ["Log in to {0} before dictating."] = "سجّل الدخول إلى {0} قبل الإملاء.",

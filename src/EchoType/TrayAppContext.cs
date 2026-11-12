@@ -40,7 +40,6 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     private readonly ToolStripMenuItem _loginItem;
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _commandsRoot;
-    private readonly ToolStripMenuItem _chatgptModelItem;
     private readonly ToolStripMenuItem _geminiModelItem;
     private readonly ToolStripMenuItem _claudeModelItem;
     private readonly ToolStripMenuItem _modelShortcutsItem;
@@ -171,13 +170,12 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         _statusItem = new ToolStripMenuItem { Enabled = false };
         _loginItem = new ToolStripMenuItem(Loc.T("Open login…"), null, (_, _) => _web.ShowLoginWindow());
         var closeLoginItem = new ToolStripMenuItem(Loc.T("Close login window"), null, (_, _) => _web.HideLoginWindow());
-        _chatgptModelItem = new ToolStripMenuItem("ChatGPT", null, (_, _) => SelectModel(TranscriptionProvider.ChatGpt));
         _geminiModelItem = new ToolStripMenuItem("Gemini", null, (_, _) => SelectModel(TranscriptionProvider.Gemini));
         _claudeModelItem = new ToolStripMenuItem("Claude", null, (_, _) => SelectModel(TranscriptionProvider.Claude));
         _modelShortcutsItem = new ToolStripMenuItem();
         _modelShortcutsItem.Click += (_, _) => OpenModelShortcutsUi();
         var modelRoot = new ToolStripMenuItem(Loc.T("Transcription model"));
-        modelRoot.DropDownItems.Add(_chatgptModelItem);
+        // ChatGPT is not offered for transcription (TranscriptionProviders.CanTranscribe).
         modelRoot.DropDownItems.Add(_geminiModelItem);
         modelRoot.DropDownItems.Add(_claudeModelItem);
         modelRoot.DropDownItems.Add(new ToolStripSeparator());
@@ -3357,9 +3355,7 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     }
 
     private void SyncModelMenu() {
-        _chatgptModelItem.Text = ModelMenuLabel("ChatGPT", _settings.ChatGptSwitchVk);
         _geminiModelItem.Text = ModelMenuLabel("Gemini", _settings.GeminiSwitchVk);
-        _chatgptModelItem.Checked = _settings.TranscriptionProvider == TranscriptionProvider.ChatGpt;
         _geminiModelItem.Checked = _settings.TranscriptionProvider == TranscriptionProvider.Gemini;
         _claudeModelItem.Text = ModelMenuLabel("Claude", _settings.ClaudeSwitchVk);
         _claudeModelItem.Checked = _settings.TranscriptionProvider == TranscriptionProvider.Claude;
@@ -3369,6 +3365,13 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
         vk <= 0 ? name : name + " (" + HotkeyNames.For(vk) + ")";
 
     private void SelectModel(TranscriptionProvider provider) {
+        if (!provider.CanTranscribe()) {
+            Log.Write("settings: " + ChatSite.For(provider).DisplayName + " can't be used for transcription, ignored");
+            ShowBalloon(Loc.F("{0} can't be used for transcription. Use Gemini or Claude.", ChatSite.For(provider).DisplayName),
+                OverlayKind.Warning);
+            SyncModelMenu();
+            return;
+        }
         if (_startupModelCandidates != null) {
             CancelStartupModelRace();
             ApplyReplySites();
@@ -3769,14 +3772,15 @@ internal sealed partial class TrayAppContext : ApplicationContext, IAppWindowHos
     }
 
     /// <summary>
-    /// Starts ChatGPT, Gemini and Claude together, keeps every page preloaded, and promotes
+    /// Starts every transcription-capable model (Gemini and Claude — not ChatGPT) together,
+    /// keeps every page preloaded, and promotes
     /// the first page whose dictation control is ready. Logged-out, offline and
     /// composer-only pages cannot win.
     /// </summary>
     private async Task SelectFastestStartupModelAsync() {
         int epoch = ++_startupModelRaceEpoch;
         var candidates = new List<StartupModelCandidate>();
-        foreach (TranscriptionProvider provider in Enum.GetValues<TranscriptionProvider>()) {
+        foreach (TranscriptionProvider provider in TranscriptionProviders.Transcribing) {
             ChatGPTWebController web = provider == _settings.TranscriptionProvider
                 ? _web
                 : new ChatGPTWebController(ChatSite.For(provider), keepStandby: true);
